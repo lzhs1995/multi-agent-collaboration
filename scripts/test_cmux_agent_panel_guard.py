@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +111,27 @@ class PanelGuardTests(unittest.TestCase):
         forbidden_example = "cmux new-" + "surface followed by claude"
         payload = {"toolName": "apply_patch", "input": {"patch": forbidden_example}}
         self.assertEqual(GUARD._extract_command(payload), "")
+
+    def test_edit_command_field_is_document_content_at_real_hook(self) -> None:
+        for name in ("apply_patch", "functions.apply_patch", "Write", "Edit"):
+            with self.subTest(tool=name):
+                payload = {"tool_name": name, "command": "claude --resume example"}
+                result = subprocess.run([sys.executable, "-B", str(MODULE_PATH)],
+                    input=json.dumps(payload), text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_shell_command_variants_remain_blocked_at_real_hook(self) -> None:
+        payloads = [
+            {"tool_name": "Bash", "tool_input": {"command": "claude --resume example"}},
+            {"tool_name": "exec_command", "tool_input": {"cmd": "claude --resume example"}},
+            {"tool_name": "functions.exec_command", "cmd": "claude --resume example"},
+            {"command": "claude --resume example"},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                result = subprocess.run([sys.executable, "-B", str(MODULE_PATH)],
+                    input=json.dumps(payload), text=True, capture_output=True)
+                self.assertEqual(result.returncode, 2, result.stdout)
 
     def test_agent_new_surface_is_always_blocked(self) -> None:
         self.assert_blocked("rtk cmux new-surface --type agent-session --provider claude")

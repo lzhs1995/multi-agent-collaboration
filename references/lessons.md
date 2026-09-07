@@ -11,6 +11,7 @@
 | Compact stalled for 15 minutes | 60-second compact samples, two unchanged checks, bounded intervention | test_cmux_executor_sentinel.py |
 | Billing errors caused endless retries | Unavailable/solo/handoff state machine | test_executor_availability.py |
 | Guard existed but did not run | Both clients wired; benign execution and negative entrypoint tests | test_install.py, test_r3_hardening.py |
+| File-edit prose was parsed as a shell launch | Check tool identity first; cover command and cmd payloads in real hook processes | test_cmux_agent_panel_guard.py |
 | Later PASS hid earlier objections | Explicit resolution links; fresh artifact hashes | test_r3_hardening.py |
 | Concurrent evidence heartbeat was lost | Atomic state and concurrency tests | test_heartbeat_concurrency.py |
 

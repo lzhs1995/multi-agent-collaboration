@@ -55,16 +55,6 @@ def _flatten_json_strings(value: Any) -> list[str]:
 
 def _extract_command(payload: dict[str, Any]) -> str:
     """Best-effort extraction for Codex/Claude hook payload variants."""
-    candidates = [
-        payload.get("command"),
-        payload.get("tool_input", {}).get("command") if isinstance(payload.get("tool_input"), dict) else None,
-        payload.get("toolInput", {}).get("command") if isinstance(payload.get("toolInput"), dict) else None,
-        payload.get("input", {}).get("command") if isinstance(payload.get("input"), dict) else None,
-    ]
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate
-
     tool_name = str(
         payload.get("tool_name")
         or payload.get("toolName")
@@ -73,6 +63,14 @@ def _extract_command(payload: dict[str, Any]) -> str:
     ).lower()
     if tool_name and not any(part in tool_name for part in ("bash", "exec_command", "shell")):
         return ""
+
+    # Tool identity precedes field names: edits can also carry a command field.
+    for container in (payload, payload.get("tool_input"), payload.get("toolInput"), payload.get("input")):
+        if isinstance(container, dict):
+            for key in ("command", "cmd"):
+                candidate = container.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate
 
     # Last resort: scan all strings for a Bash command containing cmux.
     for text in _flatten_json_strings(payload):

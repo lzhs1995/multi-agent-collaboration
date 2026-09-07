@@ -7,6 +7,7 @@
 - Session continuity, strict ACKs, task/report-bound callbacks, evidence and lease guards.
 - Callback-first sentinel, bounded compact/error recovery and explicit solo handoff.
 - Non-destructive dual-client installer, doctor and uninstall with regression tests.
+- Shell payload recognition excludes file-edit content and covers both command/cmd fields.
 - Active-marker schema remains version 1. No claim of new live agent consensus.
 
 Versioning: SemVer for this distribution; breaking public schema changes require
