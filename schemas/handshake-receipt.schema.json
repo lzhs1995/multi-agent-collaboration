@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Multi-agent handshake receipt",
+  "type": "object",
+  "required": [
+    "task_id",
+    "status",
+    "supervisor",
+    "executor",
+    "executor_ack",
+    "report_path",
+    "callback_line",
+    "updated_at"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["PASS", "HELLO_SENT", "FAIL"]},
+    "supervisor": {"type": "string"},
+    "executor": {"type": "string"},
+    "executor_ack": {"type": "boolean"},
+    "ack_format": {"type": "string"},
+    "report_path": {"type": "string"},
+    "callback_line": {"type": "string"},
+    "hello_line": {"type": "string"},
+    "required_ack": {"type": "string"},
+    "delivery_method": {"type": "string"},
+    "artifact_root": {"type": "string"},
+    "updated_at": {"type": "string"},
+
+    "lifecycle": {
+      "type": "string",
+      "enum": ["PENDING", "ACKED", "EXPIRED", "REJECTED"],
+      "description": "Explicit phase. PENDING is not FAIL: a receipt awaiting an ACK inside its budget has not failed yet. EXPIRED means the budget elapsed with a legal budget; REJECTED means the ACK arrived but did not bind."
+    },
+
+    "submission_state": {
+      "type": "string",
+      "enum": [
+        "SUPERVISOR_DID_NOT_SUBMIT",
+        "SUBMISSION_ABORTED_BUSY",
+        "COMPOSE_OCCUPIED",
+        "DELIVERY_UNVERIFIED_BY_DETECTOR",
+        "DELIVERY_QUEUED_AT_RECEIVER",
+        "DELIVERED_CONFIRMED"
+      ],
+      "description": "Replaces one undifferentiated DISPATCH_UNCONFIRMED. The correct recovery differs per state: fix the supervisor, wait for an idle boundary, widen the detector, or simply wait. Only SUPERVISOR_DID_NOT_SUBMIT may justify a resend."
+    },
+
+    "detector_side": {
+      "type": "string",
+      "enum": ["supervisor", "executor", "unknown"],
+      "description": "Which side observed the condition. A supervisor-side abort must never be reported as executor silence."
+    },
+
+    "budget_source": {
+      "type": "string",
+      "enum": ["phase_default", "explicit_timeout_override", "explicit_phase_flag"],
+      "description": "Which budget actually governed the poll. `explicit_timeout_override` is the value that caused the 182s false FAIL on 2026-08-30: a generic --timeout wins over the phase default at mac_harness.py:844-846."
+    },
+
+    "budget_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The effective budget in seconds, as used, not as defaulted."
+    },
+
+    "phase_minimum_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The phase floor (handshake 600, round 180). When budget_seconds is below this, a timeout must not be attributed to executor silence."
+    },
+
+    "budget_below_phase_minimum": {
+      "type": "boolean",
+      "description": "True when budget_seconds < phase_minimum_seconds. Requires reason SUPERVISOR_BUDGET_TOO_SHORT rather than HANDSHAKE_TIMEOUT."
+    },
+
+    "task_pack_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Binds the receipt to the exact pack content it was issued for, so a later pack edit cannot silently inherit an old ACK."
+    },
+
+    "source_revision": {
+      "type": "string",
+      "description": "Repository revision the executor was asked to work against."
+    },
+
+    "workspace_ref": {"type": "string"},
+    "executor_surface_snapshot": {"type": "string"},
+
+    "clear_confirmed": {
+      "type": "boolean",
+      "description": "Bridge-test proved its own token left the compose buffer before handshake pasted anything. Prevents the measured 1ms self-collision."
+    },
+
+    "dispatch_started_at": {"type": "string"},
+    "dispatch_submitted_at": {
+      "type": ["string", "null"],
+      "description": "Null means nothing was ever pasted. This single field separates a supervisor-side abort from a delivered-but-unconfirmed message."
+    },
+    "ack_observed_at": {"type": ["string", "null"]},
+    "parser_confirmed_at": {"type": ["string", "null"]},
+    "terminal_error_at": {"type": ["string", "null"]},
+
+    "freshness": {
+      "type": "object",
+      "description": "Derived evidence must not predate its inputs. A validation summary older than the receipt it summarizes is not current evidence.",
+      "properties": {
+        "computed_at": {"type": "string"},
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "mtime_epoch"],
+            "properties": {
+              "path": {"type": "string"},
+              "mtime_epoch": {"type": "number"},
+              "sha256": {"type": "string"}
+            }
+          }
+        },
+        "stale": {"type": "boolean"}
+      }
+    }
+  }
+}

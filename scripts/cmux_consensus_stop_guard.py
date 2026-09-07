@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+"""
+cmux_consensus_stop_guard.py — armed-task Stop guard.
+
+This is the only hook type that catches the failure mode where an agent simply
+*declares* multi-agent collaboration ("we did 3 rounds and agreed") at the end
+of a turn without ever running the harness. PreToolUse guards cannot see this:
+they only fire when a tool is actually invoked.
+
+Design (armed-only, zero-friction by default):
+  - If NO armed-task marker exists for this workspace → pass through. So casual
+    mentions of codex/claude in ordinary chat are never blocked.
+  - A task is armed by `mac_harness.py identity-gate` (writes
+    /tmp/multi-agent-collaboration/_active/<workspace_id>.json).
+  - When armed AND the turn's final assistant message asserts collaboration or
+    consensus, the guard requires PASS evidence:
+      * <artifact_root>/validation.json  status == PASS
+      * <artifact_root>/consensus-validation.json status == PASS
+        (which itself requires >=3 rounds with proven executor nonce evidence)
+    Missing/!PASS → block turn-end (exit 2) with remediation steps.
+  - Stale markers self-expire via ttl_seconds so a forgotten marker can't wedge
+    a session permanently.
+
+Exit codes: 0 = allow turn-end, 2 = block turn-end (Claude must act/retract).
+"""
+from __future__ import annotations
+
+import json
+import hashlib
+import math
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ACTIVE_DIR = Path("/tmp/multi-agent-collaboration/_active")
+
+# Assertions that imply another agent participated / consensus was reached.
+# Kept deliberately specific to reduce false positives; matched case-insensitively.
+# Evidence-shaped claim patterns.
+#
+# These deliberately do NOT match bare topic nouns. A bare noun cannot
+# distinguish an assertion from its denial, from a bug report about this guard,
+# from the guard's own source filenames, from a supervisor-assigned delivery
+# marker, from the assigned output filename, or from a count of prior blocks --
+# all six were measured blocking honest turn-ends, and the sixth blocked a
+# message reporting how often this guard had fired. A lexical test standing in
+# for a semantic property is simultaneously too strict and too permissive:
+# vagueness passed while precision was blocked, which inverts the intent.
+#
+# What blocks now is a *positive claim about evidence state* that the artifacts
+# on disk contradict. See _contradicts_disk: the verdict comes from the files
+# this guard exists to protect, not from vocabulary.
+EVIDENCE_CLAIM_PATTERNS = [
+    r"consensus[-\s]?check\s+(?:is\s+)?PASS",
+    r"consensus[-\s]?validation(?:\.json)?\s+(?:is\s+)?PASS",
+    r"validation(?:\.json)?\s+(?:is\s+)?PASS",
+    r"(?:rounds?|轮)\s*(?:recorded|completed|记录)\s*[:=]?\s*(\d+)",
+    r"(\d+)\s*(?:of|/)\s*(\d+)\s+rounds?\s+(?:recorded|completed|are\s+recorded)",
+    r"all\s+(?:required\s+)?rounds?\s+(?:are\s+)?(?:recorded|complete)",
+    r"strict\s+validation\s+PASS",
+    r"共识\s*(?:已)?(?:达成|通过)",
+    r"达成(?:了)?(?:共识|一致)",
+]
+_EVIDENCE_CLAIM_RE = re.compile("|".join(EVIDENCE_CLAIM_PATTERNS), re.IGNORECASE)
+
+# A negation/retraction governing the matched span clears the claim. Denials,
+# retractions, bug reports and pending-state notes must never block.
+NEGATION_MARKERS = [
+    r"\bno\b", r"\bnot\b", r"\bnever\b", r"\bzero\b", r"\babsent\b",
+    r"\bmissing\b", r"\bpending\b", r"\bunresolved\b", r"\bfail(?:ed|s)?\b",
+    r"\bblocked\b", r"\bretract(?:ed|ing|ion)?\b", r"\bwithdraw(?:n|ing)?\b",
+    r"\bcannot\b", r"\bwithout\b", r"\bawaiting\b", r"\bwould\b", r"\bif\b",
+    r"未", r"没有", r"尚未", r"缺少", r"不是", r"撤回",
+]
+_NEGATION_RE = re.compile("|".join(NEGATION_MARKERS), re.IGNORECASE)
+
+# Characters of context scanned around a matched claim for a governing negation.
+NEGATION_WINDOW_CHARS = 160
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _workspace_key(payload: dict[str, Any]) -> str:
+    return (
+        os.environ.get("CMUX_WORKSPACE_ID")
+        or payload.get("workspace_id")
+        or "default"
+    )
+
+
+def _marker_fresh(marker: dict[str, Any]) -> bool:
+    """Honour TTL: an expired marker is treated as disarmed."""
+    armed_at = marker.get("armed_at")
+    ttl = marker.get("ttl_seconds")
+    if armed_at and ttl:
+        try:
+            age = (_now() - datetime.fromisoformat(armed_at)).total_seconds()
+            if age > float(ttl):
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _active_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every fresh marker for this workspace: v2 directory files, then v1 file.
+
+    The v2 contract stores one file per collaboration under
+    _active/<workspace>/<collaboration_id>.json; the v1 single file stays
+    read-compatible.  Each fresh marker is judged independently, because with
+    concurrent collaborations a final message can assert evidence that any of
+    the armed artifact trees refutes.
+    """
+    ws = _workspace_key(payload)
+    markers: list[dict[str, Any]] = []
+    d = ACTIVE_DIR / ws
+    if d.is_dir():
+        for p in sorted(d.glob("*.json")):
+            if p.name.startswith("."):
+                continue
+            m = _read_json(p)
+            if isinstance(m, dict) and _marker_fresh(m):
+                markers.append(m)
+    legacy = _read_json(ACTIVE_DIR / f"{ws}.json")
+    if isinstance(legacy, dict) and _marker_fresh(legacy):
+        markers.append(legacy)
+    return markers
+
+
+def _final_message(payload: dict[str, Any]) -> str:
+    """Best-effort extraction of the turn's final assistant text from a Stop payload."""
+    for key in ("last_assistant_message", "final_message", "message", "text", "assistant_message"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            return v
+    # Claude Code Stop payloads may carry a transcript path instead of inline text.
+    transcript = payload.get("transcript_path") or payload.get("transcript")
+    if isinstance(transcript, str) and Path(transcript).exists():
+        try:
+            lines = Path(transcript).read_text().splitlines()
+            texts = []
+            for line in lines[-50:]:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("role") == "assistant" or obj.get("type") == "assistant":
+                    message = obj.get("message")
+                    message = message if isinstance(message, dict) else obj
+                    content = message.get("content") or message.get("text") or ""
+                    if isinstance(content, list):
+                        content = " ".join(
+                            c.get("text", "") for c in content if isinstance(c, dict)
+                        )
+                    if isinstance(content, str):
+                        texts.append(content)
+            if texts:
+                return texts[-1]
+        except Exception:
+            pass
+    return ""
+
+
+def _negated(text: str, start: int, end: int) -> bool:
+    """True when a negation/retraction governs the span [start, end)."""
+    lo = max(0, start - NEGATION_WINDOW_CHARS)
+    hi = min(len(text), end + NEGATION_WINDOW_CHARS)
+    return bool(_NEGATION_RE.search(text[lo:hi]))
+
+
+def _positive_evidence_claims(text: str) -> list[str]:
+    """Evidence-shaped claims in `text` that are not governed by a negation."""
+    out: list[str] = []
+    for m in _EVIDENCE_CLAIM_RE.finditer(text or ""):
+        if not _negated(text, m.start(), m.end()):
+            out.append(m.group(0))
+    return out
+
+
+def _protocol_callback_evidence(
+    marker: dict[str, Any], payload: dict[str, Any], final: str,
+) -> bool:
+    """Permit only fresh, receiver-bound control ACKs before task completion."""
+    match = re.fullmatch(
+        r"ROUND_ACK\|([A-Za-z0-9_-]+)\|([A-Za-z0-9_-]+)\|"
+        r"([A-Za-z0-9_-]+):identity\|"
+        r"(PASS|PASS_WITH_CHANGES|PASS_WITH_P2|CONDITIONAL_PASS|FAIL)\|([A-Za-z0-9_-]+)",
+        final.strip(),
+    )
+    handshake = re.fullmatch(
+        r"PREFLIGHT_ACK\|([A-Za-z0-9_-]+)\|([A-Za-z0-9_-]+):identity"
+        r"\|READY\|INLINE\|([A-Za-z0-9_-]+)", final.strip(),
+    )
+    if not match and not handshake:
+        return False
+    if match:
+        task, round_id, provider, verdict, nonce = match.groups()
+    else:
+        task, provider, nonce = handshake.groups()
+    root = Path(str(marker.get("artifact_root") or ""))
+    if task != marker.get("task_id") or not root.is_absolute():
+        return False
+    surface_uuid = (os.environ.get("CMUX_SURFACE_ID") or payload.get("surface_id")
+                    or payload.get("surface_uuid"))
+    peers = [row for row in marker.get("participants", []) if isinstance(row, dict)
+             and row.get("surface_uuid") == surface_uuid
+             and str(row.get("role", "")).startswith("executor")
+             and row.get("provider") == provider]
+    if len(peers) != 1 or not peers[0].get("surface_ref"):
+        return False
+    if match:
+        receipt = _read_json(root / "round-receipts" / f"{round_id}-{nonce}.json")
+        if not isinstance(receipt, dict) or any((
+            str(receipt.get("round_id")) != round_id,
+            receipt.get("round_nonce") != nonce,
+            verdict not in (receipt.get("allowed_verdicts") or []),
+            receipt.get("status") not in {"AWAITING_EXECUTOR_ACK", "PASS"},
+        )):
+            return False
+    else:
+        doc = _read_json(root / "handshake-receipt.json")
+        if not isinstance(doc, dict):
+            return False
+        entries = doc.get("executors", [doc])
+        if not isinstance(entries, list):
+            return False
+        receipts = [entry for entry in entries if isinstance(entry, dict)
+                    and entry.get("ack_nonce") == nonce
+                    and entry.get("executor") == peers[0]["surface_ref"]]
+        if len(receipts) != 1:
+            return False
+        receipt = receipts[0]
+        if (receipt.get("lifecycle") not in {"PENDING", "ACKED"}
+                or receipt.get("status") not in {"HELLO_SENT", "PASS"}
+                or receipt.get("ack_line_expected") != final.strip()):
+            return False
+    if (receipt.get("task_id") != task or receipt.get("executor_provider") != provider
+            or receipt.get("executor") != peers[0]["surface_ref"]
+            or not receipt.get("dispatch_submitted_at")):
+        return False
+    try:
+        created = datetime.fromisoformat(receipt["created_at"])
+        age = (_now() - created).total_seconds()
+        budget = receipt["budget_seconds"]
+        if (type(budget) not in (int, float) or not math.isfinite(budget)
+                or not 0 < budget <= 600 or not 0 <= age <= budget):
+            return False
+        if handshake:
+            return True
+        review = receipt["requested_review"]
+        artifact = Path(review["artifact"])
+        return (
+            artifact.is_absolute()
+            and artifact.resolve().is_relative_to(root.resolve())
+            and hashlib.sha256(artifact.read_bytes()).hexdigest() == review["artifact_sha256"]
+        )
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def _asserts_collaboration(text: str) -> bool:
+    """Retained name: does the text make an unnegated evidence-shaped claim?
+
+    This is only the first of three conditions. A true result is NOT sufficient
+    to block; the claim must also contradict on-disk state. See evaluate().
+    """
+    return bool(_positive_evidence_claims(text))
+
+
+def _contradicts_disk(marker: dict[str, Any], claims: list[str]) -> tuple[bool, str]:
+    """Compare positive claims against the artifacts this guard protects.
+
+    The load-bearing inversion: the guard reads `rounds.json` and the validation
+    artifacts and decides from facts, instead of guessing from vocabulary. A
+    message claiming more recorded rounds than exist contradicts disk; a message
+    denying them agrees with it.
+    """
+    raw_root = marker.get("artifact_root")
+    root = Path(raw_root) if isinstance(raw_root, str) and raw_root else None
+    if root is None or not root.is_absolute():
+        return True, "armed task has no absolute artifact_root; refusing to trust cwd-relative evidence"
+    task_id = marker.get("task_id", "")
+
+    validation = _read_json(root / "validation.json") or {}
+    consensus = _read_json(root / "consensus-validation.json") or {}
+    rounds_doc = _read_json(root / "rounds.json") or {}
+    completed = [
+        r for r in rounds_doc.get("rounds", [])
+        if r.get("round_id") and r.get("speaker") and r.get("verdict")
+    ]
+
+    v_pass = validation.get("status") == "PASS" and validation.get("task_id") == task_id
+    c_pass = consensus.get("status") == "PASS" and consensus.get("task_id") == task_id
+
+    for claim in claims:
+        low = claim.lower()
+        if "consensus" in low and not c_pass:
+            return True, (
+                f"final message asserts {claim!r} but consensus-validation.json is "
+                f"missing/not PASS for task {task_id} at {root}"
+            )
+        if "validation" in low and "consensus" not in low and not v_pass:
+            return True, (
+                f"final message asserts {claim!r} but validation.json is "
+                f"missing/not PASS for task {task_id} at {root}"
+            )
+        nums = [int(n) for n in re.findall(r"\d+", claim)]
+        if nums and max(nums) > len(completed):
+            return True, (
+                f"final message asserts {claim!r} but only {len(completed)} "
+                f"completed round(s) are recorded in {root / 'rounds.json'}"
+            )
+        if "达成" in claim or "共识" in claim:
+            if not c_pass:
+                return True, (
+                    f"final message asserts {claim!r} but consensus-validation.json "
+                    f"is missing/not PASS at {root}"
+                )
+    return False, "positive claims are consistent with on-disk evidence"
+
+
+def _evidence_ok(marker: dict[str, Any]) -> tuple[bool, str]:
+    raw_root = marker.get("artifact_root")
+    root = Path(raw_root) if isinstance(raw_root, str) and raw_root else None
+    if root is None or not root.is_absolute():
+        return False, "armed task has no absolute artifact_root; refusing cwd-relative evidence"
+    task_id = marker.get("task_id", "")
+    validation = _read_json(root / "validation.json")
+    if not validation or validation.get("status") != "PASS" or validation.get("task_id") != task_id:
+        return False, f"validation.json missing/not PASS for task {task_id} at {root}"
+    consensus = _read_json(root / "consensus-validation.json")
+    if not consensus or consensus.get("status") != "PASS" or consensus.get("task_id") != task_id:
+        return False, f"consensus-validation.json missing/not PASS (run consensus-check) at {root}"
+    return True, "consensus + validation evidence present"
+
+
+def _current_participant_is_executor(marker: dict[str, Any], payload: dict[str, Any]) -> bool:
+    surface_uuid = (
+        os.environ.get("CMUX_SURFACE_ID")
+        or payload.get("surface_id")
+        or payload.get("surface_uuid")
+    )
+    if not surface_uuid:
+        return False
+    return any(
+        isinstance(row, dict)
+        and str(row.get("role", "")).startswith("executor")
+        and row.get("surface_uuid") == surface_uuid
+        for row in marker.get("participants", [])
+    )
+
+
+def _completion_callback_evidence(
+    marker: dict[str, Any], payload: dict[str, Any]
+) -> tuple[bool, str]:
+    """A finalized executor pack may not end without a confirmed callback."""
+    if not _current_participant_is_executor(marker, payload):
+        return True, "current participant is not this task's executor"
+    raw_root = marker.get("artifact_root")
+    root = Path(raw_root) if isinstance(raw_root, str) and raw_root else None
+    if root is None or not root.is_absolute():
+        return False, "executor task has no absolute artifact_root"
+    pack = _read_json(root / "task-pack.json")
+    if not isinstance(pack, dict) or pack.get("draft") is not False:
+        return True, "no finalized executor task pack is active"
+
+    receipt_value = pack.get("completion_receipt")
+    if not isinstance(receipt_value, str):
+        return False, "finalized task pack has no completion_receipt"
+    receipt_path = Path(receipt_value)
+    if not receipt_path.is_absolute() or receipt_path.parent.resolve() != root.resolve():
+        return False, "completion_receipt is not bound directly under artifact_root"
+    receipt = _read_json(receipt_path)
+    if not isinstance(receipt, dict):
+        return False, f"completion callback receipt missing/unreadable at {receipt_path}"
+
+    report_value = pack.get("report")
+    report = Path(report_value) if isinstance(report_value, str) else None
+    if report is None or not report.is_file():
+        return False, "completion report is missing"
+    digest = hashlib.sha256(report.read_bytes()).hexdigest()
+    expected = {
+        "task_id": pack.get("task_id"),
+        "completion_nonce": pack.get("completion_nonce"),
+        "completion_callback": pack.get("completion_callback"),
+        "callback_target": pack.get("callback_target"),
+        "report": str(report),
+        "report_sha256": digest,
+        "report_bytes": report.stat().st_size,
+        "confirmed": True,
+    }
+    mismatches = [key for key, value in expected.items() if receipt.get(key) != value]
+    if mismatches:
+        return False, "completion callback receipt mismatch: " + ", ".join(mismatches)
+    return True, "confirmed completion callback receipt matches pack and report"
+
+
+def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Block only an unnegated evidence-shaped claim that on-disk state refutes.
+
+    Three conditions, all required:
+      1. a multi-agent task is armed;
+      2. the final message makes a positive, evidence-shaped claim that is not
+         governed by a negation/retraction;
+      3. the artifacts on disk actually contradict that claim.
+
+    Condition 3 is what makes this a check rather than a vocabulary filter. It
+    also means denials, retractions, bug reports about this guard, quoted
+    filenames, delivery markers, and block counts all pass, because none of them
+    asserts a state that disk refutes.
+    """
+    markers = _active_markers(payload)
+    if not markers:
+        return True, "no armed multi-agent task — pass through"
+
+    final = _final_message(payload)
+    protocol_ack = any(
+        _current_participant_is_executor(marker, payload)
+        and _protocol_callback_evidence(marker, payload, final)
+        for marker in markers
+    )
+    if protocol_ack:
+        return True, "fresh bound protocol ACK; this does not complete the task"
+    for marker in markers:
+        callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
+        if not callback_ok:
+            return False, callback_msg
+
+    claims = _positive_evidence_claims(final)
+    if not claims:
+        return True, (
+            "armed, but the final message makes no unnegated evidence-shaped claim "
+            "beyond any already-verified terminal callback"
+        )
+
+    # With concurrent collaborations, block when ANY armed artifact tree
+    # contradicts the claim; allow only when every armed task's evidence holds.
+    last_msg = ""
+    for marker in markers:
+        contradicted, why = _contradicts_disk(marker, claims)
+        if contradicted:
+            return False, why
+
+        # Claims are consistent with rounds.json; still require the summary
+        # artifacts to be genuinely PASS before letting a positive claim stand.
+        ok, msg = _evidence_ok(marker)
+        if not ok:
+            return False, msg
+        last_msg = msg
+    return True, last_msg
+
+
+def _block(message: str, marker_hint: str) -> int:
+    sys.stderr.write(
+        "cmux multi-agent consensus Stop guard blocked turn-end.\n"
+        f"{message}\n\n"
+        "Your final message claims multi-agent collaboration/consensus while a "
+        "multi-agent task is ARMED, but the evidence does not back it up.\n"
+        "Do ONE of:\n"
+        "  1) Produce real evidence: run the harness handshake + at least 3 "
+        "record-round (executor rounds carry nonce evidence) + consensus-check, "
+        "then validate to PASS.\n"
+        "  2) Retract the collaboration claim from your message.\n"
+        "  3) If the task is genuinely finished/aborted, run: "
+        f"python3 {Path(__file__).with_name('mac_harness.py')} disarm\n"
+        f"  (armed marker: {marker_hint})\n"
+        "For an executor task with a finalized pack, first write the report and "
+        "call cmux_bridge.submit_completion_callback(task_pack_path). A local "
+        "DONE line without completion-callback-receipt.json cannot end the turn.\n"
+    )
+    return 2
+
+
+def main() -> int:
+    # CLI self-test mode
+    if "--check-file" in sys.argv:
+        idx = sys.argv.index("--check-file")
+        payload = _read_json(Path(sys.argv[idx + 1])) or {}
+        ok, msg = evaluate(payload)
+        print(("ALLOW: " if ok else "BLOCK: ") + msg)
+        return 0 if ok else 2
+
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return 0  # nothing to judge → allow
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return 0  # non-JSON → don't wedge the session
+    ok, msg = evaluate(payload)
+    if ok:
+        return 0
+    markers = _active_markers(payload)
+    marker = markers[0] if markers else {}
+    return _block(msg, f"task={marker.get('task_id')} root={marker.get('artifact_root')}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

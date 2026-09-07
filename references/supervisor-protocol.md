@@ -1,0 +1,322 @@
+# Supervisor Protocol
+
+The supervisor owns clarity, scope control, and final audit. It should make the executor's job concrete enough that the executor cannot accidentally change production systems or solve a different problem.
+
+## Pane-First Source Acquisition
+
+When reviewing another agent's plan or result:
+
+1. Read the visible executor pane.
+2. Use the source path named in the pane.
+3. Only then inspect repo files, plans, or transcripts.
+4. If no source path is visible, answer with `SOURCE_NOT_FOUND` and ask the executor to name the artifact.
+
+This prevents reviewing stale plans discovered by broad file search.
+
+## Task Pack Fields
+
+Every executor task pack should include:
+
+- `TASK_ID`: stable short id.
+- `ROLE`: usually `EXECUTOR`.
+- `SUPERVISOR`: identity and pane id, for example `cc2:1.1 %45`.
+- `EXECUTOR`: identity and pane id, for example `cc2:1.2 %46`.
+- `ROLE_MAP`: path to `multi-agent-role-map.json` or an inline role map.
+- `CONTEXT`: what triggered the task.
+- `SOURCE`: plan or audit artifact to follow.
+- `SCOPE`: files/systems the executor may touch.
+- `FORBIDDEN`: files/systems the executor must not touch.
+- `LOCAL_FIRST`: required local tests, mocks, Docker preview, or dry-run.
+- `NEEDS_AUTH`: production/VPS/API-key operations requiring explicit user approval.
+- `VERIFY`: exact verification expectations.
+- `REQUIRED_SKILL`: absolute path to the skill the executor must read and obey
+  before inspecting or changing source.
+- `REPORT`: artifact path for the executor report.
+- `CALLBACK`: exact callback string the executor must emit when done or blocked.
+- `COMPLETION_CALLBACK`: separate terminal callback template containing the
+  current task id, a fresh completion nonce, and the absolute report path. This
+  is not the handshake `PREFLIGHT_ACK` template.
+- `BRIDGE_TEST_EVIDENCE`: the preflight or bridge-test output proving the supervisor can read/reach the executor pane.
+
+Generate a skeleton from the Mac harness when possible. The artifact root must be
+an explicit absolute path; do not omit it or let the harness derive one from the
+caller's cwd:
+
+```bash
+python3 <skill-checkout>/scripts/mac_harness.py \
+  task-pack --task-id <task-id> \
+  --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+python3 <skill-checkout>/scripts/mac_harness.py \
+  finalize-pack --task-id <task-id> \
+  --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+```
+
+The scaffold is deliberately `draft=true`; finalization verifies scope, callback,
+authorization provenance, and every extracted source path before setting
+`draft=false`. Do not dispatch from a hand-written prompt or a draft pack.
+
+The executor must read and obey the `multi-agent-collaboration` skill before
+implementation. It writes the report artifact first, then actively sends the
+task pack's completion callback to the bound supervisor surface. A report file,
+visible `DONE` text, or sender exit code is not a callback. If the sender returns
+`DISPATCH_UNCONFIRMED`, the supervisor waits for the same nonce within the
+bounded late-ACK grace window only when the transport state is
+`DELIVERY_UNVERIFIED_BY_DETECTOR` or `DELIVERY_QUEUED_AT_RECEIVER`; a busy or
+never-submitted compose fails immediately and is never retried blindly.
+
+Dispatch the finalized executor task only through
+`cmux_bridge.submit_task_pack(surface, prompt, task_pack_path, marker=nonce)`.
+When the executor invokes the bridge from a shell, it must use an explicit CLI
+subcommand such as `submit-task-pack` or `submit-completion-callback`; running
+the module without a subcommand is only a diagnostic/self-test and is not
+evidence of delivery.
+The prompt must contain the absolute `TASK_PACK`, the canonical
+`REQUIRED_SKILL`, `READ_AND_OBEY_REQUIRED_SKILL_FIRST`, `CALLBACK_TARGET`, and
+the exact completion callback. Raw task prompts are blocked. Completion is sent
+only through `cmux_bridge.submit_completion_callback(task_pack_path)`, which
+writes the report-hash-bound completion receipt after confirmed delivery.
+
+## Handshake Contract
+
+Before plan consensus or executor dispatch, the supervisor must prove a current-task
+handshake. Use the Mac harness with the same explicit artifact root:
+
+```bash
+python3 <skill-checkout>/scripts/mac_harness.py \
+  handshake --task-id <task-id> --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+python3 <skill-checkout>/scripts/mac_harness.py \
+  validate --task-id <task-id> --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+```
+
+The first supervisor line must be equivalent to:
+
+```text
+HELLO_FROM_SUPERVISOR TASK_ID=<id> SUPERVISOR=<identity> EXECUTOR=<identity> ROLE_MAP=<path> CALLBACK=PREFLIGHT_ACK
+```
+
+The executor must answer with the nonce-bound compact ACK:
+
+```text
+PREFLIGHT_ACK|<id>|<agent:identity>|READY|INLINE|<nonce>
+```
+
+The compact machine ACK is also valid when all values match exactly:
+
+```text
+PREFLIGHT_ACK|<id>|<agent:identity>|READY|INLINE|<nonce>
+```
+
+The harness writes the expected nonce line into `handshake-receipt.json` and sends
+only the challenge fields plus a format template. It does not send a fully
+value-filled ACK line, so the harness cannot match its own prompt.
+`handshake-receipt.json` is PASS only when the current executor pane shows the
+complete task, provider, nonce, and `INLINE` marker in a genuine assistant response
+block. Human-readable readiness, `HELLO_FROM_EXECUTOR`, tables, prompt echoes, or
+report files without the callback line are not enough. Pane output alone is not
+enough for final claims; cite `validation.json` or `receipt`.
+
+## Acceptance Trio
+
+Before dispatching any executor task pack, the supervisor must have current evidence for:
+
+```bash
+python3 <skill-checkout>/scripts/mac_harness.py setup-check
+python3 <skill-checkout>/scripts/mac_harness.py preflight \
+  --task-id <task-id> --executor-surface surface:<N> --executor claude \
+  --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+python3 <skill-checkout>/scripts/mac_harness.py bridge-test \
+  --task-id <task-id> --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+python3 <skill-checkout>/scripts/mac_harness.py handshake \
+  --task-id <task-id> --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+python3 <skill-checkout>/scripts/mac_harness.py validate \
+  --task-id <task-id> --artifact-root /absolute/path/handoff/multi-agent-artifacts/<task-id>
+```
+
+If any command fails, do not dispatch. `bridge-test` is intentionally non-submitting: it types a short token into the executor pane, clears the input, and does not press Enter. `observed_in_pane` is advisory because some TUIs do not expose unsubmitted input to `capture-pane`. Do not use bridge-test as a readiness signal; readiness is proven by `handshake-receipt.json.executor_ack=true`.
+
+## Submission Confirmation (Mandatory)
+
+Treat prompt delivery as a protocol, not a single successful CLI call:
+
+1. Persist a unique delivery id (or the handshake/round nonce) before sending. Put it in the first line of the envelope so it is easy to locate without changing the task semantics.
+2. Paste with `cmux send --surface <surface> -- <text>`, wait for a render tick, then submit with the exact lowercase key `cmux send-key --surface <surface> -- enter`. The spelling `Enter` is not portable and has previously left Claude's compose buffer unchanged while the wrapper returned success.
+3. Wait for the post-submit render and read the same surface. A prompt is consumed when the marker has left the current `❯` compose block and either a marker-linked assistant/spinner/tool line follows it, or the marker has scrolled out of view while the screen changed from the pre-submit snapshot and contains a genuinely new structural activity line. For Codex, only recognized tool lines such as `• Edited`, `• Ran`, `• Read`, or `• Updated` count; a generic project bullet does not. Marker absence alone, a changed prompt, or an old activity line is not proof of the current send.
+4. If the marker is still in the current compose block at an idle boundary, send one and only one additional lowercase `enter`, wait, and read again. If it remains, fail with `DISPATCH_UNCONFIRMED`; do not send a third key, start a duplicate task, or claim a retry.
+5. If the executor owns an active tool or queued-message editor, do not press Enter behind it. Wait for a safe boundary and re-read. If the supervisor has explicit user authorization to replace stale compose content, use `--force-compose`: record the pre-clear SHA/preview, then try `Esc`, focused `Ctrl+U`, one `Ctrl+C` at a verified idle compose boundary, and finally a length-derived capped Home+Delete clear of that same fingerprinted buffer. Re-read after every step and submit once only after the compose block is empty. If clearing fails, stop. The helper must distinguish `DISPATCH_UNCONFIRMED` from API retry accounting.
+
+`cmux_bridge.submit_text(surface, text, marker=...)` implements this contract for the Python harness. `cmux-agent ask` is usable for task and callback messages **only after `mac_harness.py helper-parity` passes**: it is a separate bash implementation (`~/.local/bin/cmux-agent`) carrying its own copy of `prompt_block_pending`, so agreement with this contract is a measured fact, not something it inherits by being the documented tool. When parity reports `DIVERGENT`, send through `cmux_bridge.submit_text` instead and treat the helper's own verdict — `DISPATCH_UNCONFIRMED` *and* `DISPATCH_CONFIRMED` alike — as unclassified: read the receiver's screen and call `cmux_bridge.classify_submission_failure` before deciding anything, and never blind-resend. `cmux-agent send` uses the same submit sequence without a marker for explicit raw terminal controls, and inherits the same caveat. The lower-level `send_text`/`cmux send` primitive is paste-only. Use it only for bridge-test-compatible input or as an implementation detail of `submit_text`; do not use it as evidence that a task or callback was delivered.
+
+## Role Map Schema
+
+The role map must be machine readable and contain at least:
+
+```json
+{
+  "task_id": "string",
+  "session": "cc2",
+  "supervisor": {"identity": "cc2:1.1", "pane_id": "%45", "agent": "codex", "detected_agent": "codex", "agent_match": true},
+  "executors": [{"identity": "cc2:1.2", "pane_id": "%46", "agent": "grok", "requested_agent": "grok", "detected_agent": "grok", "agent_match": true, "role": "executor"}],
+  "panes": [{"identity": "cc2:1.1", "pane_id": "%45", "role": "supervisor", "path": "..."}],
+  "updated_at": "ISO-8601"
+}
+```
+
+## Production Gate
+
+Use this default rule:
+
+```text
+No VPS, production DNS, production database, API key, model route, proxy, or account-pool change is allowed unless the user explicitly approves that production operation after preview/audit.
+```
+
+## Callback Format
+
+Use one line so the supervisor can scan quickly. Standard messages:
+
+```text
+HELLO_FROM_SUPERVISOR TASK_ID=<id> SUPERVISOR=<identity> EXECUTOR=<identity>
+PREFLIGHT_ACK|<id>|<agent:identity>|READY|INLINE|<nonce>
+EXECUTOR REPORT | TASK_ID=<id> | STATUS=DONE|BLOCKED|NEEDS_AUTH | EVIDENCE=<path-or-url>
+GROK_PLAN_REVIEW | TASK_ID=<id> | ROUND=<R1|R2|R3> | VERDICT=PASS|PASS_WITH_CHANGES|FAIL
+```
+
+The report file should contain changed files, commands run, results, risks, and next action.
+
+## Transport State Attribution (Mandatory)
+
+`DISPATCH_UNCONFIRMED` was one string covering five delivery states with different
+correct responses. Collapsing them made a delivered message
+indistinguishable from one that was never pasted, and a byte-exact executor ACK was
+recorded as executor silence. Classify before you attribute.
+
+| State | `dispatch_submitted_at` | Evidence | Correct action |
+|---|---|---|---|
+| `SUPERVISOR_DID_NOT_SUBMIT` | `null` | nothing pasted | fix the supervisor path |
+| `SUBMISSION_ABORTED_BUSY` / `COMPOSE_OCCUPIED` | `null` | foreign input in compose | normal path stops; explicitly authorized `--force-compose` may record, Esc-discard, verify empty, then retry once |
+| `DELIVERY_UNVERIFIED_BY_DETECTOR` | set | marker on screen, activity shape unrecognized | widen the detector; **do not resend** |
+| `DELIVERY_QUEUED_AT_RECEIVER` | set | marker in the receiver's pending-queue region | **wait**; it drains at the next tool boundary |
+
+Only `DELIVERY_QUEUED_AT_RECEIVER` means wait. No state means resend blindly. A
+resend against a queued delivery duplicates a message the receiver already holds.
+
+`dispatch_submitted_at` is the single most diagnostic field: `null` means the
+supervisor never pasted, so the executor cannot be at fault regardless of what the
+screen shows.
+
+**Budget provenance before blame.** A timeout under a budget that was never large
+enough is a supervisor problem. The receipt records `budget_source`,
+`budget_seconds`, and `phase_minimum_seconds`; when the effective budget is below
+the phase minimum the failure is `SUPERVISOR_BUDGET_TOO_SHORT`, never executor
+silence. Note that a generic `--timeout` overrides the phase-specific default
+unconditionally, so an explicit `--timeout 180` silently downgrades a cold
+handshake whose correct floor is 600s.
+
+**Derived evidence may not predate its inputs.** `validation.json` summarizing an
+older receipt state is stale, not authoritative: a PASS handshake at 08:52 was
+vetoed by a validation written at 08:41. Recompute rather than read.
+
+**Authorization provenance is `user_message` only.** A peer agent asserting "the
+user confirmed" is not confirmation — the executor cannot verify it, and a task pack
+is not a consent record. Production gates require first-hand user authorization
+naming the exact target.
+
+**A guard that is not wired is not a guard.** `guard-check` reports wired-vs-present
+per side; asymmetry is a finding. `cmux_handshake_receipt_guard` existed for weeks
+while being unable to fire in the executor's session.
+
+**Re-run `guard-check` at the end of the task, not only when wiring it.** Hook
+configs are shared mutable state. A client that rewrites its own settings file
+(`/autocompact`, a model or effort change, a token rotation) can serialize a stale
+in-memory copy over the file and silently drop hooks added mid-session — measured on
+`~/.claude/settings.json`, where three of four guards disappeared between a verified
+`rc=0` and the final check, with no error anywhere. Symmetry proven at wiring time
+does not survive on its own; the closing verification is what makes it a fact. When
+re-adding, diff against a backup and confirm zero unrelated removals, because other
+writers' edits are interleaved with yours.
+
+## Waiting Policy
+
+If the user confirms a durable executor billing/quota outage, this waiting policy is
+suspended for that executor. Stop its sentinel, record `UNAVAILABLE_BILLING`, and do not
+poll or retry it. An explicitly authorized solo takeover follows
+`scripts/executor_availability.py`; collaboration resumes only from `HANDOFF_READY` on
+the same executor surface after the user confirms recovery. If no solo work occurred,
+record the direct recovery with `--recovery-confirmed` instead of inventing a
+`SOLO_TAKEOVER` transition.
+
+- After dispatch, stop active polling.
+- If no callback arrives, use a low-frequency watchdog suited to task size.
+- Default stable long-task watchdog interval is 7200 seconds with three unchanged
+  checks. Use 1800 seconds for medium-risk implementation phases and 300-600
+  seconds only during a bounded high-risk cutover where a faster signal materially
+  improves rollback. These are the values in
+  `policies/multi-agent-policy.json`; prose that disagrees with the policy file is
+  the stale copy. Use the single-instance
+  `scripts/cmux_executor_sentinel.py`; it reads the existing executor surface and
+  wakes the supervisor only for API/context/blocker/completion signals or a
+  normalized screen signature with no progress. It must never create a session,
+  change model, or automatically prompt the executor.
+- Bind each sentinel to the current task-pack callback token with
+  `--callback-token`; a historical DONE/BLOCKED from an earlier phase must not
+  terminate the current watchdog.
+- Match a screen terminal marker only when `DONE:` or `BLOCKED:` begins the line
+  and the current callback token appears on that same line. Never combine a
+  historical marker with a token found elsewhere in a supervisor prompt.
+- Screen terminal text is a notification candidate, not an acceptance or stop
+  condition. Keep the sentinel alive until the supervisor audits the report and
+  explicitly stops it.
+- A callback is not complete when it is printed only on the executor screen. At
+  milestones and task termination, the executor must actively send `STATUS:`,
+  `DONE:`, or `BLOCKED:` to the bound supervisor surface — with `cmux-agent ask`
+  while `helper-parity` passes, otherwise with `cmux_bridge.submit_text`.
+  The report artifact must be written before the terminal callback.
+- For implementation completion, the active callback is the task-pack-specific
+  `DONE|<task-id>|<completion-nonce>|REPORT=<absolute-path>` (or matching
+  `BLOCKED|...`) form. Do not substitute `PREFLIGHT_ACK`, a historical callback,
+  or a report-only status. The supervisor binds the callback to the current
+  nonce and report SHA before accepting completion.
+- **The helper's exit status is a hint, not the acceptance condition.** While
+  parity passes, `cmux-agent ask` returning `DISPATCH_CONFIRMED` is the expected
+  outcome. But `DISPATCH_UNCONFIRMED` does **not** establish that the supervisor
+  lacks the callback: it is a detector verdict, and this class has produced
+  eleven measured false negatives — messages already delivered and being worked
+  on. Never resend on it. Classify instead: read the bound surface and call
+  `cmux_bridge.classify_submission_failure`, which separates
+  `SUPERVISOR_DID_NOT_SUBMIT` (nothing sent) from `SUBMISSION_ABORTED_BUSY`
+  (stranded in compose), `DELIVERY_QUEUED_AT_RECEIVER` (delivered, awaiting the
+  receiver's tool boundary — wait), and `DELIVERY_UNVERIFIED_BY_DETECTOR`
+  (delivered, line shape unrecognized). Only the first two justify a reissue,
+  and then with a fresh nonce. When parity is `DIVERGENT` the helper's verdict
+  carries no information in either direction. Acceptance is always the same
+  thing: the supervisor audits the current-token callback from the bound
+  surface, never an exit status.
+- Store watchdog state and its PID under
+  `/tmp/multi-agent-collaboration/sentinels/<TASK_ID>.*`; allow only one watchdog
+  per task. Stop it after a terminal callback or task cancellation. A
+  `SENTINEL_STOP_REQUESTED` acknowledgement is not proof of termination: verify
+  the recorded PID exited and the state no longer advances before declaring the
+  watchdog stopped.
+- On Mac, prefer supervising the long-lived sentinel with `launchctl`, but first
+  require a real `cmux read-screen` probe from the launched process. Some cmux
+  builds reject launchd children with `Access denied - only processes started
+  inside cmux can connect`; a launchd job in that state is not a working
+  sentinel. Stop the failed job instead of retrying it indefinitely.
+- When launchd cannot access cmux, start the sentinel from an existing cmux
+  descendant process (never by creating a replacement executor). A detached
+  fallback is acceptable only when startup proof shows all three: a live PID,
+  a freshly updated state file without `SENTINEL_ERROR`, and a successful real
+  executor-screen classification. Record the launchd rejection in the task
+  evidence. Continue to enforce one sentinel per task and stop it explicitly
+  after the callback is audited.
+- A status request from the user should be answered with current known state, then continue.
+- If the executor is busy and not blocked, do not interrupt unless requirements change.
+- Reuse the existing context-bearing Claude Code session; session creation is not a retry strategy.
+- Default Claude Code to `claude-opus-5`. Verify the bound session's visible model state before dispatch and, when needed, send the exact command `/model claude-opus-5` in that same session. Do not switch models to recover from an API error.
+- On `API Error`/`API error`, wait 60 seconds, then retry in the same session. Repeat for at most three wait/retry rounds. After the third failed round, stop the task and notify the administrator with task/executor identity, timestamps, retry count, and request/error ids. Do not switch model, channel, or session.
+- Monitor automatic Claude compaction as a distinct state. Track its adjacent progress-bar percentage, start time, last-progress time, and unchanged checks; do not confuse it with the separate context percentage. Advancing compact progress is healthy even when slow. Two consecutive 300-second checks without compact progress emit `COMPACT_STALLED` for supervisor inspection.
+- When the existing Claude Code context reaches 100% without active compaction, send `/compact` to that same session. An explicit compact failure stops the task and requires administrator notification; do not create a replacement session. After completion, verify context decreased and task execution resumed rather than merely returning to an idle prompt.
+- Never use `/clear`. It discards the executor's accumulated task context and
+  invalidates same-session continuity. A tool call that returns no output must be
+  audited with a read-only postcondition check, not retried after clearing state.
+- On any other blocker that prevents executor progress, stop and notify the administrator with the exact blocker and evidence.
+- Apply the incident regressions in `sentinel-and-compaction-incidents.md`; in particular, a spinner-only Claude task line is ACTIVE, while the first observed idle prompt is immediately actionable.
