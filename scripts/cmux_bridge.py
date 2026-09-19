@@ -7,6 +7,7 @@ Surface refs are strings like "surface:17" or UUIDs.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -804,7 +805,9 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
     active input is never double-submitted.
     """
     if task_pack_path is not None:
-        validate_task_pack_contract(task_pack_path, prompt_text=text)
+        pack = validate_task_pack_contract(task_pack_path, prompt_text=text)
+        from availability_contract import require_action
+        require_action(pack["task_id"], "dispatch", pack)
     elif _looks_like_task_dispatch(text):
         raise TaskPackContractError(
             "TASK_PACK_REQUIRED: task dispatches must use submit_task_pack with a "
@@ -867,6 +870,23 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         return {"confirmed": True, "retries": 0}
 
     screen = read_screen(surface, lines=confirm_lines)
+    # A slow first render is not a failed delivery. Observe the same submission
+    # once more; never paste or press Enter while its outcome is unknown.
+    if (not _submission_confirmed(screen, marker)
+            and not _prompt_block_pending(screen, marker)
+            and not _new_activity_after_submit(before, screen)
+            and not pending_queue_holds(screen, marker)):
+        try:
+            late_delay = float(os.environ.get("CMUX_AGENT_LATE_CONFIRM_DELAY", "3.0"))
+        except ValueError:
+            late_delay = 3.0
+        if not math.isfinite(late_delay):
+            late_delay = 3.0
+        time.sleep(max(0.0, min(5.0, late_delay)))
+        screen = read_screen(surface, lines=confirm_lines)
+        if (not _prompt_block_pending(screen, marker) and not pending_queue_holds(screen, marker)
+                and (_submission_confirmed(screen, marker) or _new_activity_after_submit(before, screen))):
+            return {"confirmed": True, "retries": 0, "late_confirmation": True}
     if (
         not _prompt_block_pending(screen, marker)
         and (
@@ -922,6 +942,9 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
                      force_compose=False):
     """Only dispatch entry point for executor tasks."""
+    from availability_contract import require_action
+    pack = validate_task_pack_contract(task_pack_path)
+    require_action(pack["task_id"], "dispatch", pack)
     return submit_text(
         surface,
         text,
@@ -943,6 +966,8 @@ def _sha256_file(path):
 def submit_completion_callback(task_pack_path, confirm_lines=200):
     """Deliver the exact terminal callback and persist confirmation evidence."""
     pack = validate_task_pack_contract(task_pack_path)
+    from availability_contract import require_action
+    require_action(pack["task_id"], "callback", pack)
     report = Path(pack["report"])
     if not report.is_file():
         raise TaskPackContractError(

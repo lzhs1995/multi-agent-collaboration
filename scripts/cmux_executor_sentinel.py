@@ -310,6 +310,18 @@ def run_daemon(args: argparse.Namespace) -> int:
             "started_at": state.get("started_at") if previous_pid == os.getpid() else utc_now(),
         })
         while not stop_path.exists():
+            from availability_contract import AvailabilityError, require_action
+            try:
+                pack = {}
+                if getattr(args, "role_map", ""):
+                    pack_path = Path(args.role_map).parent / "task-pack.json"
+                    if pack_path.is_file():
+                        pack = json.loads(pack_path.read_text())
+                require_action(args.task_id, "sentinel", pack)
+            except AvailabilityError as exc:
+                state.update(last_classification="AVAILABILITY_STOP", error=str(exc), pid=None)
+                save_state(state_path, state)
+                return 0
             try:
                 state, terminal = inspect(args, state)
                 save_state(state_path, state)

@@ -83,6 +83,11 @@
     "//finalized_at": "Set by finalization only. Its presence plus draft:false is what makes a pack dispatchable.",
     "finalized_at": {"type": "string"},
 
+    "availability_state": {"type": "string", "pattern": "^/"},
+    "availability_required": {"type": "boolean"},
+    "executor_uuid": {"type": "string", "format": "uuid"},
+    "fallback_policy": {"enum": ["manual", "automatic_user_authorized"]},
+
     "scope": {"type": "string"},
     "forbidden": {"type": "string"},
     "local_first": {"type": "string"},
