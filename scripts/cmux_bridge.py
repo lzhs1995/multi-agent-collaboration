@@ -1274,8 +1274,8 @@ def _cli_main(argv=None):
     submit.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="replace idle Claude compose before submit (default: enabled)",
+        default=False,
+        help="replace idle Claude compose before submit (default: disabled; explicit authorization required)",
     )
 
     pack = subs.add_parser("submit-task-pack", aliases=["submit_task_pack"])
@@ -1287,8 +1287,8 @@ def _cli_main(argv=None):
     pack.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="replace idle Claude compose before task dispatch (default: enabled)",
+        default=False,
+        help="replace idle Claude compose before task dispatch (default: disabled; explicit authorization required)",
     )
 
     completion = subs.add_parser(

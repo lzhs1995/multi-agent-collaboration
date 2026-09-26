@@ -1,4 +1,6 @@
 """No live terminal writes: regression probes use the public send entrypoint."""
+import contextlib
+import io
 import unittest
 from unittest.mock import patch
 import cmux_bridge as bridge
@@ -37,6 +39,36 @@ class ReceiverInputTests(unittest.TestCase):
             self.assertEqual(error.exception.state, bridge.COMPOSE_OCCUPIED)
             send.assert_not_called()
             key.assert_not_called()
+
+    def test_public_cli_default_preserves_unsent_draft(self):
+        for command in ("submit-text", "submit_text"):
+            with self.subTest(command=command), \
+                 patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
+                 patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                code = bridge._cli_main([command, "--surface", "peer", "--text", "STATUS: continuation"])
+                self.assertEqual(code, 75)
+                send.assert_not_called()
+                key.assert_not_called()
+
+    def test_both_cli_dispatch_commands_default_to_no_force(self):
+        for command, method, extra in (("submit-text", "submit_text", []),
+                                       ("submit_text", "submit_text", []),
+                                       ("submit-task-pack", "submit_task_pack", ["--task-pack", "/tmp/pack.json"]),
+                                       ("submit_task_pack", "submit_task_pack", ["--task-pack", "/tmp/pack.json"])):
+            with self.subTest(command=command), patch.object(bridge, method, return_value={"confirmed": True}) as submit, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge._cli_main([command, "--surface", "peer", "--text", "text", *extra]), 0)
+                self.assertIs(submit.call_args.kwargs["force_compose"], False)
+
+    def test_cli_explicit_force_choice_is_preserved(self):
+        for command, method, extra in (("submit-text", "submit_text", []),
+                                       ("submit-task-pack", "submit_task_pack", ["--task-pack", "/tmp/pack.json"])):
+            for flag, expected in (("--force-compose", True), ("--no-force-compose", False)):
+                with self.subTest(command=command, flag=flag), patch.object(bridge, method, return_value={"confirmed": True}) as submit, \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(bridge._cli_main([command, "--surface", "peer", "--text", "text", *extra, flag]), 0)
+                    self.assertIs(submit.call_args.kwargs["force_compose"], expected)
 
     def test_queued_message_is_one_send_not_a_failed_delivery_retry(self):
         screens = ["› Ask Codex to do anything\nGPT-6 high",
