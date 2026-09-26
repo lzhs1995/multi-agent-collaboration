@@ -270,6 +270,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         screens = [
             "⏺ previous response\nidle",
             "⏺ previous response\nstatus changed",
+            "⏺ previous response\nstatus changed",
         ]
         with (
             mock.patch.object(BRIDGE, "send_text"),
@@ -279,6 +280,30 @@ class SubmissionConfirmationTests(unittest.TestCase):
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
             BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+
+    def test_late_confirmation_observes_without_resubmitting(self):
+        screens = ["⏺ previous response\nidle", "⏺ previous response\nidle",
+                   "⏺ previous response\n⏺ new tool running"]
+        with (mock.patch.object(BRIDGE, "send_text") as paste,
+              mock.patch.object(BRIDGE, "send_key") as key,
+              mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+              mock.patch.object(BRIDGE.time, "sleep")):
+            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+        self.assertTrue(result["late_confirmation"])
+        paste.assert_called_once_with("surface:2", "prompt")
+        key.assert_called_once_with("surface:2", "enter")
+
+    def test_late_queued_message_is_not_reported_as_confirmed(self):
+        screens = ["⏺ previous response\nidle", "⏺ previous response\nidle",
+                   "Messages to be submitted after the tool completes:\ndelivery:x"]
+        with (mock.patch.object(BRIDGE, "send_text"),
+              mock.patch.object(BRIDGE, "send_key") as key,
+              mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+              mock.patch.object(BRIDGE.time, "sleep"),
+              self.assertRaises(BRIDGE.DispatchUnconfirmed) as error):
+            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+        self.assertEqual(error.exception.state, BRIDGE.DELIVERY_QUEUED_AT_RECEIVER)
+        key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_fails_closed_on_historical_echo_without_new_activity(self):
         with (

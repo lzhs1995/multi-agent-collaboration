@@ -310,6 +310,18 @@ def run_daemon(args: argparse.Namespace) -> int:
             "started_at": state.get("started_at") if previous_pid == os.getpid() else utc_now(),
         })
         while not stop_path.exists():
+            from availability_contract import AvailabilityError, require_action
+            try:
+                pack = {}
+                if getattr(args, "role_map", ""):
+                    pack_path = Path(args.role_map).parent / "task-pack.json"
+                    if pack_path.is_file():
+                        pack = json.loads(pack_path.read_text())
+                require_action(args.task_id, "sentinel", pack)
+            except AvailabilityError as exc:
+                state.update(last_classification="AVAILABILITY_STOP", error=str(exc), pid=None)
+                save_state(state_path, state)
+                return 0
             try:
                 state, terminal = inspect(args, state)
                 save_state(state_path, state)
@@ -385,8 +397,21 @@ def verify_role_map_target(
     elif isinstance(entries, dict):
         roles = {str(k).lower(): str(v) for k, v in entries.items()}
     for key in ("supervisor", "executor"):
-        if key in doc and isinstance(doc[key], str):
-            roles.setdefault(key, doc[key])
+        if key not in doc:
+            continue
+        declared = doc.get(key)
+        # mac_harness map emits role objects, not the legacy flat strings.
+        if isinstance(declared, dict):
+            refs = [declared[name] for name in ("surface_ref", "surface") if name in declared]
+            if (not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
+                    or len(set(refs)) != 1):
+                return False, f"invalid or conflicting {key} surface declaration"
+            declared = refs[0]
+        if not isinstance(declared, str) or not declared.strip():
+            return False, f"invalid {key} surface declaration"
+        if key in roles and roles[key] != declared:
+            return False, f"conflicting {key} surfaces in role map"
+        roles[key] = declared
 
     expected_supervisor = roles.get("supervisor")
     expected_executor = roles.get("executor") or roles.get("executor1")
