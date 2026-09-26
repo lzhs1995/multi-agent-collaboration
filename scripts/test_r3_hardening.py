@@ -1371,7 +1371,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker="nonce-1234", confirm_lines=200,
-            force_compose=True,
+            force_compose=False,
         )
         payload = json.loads(out.getvalue())
         self.assertEqual(payload["command"], "submit_text")
