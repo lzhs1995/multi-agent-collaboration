@@ -1673,6 +1673,11 @@ def cmd_task_pack(args):
 
     pack = {
         "task_id":           args.task_id,
+        "availability_required": True,
+        "availability_state": str(root / "executor-availability.json"),
+        "fallback_policy": "manual",
+        "authorization_record": None,
+        "executor_uuid": gate.get("executor_surface_uuid"),
         # Scaffold output is a DRAFT and says so in machine-readable form.
         #
         # Previously the scaffold emitted `<FILL: ...>` placeholders and nothing
@@ -1917,6 +1922,21 @@ def cmd_finalize_pack(args):
         )
         sys.exit(1)
 
+    if pack.get("availability_required"):
+        from availability_contract import initial, load as load_availability, save as save_availability
+        from resource_broker import os_lock
+        gate = _read(root / "identity-gate.json") or {}
+        state_file = Path(pack["availability_state"])
+        with os_lock(str(state_file) + ".lock"):
+            prior = load_availability(state_file)
+            if not prior:
+                availability = initial(
+                    args.task_id, gate["workspace_uuid"], gate["executor_surface_uuid"], gate["executor"],
+                    authorization_source=pack.get("authorization_source", "none"),
+                    authorization_record=pack.get("authorization_record"),
+                    fallback_policy=pack.get("fallback_policy", "manual"),
+                    protected_paths=pack.get("protected_paths", []))
+                save_availability(state_file, availability)
     pack["draft"] = False
     pack["source_entries"] = source_entries
     pack["finalized_at"] = _now()
@@ -2669,6 +2689,8 @@ def _record_round_one(args, root, entry, item, artifact_path, artifact_sha256):
 def cmd_record_round(args):
     root = _artifact_root(args)
     _ensure_root(root, args.task_id)
+    from availability_contract import require_action
+    require_action(args.task_id, "round_record", _read(root / "task-pack.json") or {})
 
     if not args.round_id:
         _fail("--round-id is required")

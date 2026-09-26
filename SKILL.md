@@ -60,6 +60,11 @@ on Linux. Other terminals and agent-native sessions are not certified transports
 
 ## Delivery And Monitoring
 
+Read [receiver input and delivery](references/receiver-input-and-delivery.md)
+when a surface may have returned to a shell or a send is unconfirmed. Current
+input type, submission, consumption, agreement and accepted output are separate
+facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts.
+
 - Normal supervision is callback-first: one sentinel per task, 7200-second stable
   cadence, 1800 seconds for medium-risk work, 300-600 only for bounded high-risk
   windows. Do not spend tokens polling a healthy peer every few seconds.
@@ -71,6 +76,10 @@ on Linux. Other terminals and agent-native sessions are not certified transports
   ends. Billing/authentication failures: zero retries. Stop the sentinel and
   record unavailability. Use `executor_availability.py` for authorized SOLO
   takeover and phase-boundary handback; never allow concurrent writers.
+  When the user has authorized automatic takeover, continue the task locally
+  after freezing the unavailable executor; do not stop the whole task. Read
+  [availability and shared resources](references/availability-and-resources.md)
+  for v2 initialization, v1 migration, exact-session recovery and resource leases.
 - Pasting is not submission. Confirm lowercase `enter` and new receiver activity
   using the bridge's delivery classifier. Prompt echo, stale callbacks and marker
   absence are not proof. On ambiguous delivery inspect before any resend.
@@ -95,6 +104,10 @@ on Linux. Other terminals and agent-native sessions are not certified transports
 - Evidence roots are explicit or registry-bound, never guessed from cwd. A
   missing read is unmeasured, not zero. Parse structured data and check producer
   semantics before declaring a defect. Record mutation hit counts in test probes.
+- Cross-workspace coordination assigns resources, not another task's executor.
+  Word/Zotero share one serial resource; NotebookLM sharing is account-wide.
+  A lease, an actual OS lock and a task-bound drain receipt are distinct facts.
+  Unknown Word document counts and unknown remote query outcomes prevent release.
 - Domain-specific Stata experiments do not belong in this generic contract.
   See [lessons and test mapping](references/lessons.md) for reusable findings;
   the [incident archive](references/sentinel-and-compaction-incidents.md) records

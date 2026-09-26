@@ -7,6 +7,7 @@ Surface refs are strings like "surface:17" or UUIDs.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -727,7 +728,9 @@ def _new_activity_after_submit(before, after):
 
 def _queued_or_active_input(screen):
     """Do not issue a blind second Enter while a queued/active task owns the TUI."""
-    if re.search(r"Press up to edit queued messages", screen):
+    if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", screen, re.I | re.M):
+        return True
+    if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):
         return True
     # Claude uses the same glyph for active and completed summaries. Restrict
     # this guard to words that identify live work; "Churned/Brewed/Cooked"
@@ -788,6 +791,58 @@ def clear_known_compose_by_delete(surface, compose):
     return count
 
 
+def receiver_input_kind(screen):
+    """Classify the current input area; transcript/model history is not liveness.
+
+    A bare prompt after a CLI exits must win over any old agent banner. Fancy
+    shell prompts using the same glyph as Claude remain UNKNOWN without current
+    UI chrome. This observation does not establish task identity or acceptance.
+    """
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen)
+    lines = [line.rstrip() for line in clean.splitlines() if line.strip()]
+    if not lines:
+        return "UNKNOWN"
+    last = lines[-1].strip()
+    shell = (r"^(?:\([^\n)]*\)\s*)?[\w.-]+@[\w.-]+[^\n]*?[%$#](?:\s|$)",
+             r"^(?:bash|zsh|sh)(?:-[\d.]+)?[$#](?:\s|$)",
+             r"^PS\s+(?:[A-Za-z]:[\\/]|/)[^\n]*>(?:\s|$)",
+             r"^(?:[A-Za-z]:\\[^\n]*>|[%$#])\s*$")
+    if any(re.match(pattern, last) for pattern in shell):
+        return "SHELL"
+    prompts = [i for i, line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
+    chrome = re.compile(r"^\s*(?:GPT-[\w.-]+|claude-[\w.-]+|(?:Opus|Sonnet)\s+[\d.]+|\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\])(?:\s|$)", re.I)
+    if prompts:
+        tail = lines[prompts[-1]:]
+        # A historical footer cannot override unknown current input below it.
+        if len(tail) > 1 and chrome.search(tail[-1]):
+            return "AGENT_TUI"
+        if len(tail) == 1 and re.fullmatch(r"\s*[›❯]\s*Ask (?:Codex|Claude) to do anything\s*", tail[0]):
+            return "AGENT_TUI"
+    elif chrome.search(lines[-1]) and any(_ACTIVITY_LINE_RE.match(line) for line in lines[-8:]):
+        return "AGENT_TUI"
+    return "UNKNOWN"
+
+
+def require_agent_input(screen, surface):
+    kind = receiver_input_kind(screen)
+    if kind != "AGENT_TUI":
+        raise DispatchUnconfirmed(
+            f"AGENT_INPUT_REQUIRED surface={surface} receiver_kind={kind}; "
+            "message not submitted; stop further input and inspect the original session",
+            state=SUPERVISOR_DID_NOT_SUBMIT,
+        )
+
+
+def require_clearable_agent_input(screen, surface):
+    """Recheck a fresh observation before any further compose-clearing keys."""
+    require_agent_input(screen, surface)
+    if _queued_or_active_input(screen):
+        raise DispatchUnconfirmed(
+            f"COMPOSE_OCCUPIED surface={surface}; active/queued work cannot be cleared",
+            state=COMPOSE_OCCUPIED,
+        )
+
+
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
                 force_compose=False):
     """Submit text with lowercase Enter and prove the TUI consumed it.
@@ -804,22 +859,32 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
     active input is never double-submitted.
     """
     if task_pack_path is not None:
-        validate_task_pack_contract(task_pack_path, prompt_text=text)
+        pack = validate_task_pack_contract(task_pack_path, prompt_text=text)
+        from availability_contract import require_action
+        require_action(pack["task_id"], "dispatch", pack)
     elif _looks_like_task_dispatch(text):
         raise TaskPackContractError(
             "TASK_PACK_REQUIRED: task dispatches must use submit_task_pack with a "
             "finalized pack carrying required_skill and confirmed completion callback"
         )
 
-    before = read_screen(surface, lines=confirm_lines) if (marker or force_compose) else ""
+    before = read_screen(surface, lines=confirm_lines)
+    require_agent_input(before, surface)
+    if not force_compose and compose_block_text(before) is not None and not compose_block_is_empty(before):
+        raise DispatchUnconfirmed(
+            f"COMPOSE_OCCUPIED surface={surface}; no input sent; preserve existing text",
+            state=COMPOSE_OCCUPIED,
+        )
     if force_compose:
         # The harness enables this supervisor-owned compose replacement by
         # default for this user; direct library callers must opt in explicitly.
         compose = compose_block_text(before)
         if compose and not compose_block_is_empty(before):
+            require_clearable_agent_input(before, surface)
             send_key(surface, "escape")
             time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
             cleared = read_screen(surface, lines=confirm_lines)
+            require_clearable_agent_input(cleared, surface)
             if not compose_block_is_empty(cleared):
                 # Claude's terminal composer may accept Escape without
                 # editing the buffer.  The override is already explicit and
@@ -829,6 +894,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                 send_key(surface, "ctrl+u")
                 time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
                 cleared = read_screen(surface, lines=confirm_lines)
+                require_clearable_agent_input(cleared, surface)
                 if not compose_block_is_empty(cleared):
                     # Claude's multiline editor can also ignore ctrl+u.  At
                     # this point the operator explicitly owns the fingerprinted
@@ -837,10 +903,12 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                     send_key(surface, "ctrl+c")
                     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
                     cleared = read_screen(surface, lines=confirm_lines)
+                    require_clearable_agent_input(cleared, surface)
                     if not compose_block_is_empty(cleared):
                         clear_known_compose_by_delete(surface, compose)
                         time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
                         cleared = read_screen(surface, lines=confirm_lines)
+                        require_clearable_agent_input(cleared, surface)
                         if (
                             not compose_block_is_empty(cleared)
                             and _queued_or_active_input(cleared)
@@ -859,14 +927,41 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                         # idle residual rendering. Active/queued input remains
                         # protected by the branch above.
             before = cleared
+            require_agent_input(before, surface)
     send_text(surface, text)
     time.sleep(float(os.environ.get("CMUX_AGENT_SUBMIT_DELAY", "0.25")))
     send_key(surface, "enter")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     if not marker:
-        return {"confirmed": True, "retries": 0}
+        return {"confirmed": False, "submitted": True, "retries": 0,
+                "state": DELIVERY_UNVERIFIED_BY_DETECTOR}
 
     screen = read_screen(surface, lines=confirm_lines)
+    # A slow first render is not a failed delivery. Observe the same submission
+    # once more; never paste or press Enter while its outcome is unknown.
+    if (not _submission_confirmed(screen, marker)
+            and not _prompt_block_pending(screen, marker)
+            and not _new_activity_after_submit(before, screen)
+            and not pending_queue_holds(screen, marker)):
+        try:
+            late_delay = float(os.environ.get("CMUX_AGENT_LATE_CONFIRM_DELAY", "3.0"))
+        except ValueError:
+            late_delay = 3.0
+        if not math.isfinite(late_delay):
+            late_delay = 3.0
+        time.sleep(max(0.0, min(5.0, late_delay)))
+        screen = read_screen(surface, lines=confirm_lines)
+        if (not _prompt_block_pending(screen, marker) and not pending_queue_holds(screen, marker)
+                and (_submission_confirmed(screen, marker) or _new_activity_after_submit(before, screen))):
+            return {"confirmed": True, "retries": 0, "late_confirmation": True}
+    # This marker's explicit queue entry overrides activity from earlier work.
+    # Check it before inferred consumption as well as before any retry path.
+    if pending_queue_holds(screen, marker):
+        raise DispatchUnconfirmed(
+            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+            "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
+            state=DELIVERY_QUEUED_AT_RECEIVER,
+        )
     if (
         not _prompt_block_pending(screen, marker)
         and (
@@ -875,15 +970,6 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         )
     ):
         return {"confirmed": True, "retries": 0}
-    # Queued-at-receiver is checked FIRST and before any retry path, because it
-    # is the one state that is positively detectable and the one where a resend
-    # would duplicate an already-delivered message.
-    if pending_queue_holds(screen, marker):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
-            state=DELIVERY_QUEUED_AT_RECEIVER,
-        )
     if not _prompt_block_pending(screen, marker):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
@@ -898,6 +984,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         )
 
     retry_before = screen
+    require_agent_input(screen, surface)
     send_key(surface, "enter")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     screen = read_screen(surface, lines=confirm_lines)
@@ -922,6 +1009,9 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
                      force_compose=False):
     """Only dispatch entry point for executor tasks."""
+    from availability_contract import require_action
+    pack = validate_task_pack_contract(task_pack_path)
+    require_action(pack["task_id"], "dispatch", pack)
     return submit_text(
         surface,
         text,
@@ -943,6 +1033,8 @@ def _sha256_file(path):
 def submit_completion_callback(task_pack_path, confirm_lines=200):
     """Deliver the exact terminal callback and persist confirmation evidence."""
     pack = validate_task_pack_contract(task_pack_path)
+    from availability_contract import require_action
+    require_action(pack["task_id"], "callback", pack)
     report = Path(pack["report"])
     if not report.is_file():
         raise TaskPackContractError(
@@ -1182,8 +1274,8 @@ def _cli_main(argv=None):
     submit.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="replace idle Claude compose before submit (default: enabled)",
+        default=False,
+        help="replace idle Claude compose before submit (default: disabled; explicit authorization required)",
     )
 
     pack = subs.add_parser("submit-task-pack", aliases=["submit_task_pack"])
@@ -1195,8 +1287,8 @@ def _cli_main(argv=None):
     pack.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="replace idle Claude compose before task dispatch (default: enabled)",
+        default=False,
+        help="replace idle Claude compose before task dispatch (default: disabled; explicit authorization required)",
     )
 
     completion = subs.add_parser(

@@ -187,7 +187,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         with (
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "read_screen", return_value="❯ delivery:x\n⏺ response"),
+            mock.patch.object(BRIDGE, "read_screen", side_effect=["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]"]),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
             result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
@@ -196,8 +196,8 @@ class SubmissionConfirmationTests(unittest.TestCase):
 
     def test_submit_text_allows_one_bounded_retry_for_pending_compose(self):
         screens = [
-            "❯ idle",
-            "❯ delivery:x\nTASK: work",
+            "❯ Ask Claude to do anything\n[Opus 5]",
+            "❯ delivery:x\nTASK: work\n[Opus 5]",
             "❯ delivery:x\n⏺ response",
         ]
         with (
@@ -214,7 +214,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         ])
 
     def test_submit_text_refuses_blind_retry_for_queued_input(self):
-        screens = ["❯ idle", "❯ delivery:x\nPress up to edit queued messages"]
+        screens = ["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\nPress up to edit queued messages"]
         with (
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as send_key,
@@ -230,7 +230,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         with (
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key"),
-            mock.patch.object(BRIDGE, "read_screen", return_value="⏺ unrelated response"),
+            mock.patch.object(BRIDGE, "read_screen", side_effect=["⏺ unrelated response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ unrelated response", "⏺ unrelated response"]),
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
@@ -238,7 +238,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
 
     def test_submit_text_accepts_new_activity_when_marker_scrolled_off(self):
         screens = [
-            "⏺ previous response\nidle",
+            "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
             "⏺ previous response\n⏺ new tool running",
         ]
         with (
@@ -253,7 +253,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
 
     def test_submit_text_accepts_codex_tool_activity_when_marker_scrolled_off(self):
         screens = [
-            "• previous tool\nidle",
+            "• previous tool\n› Ask Codex to do anything\nGPT-6 high",
             "• previous tool\n• Edited file",
         ]
         with (
@@ -268,7 +268,8 @@ class SubmissionConfirmationTests(unittest.TestCase):
 
     def test_submit_text_does_not_accept_non_activity_screen_change(self):
         screens = [
-            "⏺ previous response\nidle",
+            "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
+            "⏺ previous response\nstatus changed",
             "⏺ previous response\nstatus changed",
         ]
         with (
@@ -280,11 +281,35 @@ class SubmissionConfirmationTests(unittest.TestCase):
         ):
             BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
 
+    def test_late_confirmation_observes_without_resubmitting(self):
+        screens = ["⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
+                   "⏺ previous response\n⏺ new tool running"]
+        with (mock.patch.object(BRIDGE, "send_text") as paste,
+              mock.patch.object(BRIDGE, "send_key") as key,
+              mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+              mock.patch.object(BRIDGE.time, "sleep")):
+            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+        self.assertTrue(result["late_confirmation"])
+        paste.assert_called_once_with("surface:2", "prompt")
+        key.assert_called_once_with("surface:2", "enter")
+
+    def test_late_queued_message_is_not_reported_as_confirmed(self):
+        screens = ["⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
+                   "Messages to be submitted after the tool completes:\ndelivery:x"]
+        with (mock.patch.object(BRIDGE, "send_text"),
+              mock.patch.object(BRIDGE, "send_key") as key,
+              mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+              mock.patch.object(BRIDGE.time, "sleep"),
+              self.assertRaises(BRIDGE.DispatchUnconfirmed) as error):
+            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+        self.assertEqual(error.exception.state, BRIDGE.DELIVERY_QUEUED_AT_RECEIVER)
+        key.assert_called_once_with("surface:2", "enter")
+
     def test_submit_text_fails_closed_on_historical_echo_without_new_activity(self):
         with (
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key"),
-            mock.patch.object(BRIDGE, "read_screen", return_value="❯ delivery:x\nold prose"),
+            mock.patch.object(BRIDGE, "read_screen", return_value="❯ delivery:x\nold prose\n❯ Ask Claude to do anything\n[Opus 5]"),
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
