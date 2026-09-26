@@ -728,7 +728,9 @@ def _new_activity_after_submit(before, after):
 
 def _queued_or_active_input(screen):
     """Do not issue a blind second Enter while a queued/active task owns the TUI."""
-    if re.search(r"Press up to edit queued messages", screen):
+    if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", screen, re.I | re.M):
+        return True
+    if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):
         return True
     # Claude uses the same glyph for active and completed summaries. Restrict
     # this guard to words that identify live work; "Churned/Brewed/Cooked"
@@ -811,11 +813,12 @@ def receiver_input_kind(screen):
     chrome = re.compile(r"^\s*(?:GPT-[\w.-]+|claude-[\w.-]+|(?:Opus|Sonnet)\s+[\d.]+|\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\])(?:\s|$)", re.I)
     if prompts:
         tail = lines[prompts[-1]:]
-        if any(chrome.search(line) for line in tail[1:]):
+        # A historical footer cannot override unknown current input below it.
+        if len(tail) > 1 and chrome.search(tail[-1]):
             return "AGENT_TUI"
-        if re.fullmatch(r"\s*[›❯]\s*Ask (?:Codex|Claude) to do anything\s*", tail[0]):
+        if len(tail) == 1 and re.fullmatch(r"\s*[›❯]\s*Ask (?:Codex|Claude) to do anything\s*", tail[0]):
             return "AGENT_TUI"
-    elif any(chrome.search(line) for line in lines[-8:]) and any(_ACTIVITY_LINE_RE.match(line) for line in lines):
+    elif chrome.search(lines[-1]) and any(_ACTIVITY_LINE_RE.match(line) for line in lines[-8:]):
         return "AGENT_TUI"
     return "UNKNOWN"
 
@@ -825,8 +828,18 @@ def require_agent_input(screen, surface):
     if kind != "AGENT_TUI":
         raise DispatchUnconfirmed(
             f"AGENT_INPUT_REQUIRED surface={surface} receiver_kind={kind}; "
-            "no input sent; inspect the original session before continuing",
+            "message not submitted; stop further input and inspect the original session",
             state=SUPERVISOR_DID_NOT_SUBMIT,
+        )
+
+
+def require_clearable_agent_input(screen, surface):
+    """Recheck a fresh observation before any further compose-clearing keys."""
+    require_agent_input(screen, surface)
+    if _queued_or_active_input(screen):
+        raise DispatchUnconfirmed(
+            f"COMPOSE_OCCUPIED surface={surface}; active/queued work cannot be cleared",
+            state=COMPOSE_OCCUPIED,
         )
 
 
@@ -867,14 +880,11 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         # default for this user; direct library callers must opt in explicitly.
         compose = compose_block_text(before)
         if compose and not compose_block_is_empty(before):
-            if _queued_or_active_input(before):
-                raise DispatchUnconfirmed(
-                    f"COMPOSE_OCCUPIED surface={surface}; active/queued work cannot be cleared",
-                    state=COMPOSE_OCCUPIED,
-                )
+            require_clearable_agent_input(before, surface)
             send_key(surface, "escape")
             time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
             cleared = read_screen(surface, lines=confirm_lines)
+            require_clearable_agent_input(cleared, surface)
             if not compose_block_is_empty(cleared):
                 # Claude's terminal composer may accept Escape without
                 # editing the buffer.  The override is already explicit and
@@ -884,6 +894,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                 send_key(surface, "ctrl+u")
                 time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
                 cleared = read_screen(surface, lines=confirm_lines)
+                require_clearable_agent_input(cleared, surface)
                 if not compose_block_is_empty(cleared):
                     # Claude's multiline editor can also ignore ctrl+u.  At
                     # this point the operator explicitly owns the fingerprinted
@@ -892,10 +903,12 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                     send_key(surface, "ctrl+c")
                     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
                     cleared = read_screen(surface, lines=confirm_lines)
+                    require_clearable_agent_input(cleared, surface)
                     if not compose_block_is_empty(cleared):
                         clear_known_compose_by_delete(surface, compose)
                         time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
                         cleared = read_screen(surface, lines=confirm_lines)
+                        require_clearable_agent_input(cleared, surface)
                         if (
                             not compose_block_is_empty(cleared)
                             and _queued_or_active_input(cleared)
@@ -941,6 +954,14 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         if (not _prompt_block_pending(screen, marker) and not pending_queue_holds(screen, marker)
                 and (_submission_confirmed(screen, marker) or _new_activity_after_submit(before, screen))):
             return {"confirmed": True, "retries": 0, "late_confirmation": True}
+    # This marker's explicit queue entry overrides activity from earlier work.
+    # Check it before inferred consumption as well as before any retry path.
+    if pending_queue_holds(screen, marker):
+        raise DispatchUnconfirmed(
+            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+            "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
+            state=DELIVERY_QUEUED_AT_RECEIVER,
+        )
     if (
         not _prompt_block_pending(screen, marker)
         and (
@@ -949,15 +970,6 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         )
     ):
         return {"confirmed": True, "retries": 0}
-    # Queued-at-receiver is checked FIRST and before any retry path, because it
-    # is the one state that is positively detectable and the one where a resend
-    # would duplicate an already-delivered message.
-    if pending_queue_holds(screen, marker):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
-            state=DELIVERY_QUEUED_AT_RECEIVER,
-        )
     if not _prompt_block_pending(screen, marker):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "

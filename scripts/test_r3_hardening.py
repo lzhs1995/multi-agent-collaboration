@@ -1350,6 +1350,10 @@ class ComposeDetectorTests(unittest.TestCase):
         self.assertEqual(
             BRIDGE.classify_submission_failure(self.CODEX_DELIVERED, self.MARK,
                                                submitted=True),
+            BRIDGE.COMPOSE_OCCUPIED)  # delivered text, but Codex is still working
+        idle = self.CODEX_DELIVERED.replace("• Working (4m 13s • esc to interrupt)", "• Completed earlier work")
+        self.assertEqual(
+            BRIDGE.classify_submission_failure(idle, self.MARK, submitted=True),
             BRIDGE.DELIVERY_UNVERIFIED_BY_DETECTOR)
 
 

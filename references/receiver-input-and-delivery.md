@@ -7,6 +7,12 @@ output. A fancy shell prompt sharing an agent glyph remains UNKNOWN without
 current UI evidence. SHELL/UNKNOWN send no text or keys; force-compose does not
 bypass this check. Inspect the original session rather than replacing it.
 
+The provider footer must belong to the bottom input area; unknown trailing
+content overrides a stale footer or virtual suggestion. During authorized
+compose clearing, recheck receiver type and active/queued work after every
+screen read before sending another key. If the agent exits after Escape,
+no subsequent clear, cancel or deletion key may reach the shell.
+
 The low-level `send_text` is raw terminal input and is not an agent dispatch API.
 Use it for a shell command only when that exact shell action is authorized and
 the receiver is verified. Running a shell command does not restore a model TUI.
@@ -25,6 +31,8 @@ reply or actual artifact may resolve the same original dispatch. Preserve both
 observations; do not replace the failure record with a retroactive success.
 Only a visibly pending, idle paste may receive the bridge's one extra Enter;
 it is never repasted. Queue/unknown outcomes do not take that retry path.
+An explicit queue entry for this marker also takes priority over fresh activity
+from an earlier task; such activity cannot turn queued delivery into consumption.
 
 Calls without a marker now report `submitted=true, confirmed=false` after input.
 Formal task/callback paths already carry markers. This makes unmeasured
