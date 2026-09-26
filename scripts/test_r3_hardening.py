@@ -1414,7 +1414,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         """Claude can acknowledge Escape without editing its compose buffer."""
         with (
             mock.patch.object(BRIDGE, "read_screen",
-                              side_effect=["❯ stale prompt", "❯ stale prompt", "❯ "]),
+                              side_effect=["❯ stale prompt\n[Opus 5]", "❯ stale prompt\n[Opus 5]", "❯ \n[Opus 5]"]),
             mock.patch.object(BRIDGE, "send_key") as send_key,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "focus_surface") as focus,
@@ -1423,7 +1423,8 @@ class BridgeCliDispatchTests(unittest.TestCase):
             result = BRIDGE.submit_text(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
-        self.assertTrue(result["confirmed"])
+        self.assertFalse(result["confirmed"])
+        self.assertTrue(result["submitted"])
         focus.assert_called_once_with("surface:104")
         self.assertEqual(
             [call.args[1] for call in send_key.call_args_list],
@@ -1437,10 +1438,10 @@ class BridgeCliDispatchTests(unittest.TestCase):
                 BRIDGE,
                 "read_screen",
                 side_effect=[
-                    "❯ stale prompt",
-                    "❯ stale prompt",
-                    "❯ stale prompt",
-                    "❯ ",
+                    "❯ stale prompt\n[Opus 5]",
+                    "❯ stale prompt\n[Opus 5]",
+                    "❯ stale prompt\n[Opus 5]",
+                    "❯ \n[Opus 5]",
                 ],
             ),
             mock.patch.object(BRIDGE, "send_key") as send_key,
@@ -1451,7 +1452,8 @@ class BridgeCliDispatchTests(unittest.TestCase):
             result = BRIDGE.submit_text(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
-        self.assertTrue(result["confirmed"])
+        self.assertFalse(result["confirmed"])
+        self.assertTrue(result["submitted"])
         self.assertEqual(
             [call.args[1] for call in send_key.call_args_list],
             ["escape", "ctrl+u", "ctrl+c", "enter"],
@@ -1463,11 +1465,11 @@ class BridgeCliDispatchTests(unittest.TestCase):
                 BRIDGE,
                 "read_screen",
                 side_effect=[
-                    "❯ owned stale prompt",
-                    "❯ owned stale prompt",
-                    "❯ owned stale prompt",
-                    "❯ owned stale prompt",
-                    "❯ ",
+                    "❯ owned stale prompt\n[Opus 5]",
+                    "❯ owned stale prompt\n[Opus 5]",
+                    "❯ owned stale prompt\n[Opus 5]",
+                    "❯ owned stale prompt\n[Opus 5]",
+                    "❯ \n[Opus 5]",
                 ],
             ),
             mock.patch.object(BRIDGE, "send_key") as send_key,
@@ -1478,7 +1480,8 @@ class BridgeCliDispatchTests(unittest.TestCase):
             result = BRIDGE.submit_text(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
-        self.assertTrue(result["confirmed"])
+        self.assertFalse(result["confirmed"])
+        self.assertTrue(result["submitted"])
         keys = [call.args[1] for call in send_key.call_args_list]
         self.assertEqual(keys[:4], ["escape", "ctrl+u", "ctrl+c", "end"])
         self.assertEqual(keys.count("backspace"), 256)

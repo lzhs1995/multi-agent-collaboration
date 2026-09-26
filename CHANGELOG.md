@@ -1,3 +1,7 @@
+## 0.1.1 — 2026-09-26
+
+Check current agent input before sending, preserve user drafts and queued work, and distinguish unmarked submission from confirmed consumption. Preserve original sessions and late-delivery evidence.
+
 # Changelog
 
 ## 0.1.0 - 2026-09-08

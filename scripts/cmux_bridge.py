@@ -789,6 +789,47 @@ def clear_known_compose_by_delete(surface, compose):
     return count
 
 
+def receiver_input_kind(screen):
+    """Classify the current input area; transcript/model history is not liveness.
+
+    A bare prompt after a CLI exits must win over any old agent banner. Fancy
+    shell prompts using the same glyph as Claude remain UNKNOWN without current
+    UI chrome. This observation does not establish task identity or acceptance.
+    """
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen)
+    lines = [line.rstrip() for line in clean.splitlines() if line.strip()]
+    if not lines:
+        return "UNKNOWN"
+    last = lines[-1].strip()
+    shell = (r"^(?:\([^\n)]*\)\s*)?[\w.-]+@[\w.-]+[^\n]*?[%$#](?:\s|$)",
+             r"^(?:bash|zsh|sh)(?:-[\d.]+)?[$#](?:\s|$)",
+             r"^PS\s+(?:[A-Za-z]:[\\/]|/)[^\n]*>(?:\s|$)",
+             r"^(?:[A-Za-z]:\\[^\n]*>|[%$#])\s*$")
+    if any(re.match(pattern, last) for pattern in shell):
+        return "SHELL"
+    prompts = [i for i, line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
+    chrome = re.compile(r"^\s*(?:GPT-[\w.-]+|claude-[\w.-]+|(?:Opus|Sonnet)\s+[\d.]+|\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\])(?:\s|$)", re.I)
+    if prompts:
+        tail = lines[prompts[-1]:]
+        if any(chrome.search(line) for line in tail[1:]):
+            return "AGENT_TUI"
+        if re.fullmatch(r"\s*[›❯]\s*Ask (?:Codex|Claude) to do anything\s*", tail[0]):
+            return "AGENT_TUI"
+    elif any(chrome.search(line) for line in lines[-8:]) and any(_ACTIVITY_LINE_RE.match(line) for line in lines):
+        return "AGENT_TUI"
+    return "UNKNOWN"
+
+
+def require_agent_input(screen, surface):
+    kind = receiver_input_kind(screen)
+    if kind != "AGENT_TUI":
+        raise DispatchUnconfirmed(
+            f"AGENT_INPUT_REQUIRED surface={surface} receiver_kind={kind}; "
+            "no input sent; inspect the original session before continuing",
+            state=SUPERVISOR_DID_NOT_SUBMIT,
+        )
+
+
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
                 force_compose=False):
     """Submit text with lowercase Enter and prove the TUI consumed it.
@@ -814,12 +855,23 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "finalized pack carrying required_skill and confirmed completion callback"
         )
 
-    before = read_screen(surface, lines=confirm_lines) if (marker or force_compose) else ""
+    before = read_screen(surface, lines=confirm_lines)
+    require_agent_input(before, surface)
+    if not force_compose and compose_block_text(before) is not None and not compose_block_is_empty(before):
+        raise DispatchUnconfirmed(
+            f"COMPOSE_OCCUPIED surface={surface}; no input sent; preserve existing text",
+            state=COMPOSE_OCCUPIED,
+        )
     if force_compose:
         # The harness enables this supervisor-owned compose replacement by
         # default for this user; direct library callers must opt in explicitly.
         compose = compose_block_text(before)
         if compose and not compose_block_is_empty(before):
+            if _queued_or_active_input(before):
+                raise DispatchUnconfirmed(
+                    f"COMPOSE_OCCUPIED surface={surface}; active/queued work cannot be cleared",
+                    state=COMPOSE_OCCUPIED,
+                )
             send_key(surface, "escape")
             time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
             cleared = read_screen(surface, lines=confirm_lines)
@@ -862,12 +914,14 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                         # idle residual rendering. Active/queued input remains
                         # protected by the branch above.
             before = cleared
+            require_agent_input(before, surface)
     send_text(surface, text)
     time.sleep(float(os.environ.get("CMUX_AGENT_SUBMIT_DELAY", "0.25")))
     send_key(surface, "enter")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     if not marker:
-        return {"confirmed": True, "retries": 0}
+        return {"confirmed": False, "submitted": True, "retries": 0,
+                "state": DELIVERY_UNVERIFIED_BY_DETECTOR}
 
     screen = read_screen(surface, lines=confirm_lines)
     # A slow first render is not a failed delivery. Observe the same submission
@@ -918,6 +972,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         )
 
     retry_before = screen
+    require_agent_input(screen, surface)
     send_key(surface, "enter")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     screen = read_screen(surface, lines=confirm_lines)

@@ -60,6 +60,11 @@ on Linux. Other terminals and agent-native sessions are not certified transports
 
 ## Delivery And Monitoring
 
+Read [receiver input and delivery](references/receiver-input-and-delivery.md)
+when a surface may have returned to a shell or a send is unconfirmed. Current
+input type, submission, consumption, agreement and accepted output are separate
+facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts.
+
 - Normal supervision is callback-first: one sentinel per task, 7200-second stable
   cadence, 1800 seconds for medium-risk work, 300-600 only for bounded high-risk
   windows. Do not spend tokens polling a healthy peer every few seconds.
