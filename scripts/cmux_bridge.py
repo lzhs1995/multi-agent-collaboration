@@ -13,13 +13,11 @@ import re
 import subprocess
 import sys
 import time
+from cmux_workspace_guard import require_same_workspace, WorkspaceScopeError, uuid_value, CMUX as VERIFIED_CMUX
 from collections import Counter
 from pathlib import Path
 
-CMUX = os.environ.get(
-    "CMUX_BIN",
-    "/Applications/cmux.app/Contents/Resources/bin/cmux",
-)
+CMUX = VERIFIED_CMUX
 
 COLLABORATION_SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
 
@@ -120,9 +118,40 @@ def validate_task_pack_contract(task_pack_path, prompt_text=None):
     return pack
 
 
+_workspace_pins = {}
+
+
+def pin_workspace(surface, *, workspace_uuid=None, target_uuid=None, caller_uuid=None):
+    expected = dict(_workspace_pins.get(surface, {}))
+    for key, value in (("workspace_uuid", workspace_uuid),
+                       ("target_surface_uuid", target_uuid),
+                       ("caller_surface_uuid", caller_uuid)):
+        if value is not None:
+            if key in expected and uuid_value(expected[key]) != uuid_value(value):
+                raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: cannot overwrite a bound identity: " + key)
+            expected[key] = value
+    proof = require_same_workspace(surface, expected=expected)
+    _workspace_pins[surface] = {key: proof[key] for key in
+        ("workspace_uuid", "caller_surface_uuid", "target_surface_uuid", "target_pane_uuid")}
+    return proof
+
+
 def _run(*args, check=True, capture=True):
     """Run cmux with given args, return stdout string."""
-    cmd = [CMUX] + list(args)
+    args = list(args)
+    if args and args[0] in {"send", "send-key"}:
+        if "--surface" not in args:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit surface required")
+        index = args.index("--surface") + 1
+        proof = pin_workspace(args[index])
+        args[index] = proof["target_surface_uuid"]
+        if "--workspace" in args:
+            wi = args.index("--workspace") + 1
+            if args[wi].upper() != proof["workspace_uuid"]:
+                raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: workspace override")
+        else:
+            args[1:1] = ["--workspace", proof["workspace_uuid"]]
+    cmd = [CMUX] + args
     result = subprocess.run(
         cmd,
         capture_output=capture,
@@ -768,6 +797,7 @@ def send_key(surface, key):
 
 def focus_surface(surface):
     """Focus the pane owning ``surface`` before sending terminal editing keys."""
+    pin_workspace(surface)
     identity = identify_surface(surface)
     pane = identity.get("pane_ref")
     if pane:
@@ -813,6 +843,21 @@ def receiver_input_kind(screen):
     chrome = re.compile(r"^\s*(?:GPT-[\w.-]+|claude-[\w.-]+|(?:Opus|Sonnet)\s+[\d.]+|\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\])(?:\s|$)", re.I)
     if prompts:
         tail = lines[prompts[-1]:]
+        # Claude's current idle UI has a bordered editor followed by several
+        # status rows. Bind this case to both borders and the complete known
+        # footer; an old model banner or unknown trailing row is insufficient.
+        border = re.compile(r"^\s*─{8,}\s*$")
+        model = re.compile(r"^\s*(?:\[claude-[\w.-]+(?:\[\d+m\])?\]|\[(?:Opus|Sonnet|Claude)\s+[^\]]+\])(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
+        footer = re.compile(
+            r"^\s*(?:[^\n]+\bgit:\([^)]*\)[^\n]*|"
+            r"上下文\s+[^\n]+|\d+\s+CLAUDE\.md\s*\|[^\n]+|"
+            r"✓\s+[^\n]+|▸\s+.+\(\d+/\d+\)|"
+            r"⏵⏵\s+bypass permissions on[^\n]*)\s*$")
+        if (prompts[-1] > 0 and border.fullmatch(lines[prompts[-1] - 1])
+                and len(tail) >= 4 and border.fullmatch(tail[1])
+                and model.fullmatch(tail[2])
+                and all(footer.fullmatch(row) for row in tail[3:])):
+            return "AGENT_TUI"
         # A historical footer cannot override unknown current input below it.
         if len(tail) > 1 and chrome.search(tail[-1]):
             return "AGENT_TUI"
