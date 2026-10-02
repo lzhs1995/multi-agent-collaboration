@@ -46,6 +46,9 @@ def gate(root: Path, task_id="r3-test", executor="surface:2", supervisor="surfac
         "supervisor": supervisor,
         "executor_provider": "claude",
         "workspace_ref": "workspace:10",
+        "workspace_uuid": "ws-uuid",
+        "supervisor_surface_uuid": "sup-uuid",
+        "executor_surface_uuid": "uuid-2",
     }))
 
 
@@ -83,7 +86,20 @@ def args(root: Path, **over):
     return SimpleNamespace(**values)
 
 
-class BridgeClearPostconditionTests(unittest.TestCase):
+class OfflineWorkspaceFixture(unittest.TestCase):
+    """These suites test delivery/receipts; workspace enforcement has its own
+    wired tests in test_cmux_workspace_guard, without this transport mock."""
+    def setUp(self):
+        super().setUp()
+        def pin(surface, **kwargs):
+            return {"workspace_uuid": "ws-uuid", "caller_surface_uuid": "sup-uuid",
+                    "target_surface_uuid": "uuid-" + surface.split(":")[-1]}
+        patcher = mock.patch.object(HARNESS.cmux, "pin_workspace", side_effect=pin)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
     """ctrl+u is a request; clear_confirmed is the receipt.
 
     Measured incident: bridge-test left its token in compose at 11:45:33.009753Z,
@@ -737,7 +753,7 @@ class HarnessRootResolutionTests(unittest.TestCase):
                     HARNESS._registered_artifact_root("task-identity"), first)
 
 
-class BridgeOwnershipPreReadTests(unittest.TestCase):
+class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
     """bridge-test must observe ownership of the compose line before typing.
 
     The clear step backspaces from the end, so it is only safe when the line
@@ -1127,7 +1143,7 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
             send_text.assert_not_called()
 
 
-class HandshakePreconditionTests(unittest.TestCase):
+class HandshakePreconditionTests(OfflineWorkspaceFixture):
     """handshake must refuse to paste behind an unverified compose buffer."""
 
     def _run(self, root):
@@ -1173,7 +1189,7 @@ class HandshakePreconditionTests(unittest.TestCase):
                 submit.assert_not_called()
 
 
-class BudgetProvenanceTests(unittest.TestCase):
+class BudgetProvenanceTests(OfflineWorkspaceFixture):
     """A timeout below the phase minimum is the supervisor's, not the executor's.
 
     The 182 s false FAIL was not a wrong default: cmd_handshake already resolves
@@ -2250,6 +2266,56 @@ class ReviewRoundStopGateTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("completion", message)
 
+class HelperStateParityTests(unittest.TestCase):
+    def test_state_vocabulary_preserved_and_invalid_outputs_rejected(self):
+        for state in ("COMPOSE_PENDING", "QUEUED", "SUBMITTED", "UNCONFIRMED"):
+            with self.subTest(state=state):
+                source = f'delivery_state() {{\n  echo {state}\n}}'
+                self.assertEqual(HARNESS.helper_delivery_state(source, "screen", "MARK"), state)
+        for body in ("echo UNKNOWN", "echo SUBMITTED; return 1", "echo SUBMITTED; echo QUEUED"):
+            with self.subTest(body=body):
+                source = f'delivery_state() {{\n  {body}\n}}'
+                self.assertIsNone(HARNESS.helper_delivery_state(source, "screen", "MARK"))
+
+    def test_new_detector_is_extracted_without_executing_cli(self):
+        for state, expected in (("COMPOSE_PENDING", True), ("QUEUED", False),
+                                ("SUBMITTED", False), ("UNCONFIRMED", "UNEVALUATED")):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                helper = root / "cmux-agent"
+                sentinel = root / "SHOULD_NOT_EXIST"
+                helper.write_text(f'delivery_state() {{\n  echo {state}\n}}\ntouch "{sentinel}"\n')
+                original = helper.read_bytes()
+                with mock.patch.object(HARNESS, "find_external_helper", return_value=helper):
+                    result = HARNESS.check_helper_parity()
+                self.assertEqual(result["function_name"], "delivery_state")
+                self.assertTrue(result["function_found"])
+                self.assertEqual(len(result["state_observations"]), len(HARNESS.HELPER_PARITY_FIXTURES))
+                self.assertTrue(all(x["state"] == state for x in result["state_observations"]))
+                self.assertTrue(all(x["helper"] == expected for x in result["divergences"]))
+                if state == "UNCONFIRMED":
+                    self.assertEqual(result["evaluated"], 0)
+                    self.assertNotEqual(result["status"], "PARITY_OK")
+                self.assertFalse(sentinel.exists())
+                self.assertEqual(helper.read_bytes(), original)
+
+    def test_unknown_state_requires_explicit_bridge_and_never_claims_parity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            helper = root / "cmux-agent"
+            helper.write_text('delivery_state() {\n  echo UNCONFIRMED\n}\n')
+            args = SimpleNamespace(artifact_root=str(root), task_id="state-test", json=False,
+                                   callback_transport="auto")
+            with mock.patch.object(HARNESS, "find_external_helper", return_value=helper):
+                with self.assertRaises(SystemExit):
+                    HARNESS.cmd_helper_parity(args)
+                args.callback_transport = "bridge"
+                HARNESS.cmd_helper_parity(args)
+            result = json.loads((root / "helper-parity.json").read_text())
+            self.assertEqual(result["status"], "DIVERGENT")
+            self.assertEqual(result["evaluated"], 0)
+
+
 class HelperParityTests(unittest.TestCase):
     """The in-scope fix does not reach the external bash callback helper.
 
@@ -2871,7 +2937,7 @@ class ActiveMarkerContractTests(unittest.TestCase):
             self.assertEqual(BRIDGE.surface_uuid_map(), {})
 
 
-class MultiExecutorGateTests(unittest.TestCase):
+class MultiExecutorGateTests(OfflineWorkspaceFixture):
     """One supervisor with N executors, driven through the real entry points.
 
     The defect this class exists to catch is a marker that names three
@@ -2889,6 +2955,7 @@ class MultiExecutorGateTests(unittest.TestCase):
     SUP = "surface:1"
 
     def setUp(self):
+        super().setUp()
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         reg = self.root / "_registry"

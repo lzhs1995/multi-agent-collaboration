@@ -68,6 +68,7 @@ class ReceiptOrderingTests(unittest.TestCase):
 
             evidence = {"executor_nonce_found": True, "screen_hash": "abc123"}
             with (
+                mock.patch.object(HARNESS.cmux, "pin_workspace"),
                 mock.patch.object(HARNESS.cmux, "submit_text", side_effect=assert_receipt_before_send),
                 mock.patch.object(HARNESS.cmux, "capture_round_evidence", return_value=evidence),
             ):
@@ -91,6 +92,9 @@ class ReceiptOrderingTests(unittest.TestCase):
                 "status": "PASS",
                 "executor": "surface:2",
                 "supervisor": "surface:1",
+                "workspace_uuid": "ws-uuid",
+                "supervisor_surface_uuid": "sup-uuid",
+                "executor_surface_uuid": "uuid-2",
                 "executor_provider": "claude",
             }))
             # handshake now requires proof that bridge-test cleared its own token
@@ -114,6 +118,7 @@ class ReceiptOrderingTests(unittest.TestCase):
                 self.assertNotIn(receipt["ack_line_expected"], prompt)
 
             with (
+                mock.patch.object(HARNESS.cmux, "pin_workspace"),
                 mock.patch.object(HARNESS.cmux, "submit_text", side_effect=assert_receipt_before_send),
                 mock.patch.object(
                     HARNESS.cmux,

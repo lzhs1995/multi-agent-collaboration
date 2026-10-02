@@ -27,8 +27,8 @@ class PanelGuardTests(unittest.TestCase):
         ok, message = GUARD.validate_command(command)
         self.assertFalse(ok, message)
 
-    def test_existing_surface_coordination_is_allowed(self) -> None:
-        self.assert_allowed(
+    def test_raw_coordination_is_blocked_but_reads_are_allowed(self) -> None:
+        self.assert_blocked(
             'rtk cmux-agent ask surface:36 "STATUS: continue the existing task with Claude"'
         )
         self.assert_allowed("rtk cmux-agent read surface:36 120")
@@ -41,8 +41,8 @@ class PanelGuardTests(unittest.TestCase):
             'rtk cmux send --surface surface:36 -- "TASK:\\nrun the task"'
         )
 
-    def test_callback_and_guarded_task_entry_remain_allowed(self) -> None:
-        self.assert_allowed(
+    def test_raw_callback_is_blocked_and_guarded_task_entry_is_allowed(self) -> None:
+        self.assert_blocked(
             'rtk cmux-agent ask surface:164 "DONE|task|nonce|REPORT=/tmp/report.md"'
         )
         self.assert_allowed(
@@ -82,7 +82,7 @@ class PanelGuardTests(unittest.TestCase):
                 f"claude --resume {session_id}"
             )
             self.assert_allowed(command)
-            self.assert_allowed(
+            self.assert_blocked(
                 f"rtk cmux send --surface surface:172 {command!r}"
             )
             self.assert_blocked(
@@ -102,7 +102,7 @@ class PanelGuardTests(unittest.TestCase):
         self.assert_blocked('rtk cmux-agent send surface:170 "claude"')
 
     def test_mentions_of_claude_are_not_launches(self) -> None:
-        self.assert_allowed(
+        self.assert_blocked(
             'rtk cmux-agent ask surface:36 "Continue with Claude on the existing surface"'
         )
         self.assert_allowed("rtk rg -n Claude README.md")

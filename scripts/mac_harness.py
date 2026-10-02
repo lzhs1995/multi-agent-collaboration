@@ -806,8 +806,16 @@ def cmd_identity_gate(args):
     # marker is written. Failing here writes a FAIL gate and no marker at all,
     # so a partially-validated set can never be armed.
     identities = {}
+    workspace_proofs = {}
     for ref in executor_refs:
         try:
+            expected_targets = getattr(args, "expected_executor_uuid", []) or []
+            if expected_targets and len(expected_targets) != len(executor_refs):
+                raise RuntimeError("WORKSPACE_SCOPE_DENIED: one expected UUID per executor required")
+            workspace_proofs[ref] = cmux.pin_workspace(
+                ref, workspace_uuid=getattr(args, "expected_workspace_uuid", None),
+                target_uuid=(expected_targets[executor_refs.index(ref)] if expected_targets else None),
+            )
             identities[ref] = cmux.identify_surface(
                 ref,
                 workspace=me.get("workspace_ref") or None,
@@ -866,15 +874,15 @@ def cmd_identity_gate(args):
 
     executor_identity = identities[executor_ref]
     uuid_map = cmux.surface_uuid_map()
-    supervisor_uuid = me.get("surface_id", "") or uuid_map.get(supervisor_ref, {}).get("surface_id", "")
-    executor_uuid = uuid_map.get(executor_ref, {}).get("surface_id", "")
-    workspace_uuid = me.get("workspace_id", "") or uuid_map.get(supervisor_ref, {}).get("workspace_id", "")
+    supervisor_uuid = workspace_proofs[executor_ref]["caller_surface_uuid"]
+    executor_uuid = workspace_proofs[executor_ref]["target_surface_uuid"]
+    workspace_uuid = workspace_proofs[executor_ref]["workspace_uuid"]
 
     # Build the executors list for arm_task. The first executor's data also
     # fills the five singular fields for old readers.
     executors_list = []
     for ref in executor_refs:
-        uuid = uuid_map.get(ref, {}).get("surface_id", "")
+        uuid = workspace_proofs[ref]["target_surface_uuid"]
         ws_ref = identities[ref].get("workspace_ref", "")
         pane_ref = identities[ref].get("pane_ref", "")
         executors_list.append({
@@ -906,7 +914,8 @@ def cmd_identity_gate(args):
         "panel_mode": spawned.get("panel_mode") if spawned else "existing-side-panel",
         "panel_direction": args.direction if spawned else "",
         "side_panel": True,
-        "identity_source": "env+cmux-identify",
+        "identity_source": "live-caller+live-tree+same-workspace-uuid",
+        "workspace_proofs": workspace_proofs,
         "updated_at": _now(),
     }
     _write(root / "identity-gate.json", gate)
@@ -927,12 +936,24 @@ def cmd_identity_gate(args):
 # name-surfaces
 # ---------------------------------------------------------------------------
 
+def _recheck_workspace_gate(gate):
+    for item in _gate_executors(gate):
+        # Missing legacy UUIDs fail closed, rather than silently rebinding refs.
+        if not all((gate.get("workspace_uuid"), gate.get("supervisor_surface_uuid"),
+                    item.get("surface_uuid"))):
+            raise RuntimeError("WORKSPACE_SCOPE_DENIED: gate lacks UUID pins; fresh identity required")
+        cmux.pin_workspace(item["surface_ref"], workspace_uuid=gate["workspace_uuid"],
+                           target_uuid=item["surface_uuid"], caller_uuid=gate["supervisor_surface_uuid"])
+
+
 def cmd_name_surfaces(args):
     root = _artifact_root(args)
     gate = _read(root / "identity-gate.json")
     if not gate or gate.get("status") != "PASS":
         _fail("identity-gate.json not PASS — run identity-gate first")
         sys.exit(1)
+
+    _recheck_workspace_gate(gate)
 
     supervisor_ref = gate["supervisor"]
     task_id = args.task_id
@@ -983,6 +1004,8 @@ def cmd_bridge_test(args):
     if not gate or gate.get("status") != "PASS":
         _fail("identity-gate.json not PASS — run identity-gate first")
         sys.exit(1)
+
+    _recheck_workspace_gate(gate)
 
     executors = _gate_executors(gate)
     # Every executor gets its own token. A shared token would let one
@@ -1264,6 +1287,8 @@ def cmd_handshake(args):
     if not gate or gate.get("status") != "PASS":
         _fail("identity-gate.json not PASS — run identity-gate first")
         sys.exit(1)
+
+    _recheck_workspace_gate(gate)
 
     executors = _gate_executors(gate)
     # Each executor gets its own nonce and must ACK it. Reusing one nonce across
@@ -2078,6 +2103,7 @@ def _wired_guards(config_path: Path) -> dict[str, set[str]]:
 # second implementation nobody compares is how one copy silently rots.
 
 HELPER_FUNCTION_NAME = "prompt_block_pending"
+HELPER_STATE_FUNCTION_NAME = "delivery_state"
 
 HELPER_CANDIDATE_PATHS = (
     Path.home() / ".local" / "bin" / "cmux-agent",
@@ -2194,6 +2220,34 @@ def helper_prompt_block_pending(function_src: str, screen: str, marker: str):
     return None
 
 
+def helper_delivery_state(function_src: str, screen: str, marker: str):
+    """Evaluate only the extracted state detector, never the helper's CLI.
+
+    A state detector is not a boolean detector: UNCONFIRMED must remain unknown.
+    """
+    driver = function_src + '\n' + (
+        f'{HELPER_STATE_FUNCTION_NAME} "$(cat "$1")" "$2"\n'
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "driver.sh"
+        screen_file = Path(tmp) / "screen.txt"
+        script.write_text(driver, encoding="utf-8")
+        screen_file.write_text(screen, encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                ["bash", str(script), str(screen_file), marker],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+    state = (proc.stdout or "").strip()
+    if proc.returncode != 0 or state not in {
+        "COMPOSE_PENDING", "QUEUED", "SUBMITTED", "UNCONFIRMED"
+    }:
+        return None
+    return state
+
+
 def check_helper_parity() -> dict:
     """Compare the external helper's detector against the in-scope one.
 
@@ -2204,6 +2258,8 @@ def check_helper_parity() -> dict:
         "helper_path": None,
         "helper_sha256": None,
         "function_found": False,
+        "function_name": None,
+        "state_observations": [],
         "evaluated": 0,
         "divergences": [],
         "status": "HELPER_ABSENT",
@@ -2221,15 +2277,26 @@ def check_helper_parity() -> dict:
         return result
 
     function_src = extract_bash_function(text, HELPER_FUNCTION_NAME)
+    function_name = HELPER_FUNCTION_NAME
+    if function_src is None:
+        function_name = HELPER_STATE_FUNCTION_NAME
+        function_src = extract_bash_function(text, function_name)
     if function_src is None:
         result["status"] = "HELPER_FUNCTION_NOT_FOUND"
         return result
     result["function_found"] = True
+    result["function_name"] = function_name
 
     for name, screen in HELPER_PARITY_FIXTURES:
-        theirs = helper_prompt_block_pending(
-            function_src, screen, HELPER_PARITY_MARKER
-        )
+        if function_name == HELPER_STATE_FUNCTION_NAME:
+            state = helper_delivery_state(function_src, screen, HELPER_PARITY_MARKER)
+            result["state_observations"].append({"fixture": name, "state": state})
+            theirs = {"COMPOSE_PENDING": True, "QUEUED": False,
+                      "SUBMITTED": False}.get(state)
+        else:
+            theirs = helper_prompt_block_pending(
+                function_src, screen, HELPER_PARITY_MARKER
+            )
         if theirs is None:
             result["divergences"].append(
                 {"fixture": name, "helper": "UNEVALUATED", "in_scope": None}
@@ -3269,6 +3336,10 @@ def main():
     p.add_argument("--executor-surface", action="append", default=[],
                    help="repeatable; first is EXECUTOR_1, second EXECUTOR_2, …; "
                         "optional per-ref provider as surface:24=claude")
+    p.add_argument("--expected-workspace-uuid", default=None,
+                   help="user-designated workspace UUID; mismatch rejects without fallback")
+    p.add_argument("--expected-executor-uuid", action="append", default=[],
+                   help="user-designated executor UUID, one per executor-surface in the same order")
     p.add_argument("--artifact-root",    default="")
     p.add_argument("--spawn",            action="store_true")
     p.add_argument("--spawn-authorized", action="store_true")
