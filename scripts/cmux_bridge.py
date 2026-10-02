@@ -13,14 +13,11 @@ import re
 import subprocess
 import sys
 import time
-from cmux_workspace_guard import require_same_workspace, WorkspaceScopeError, uuid_value
+from cmux_workspace_guard import require_same_workspace, WorkspaceScopeError, uuid_value, CMUX as VERIFIED_CMUX
 from collections import Counter
 from pathlib import Path
 
-CMUX = os.environ.get(
-    "CMUX_BIN",
-    "/Applications/cmux.app/Contents/Resources/bin/cmux",
-)
+CMUX = VERIFIED_CMUX
 
 COLLABORATION_SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
 
