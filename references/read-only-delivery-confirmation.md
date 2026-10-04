@@ -39,3 +39,24 @@ report acceptance must be recorded separately.
 ## Full visible draft ownership
 
 The sender now uses the exact-composer renderer when deciding whether an additional Enter or the displayed Codex Tab action belongs to its original payload. It no longer deletes all whitespace before comparison. Full content, indentation and unknown footer rows are preserved; known wrapping, empty model-footer gaps and the measured single Claude cursor cell are display equivalences, not access to native editor bytes. Whitespace-only content rows are not empty footer gaps. Folded paste summaries and extra content cannot authorize another key. This selectively changes draft ownership; the original callback journal and late-ACK controller remain authoritative. It does not certify a new native delivery or migrate the complete installed sender.
+
+## Ordinary handshake and status messages
+
+The public submit-text entry now requires a visible stable marker and persists
+payload, caller, workspace, receiver and pane identity in message-dispatch-v1.
+Paste and Enter intentions are written before terminal input. A queued or
+uncertain attempt must use the same marker with --reconcile-only; it must never
+be repasted. Only a recorded zero-input failure permits one explicit retry.
+Changed payload or identity, existing receipts, and legacy attempts fail closed.
+Forced compose replacement is refused for ordinary messages.
+
+The post-submit hook independently reads the original receipt and observations,
+checks their hashes and complete received payload, and performs no terminal input.
+Task dispatch, callbacks and ordinary messages share the existing deliveries-v1
+receiver lock; task journals additionally retain their historical target lock.
+This prevents different message classes from simultaneously typing into one
+receiver. Low-level observer calls are reserved for those original controllers.
+
+These are source behavior changes. Passing offline tests does not establish
+that a pinned installed release or running client has loaded them. Preserve old
+controllers and journals until a separately verified runtime transition.

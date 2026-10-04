@@ -2,12 +2,22 @@
 import contextlib
 import io
 import pathlib
+import tempfile
 import unittest
 from unittest.mock import patch
 import cmux_bridge as bridge
 
 
 class ReceiverInputTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def isolated_message_identity(self):
+        with tempfile.TemporaryDirectory() as home, \
+             patch.object(pathlib.Path, "home", return_value=pathlib.Path(home)), \
+             patch.object(bridge, "pin_workspace", return_value={
+                 "workspace_uuid": "workspace", "caller_surface_uuid": "caller",
+                 "target_surface_uuid": "target", "target_pane_uuid": "pane"}):
+            yield
+
     def test_shell_or_unknown_does_not_receive_any_bytes_or_keys(self):
         screens = ["researcher@mac ~ %", "bash-3.2$ ", "PS C:\\work> ",
                    "› Ask Codex to do anything\nGPT-6 high\nresearcher@mac ~ %",
@@ -17,7 +27,7 @@ class ReceiverInputTests(unittest.TestCase):
                 with self.subTest(screen=screen, force=force), patch.object(bridge, "read_screen", return_value=screen), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
                     with self.assertRaises(bridge.DispatchUnconfirmed) as error:
-                        bridge.submit_text("peer", "STATUS: continuation", marker="marker", force_compose=force)
+                        bridge._submit_text_once("peer", "STATUS: continuation", marker="marker", force_compose=force)
                     self.assertEqual(error.exception.state, bridge.SUPERVISOR_DID_NOT_SUBMIT)
                     send.assert_not_called()
                     key.assert_not_called()
@@ -26,7 +36,7 @@ class ReceiverInputTests(unittest.TestCase):
         with patch.object(bridge, "read_screen", return_value="› Ask Codex to do anything\nGPT-6 high"), \
              patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
              patch.object(bridge.time, "sleep"):
-            result = bridge.submit_text("peer", "STATUS: continuation")
+            result = bridge._submit_text_once("peer", "STATUS: continuation")
         self.assertTrue(result["submitted"])
         self.assertFalse(result["confirmed"])
         send.assert_called_once()
@@ -36,18 +46,19 @@ class ReceiverInputTests(unittest.TestCase):
         with patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
              patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
             with self.assertRaises(bridge.DispatchUnconfirmed) as error:
-                bridge.submit_text("peer", "STATUS: continuation", marker="marker")
+                bridge._submit_text_once("peer", "STATUS: continuation", marker="marker")
             self.assertEqual(error.exception.state, bridge.COMPOSE_OCCUPIED)
             send.assert_not_called()
             key.assert_not_called()
 
     def test_public_cli_default_preserves_unsent_draft(self):
         for command in ("submit-text", "submit_text"):
-            with self.subTest(command=command), \
+            with self.subTest(command=command), self.isolated_message_identity(), \
                  patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
                  patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
                  contextlib.redirect_stderr(io.StringIO()):
-                code = bridge._cli_main([command, "--surface", "peer", "--text", "STATUS: continuation"])
+                code = bridge._cli_main([command, "--surface", "peer", "--text", "STATUS: continuation",
+                                         "--marker", "continuation"])
                 self.assertEqual(code, 75)
                 send.assert_not_called()
                 key.assert_not_called()
@@ -77,7 +88,7 @@ class ReceiverInputTests(unittest.TestCase):
         with patch.object(bridge, "read_screen", side_effect=screens), patch.object(bridge, "send_text") as send, \
              patch.object(bridge, "send_key") as key, patch.object(bridge.time, "sleep"):
             with self.assertRaises(bridge.DispatchUnconfirmed) as error:
-                bridge.submit_text("peer", "STATUS: marker", marker="marker")
+                bridge._submit_text_once("peer", "STATUS: marker", marker="marker")
         self.assertEqual(error.exception.state, bridge.DELIVERY_QUEUED_AT_RECEIVER)
         send.assert_called_once()
         key.assert_called_once_with("peer", "enter")
@@ -94,7 +105,7 @@ class ReceiverInputTests(unittest.TestCase):
                      patch.object(bridge, "read_screen", return_value=historical + "\n" + tail), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
                     with self.assertRaises(bridge.DispatchUnconfirmed):
-                        bridge.submit_text("peer", "STATUS: continuation", force_compose=force)
+                        bridge._submit_text_once("peer", "STATUS: continuation", force_compose=force)
                     send.assert_not_called()
                     key.assert_not_called()
 
@@ -111,7 +122,7 @@ class ReceiverInputTests(unittest.TestCase):
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
                      patch.object(bridge, "focus_surface"), patch.object(bridge.time, "sleep"):
                     with self.assertRaises(bridge.DispatchUnconfirmed):
-                        bridge.submit_text("peer", "STATUS: continuation", force_compose=True)
+                        bridge._submit_text_once("peer", "STATUS: continuation", force_compose=True)
                     send.assert_not_called()
                     observed = [c.args[1] for c in key.call_args_list]
                     expected = ["escape", "ctrl+u", "ctrl+c"][:safe_reads]
@@ -126,7 +137,7 @@ class ReceiverInputTests(unittest.TestCase):
         idle = "› Ask Codex to do anything\nGPT-6 high"
         queued = "• Ran preceding task tool\nMessages to be submitted after next tool call\nmarker\n" + idle
         for screens in ([idle, queued], [idle, "render unavailable", queued]):
-            with self.subTest(screens=screens), patch.object(bridge, "read_screen", side_effect=screens), \
+            with self.subTest(screens=screens), self.isolated_message_identity(), patch.object(bridge, "read_screen", side_effect=screens), \
                  patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
                  patch.object(bridge.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(io.StringIO()) as error:

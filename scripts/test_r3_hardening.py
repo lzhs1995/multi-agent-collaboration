@@ -1405,7 +1405,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker="nonce-1234", confirm_lines=200,
-            force_compose=False,
+            force_compose=False, reconcile_only=False,
         )
         payload = json.loads(out.getvalue())
         self.assertEqual(payload["command"], "submit_text")
@@ -1440,7 +1440,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker=None, confirm_lines=200,
-            force_compose=False,
+            force_compose=False, reconcile_only=False,
         )
 
     def test_module_cli_no_longer_defaults_to_diagnostic_only_output(self):
@@ -1458,7 +1458,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "focus_surface") as focus,
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text(
+            result = BRIDGE._submit_text_once(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
         self.assertFalse(result["confirmed"])
@@ -1487,7 +1487,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "focus_surface"),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text(
+            result = BRIDGE._submit_text_once(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
         self.assertFalse(result["confirmed"])
@@ -1515,7 +1515,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "focus_surface"),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text(
+            result = BRIDGE._submit_text_once(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
         self.assertFalse(result["confirmed"])
@@ -2106,7 +2106,7 @@ class TaskPackDispatchContractTests(unittest.TestCase):
 
     def test_manual_task_dispatch_without_pack_is_rejected(self):
         with self.assertRaises(BRIDGE.TaskPackContractError):
-            BRIDGE.submit_text("surface:2", "TASK:\nreview this", marker=None)
+            BRIDGE._submit_text_once("surface:2", "TASK:\nreview this", marker=None)
 
     def test_missing_skill_is_rejected_before_delivery(self):
         with tempfile.TemporaryDirectory() as tmp:

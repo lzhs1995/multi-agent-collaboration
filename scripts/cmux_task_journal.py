@@ -114,7 +114,10 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         require_action(pack['task_id'], 'dispatch', pack)
 
     with contextlib.ExitStack() as stack:
-        for path in (root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
+        target_root = root.parent / 'deliveries-v1'
+        target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for path in (target_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
+                     root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      journal / 'delivery.lock'):
             lock = stack.enter_context(path.open('a+b'))
             try:

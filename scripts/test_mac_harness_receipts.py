@@ -242,7 +242,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]"]),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
+            result = BRIDGE._submit_text_once("surface:2", "delivery:x", marker="delivery:x")
         self.assertEqual(result, {"confirmed": True, "retries": 0})
         send_key.assert_called_once_with("surface:2", "enter")
 
@@ -258,7 +258,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "delivery:x\nTASK: work", marker="delivery:x")
+            result = BRIDGE._submit_text_once("surface:2", "delivery:x\nTASK: work", marker="delivery:x")
         self.assertEqual(result, {"confirmed": True, "retries": 1})
         self.assertEqual([call.args for call in send_key.call_args_list], [
             ("surface:2", "enter"),
@@ -274,7 +274,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_fails_closed_when_marker_disappears(self):
@@ -286,7 +286,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
 
     def test_submit_text_rejects_new_activity_when_marker_scrolled_off(self):
         screens = [
@@ -300,7 +300,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
             with self.assertRaises(BRIDGE.DispatchUnconfirmed):
-                BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+                BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_rejects_codex_tool_activity_when_marker_scrolled_off(self):
@@ -315,7 +315,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
             with self.assertRaises(BRIDGE.DispatchUnconfirmed):
-                BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+                BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_does_not_accept_non_activity_screen_change(self):
@@ -331,7 +331,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
 
     def test_late_confirmation_observes_without_resubmitting(self):
         screens = ["⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
@@ -340,7 +340,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
               mock.patch.object(BRIDGE, "send_key") as key,
               mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
               mock.patch.object(BRIDGE.time, "sleep")):
-            result = BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
+            result = BRIDGE._submit_text_once("surface:2", "delivery:x", marker="delivery:x")
         self.assertTrue(result["late_confirmation"])
         paste.assert_called_once_with("surface:2", "delivery:x")
         key.assert_called_once_with("surface:2", "enter")
@@ -353,7 +353,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
               mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
               mock.patch.object(BRIDGE.time, "sleep"),
               self.assertRaises(BRIDGE.DispatchUnconfirmed) as error):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         self.assertEqual(error.exception.state, BRIDGE.DELIVERY_QUEUED_AT_RECEIVER)
         key.assert_called_once_with("surface:2", "enter")
 
@@ -365,7 +365,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
 
 
 class ExecutorReuseTests(unittest.TestCase):

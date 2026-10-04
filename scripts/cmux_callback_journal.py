@@ -1,5 +1,7 @@
 """Durable callback delivery; reconciliation never writes to a terminal."""
 import fcntl
+import contextlib
+import hashlib
 import json
 import os
 import time
@@ -101,7 +103,8 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
     journal = receipt_path.with_name(receipt_path.stem + '-attempts')
     journal.mkdir(exist_ok=True)
     # Persistent inode; a second process must never race the same callback.
-    with (journal / 'delivery.lock').open('a+b') as lock:
+    with contextlib.ExitStack() as stack:
+        lock = stack.enter_context((journal / 'delivery.lock').open('a+b'))
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -119,6 +122,14 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
         proof = bridge.pin_workspace(pack['callback_target'])
         identity = {k: proof[k] for k in ('workspace_uuid', 'caller_surface_uuid',
                                         'target_surface_uuid', 'target_pane_uuid')}
+        target_root = Path.home() / '.local/state/multi-agent-collaboration/deliveries-v1'
+        target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        target_key = hashlib.sha256(identity['target_surface_uuid'].encode()).hexdigest()
+        target_lock = stack.enter_context((target_root / ('target-' + target_key + '.lock')).open('a+b'))
+        try:
+            fcntl.flock(target_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise bridge.TaskPackContractError('CALLBACK_TARGET_IN_PROGRESS') from exc
         if (not pack.get('executor_uuid') or
                 identity['caller_surface_uuid'].upper() != pack['executor_uuid'].upper()):
             raise bridge.TaskPackContractError('CALLBACK_WRONG_EXECUTOR: exact original executor required')

@@ -27,7 +27,8 @@ class JournalTests(unittest.TestCase):
         self.packpath.write_text(json.dumps(self.pack))
         self.proof = dict(workspace_uuid='WS', caller_surface_uuid='EXECUTOR',
                           target_surface_uuid='SUPERVISOR', target_pane_uuid='PANE')
-        for p in (patch.object(b, 'validate_task_pack_contract', return_value=self.pack),
+        for p in (patch.object(Path, 'home', return_value=root),
+                  patch.object(b, 'validate_task_pack_contract', return_value=self.pack),
                   patch('availability_contract.require_action'),
                   patch.object(b, 'pin_workspace', return_value=self.proof),
                   patch.object(b.time, 'sleep')):
@@ -37,6 +38,18 @@ class JournalTests(unittest.TestCase):
 
     def confirmed_screen(self):
         return '› ' + self.pack['completion_callback'] + '\n• Read report\n' + IDLE
+
+    def test_other_sender_target_lock_blocks_callback_without_input(self):
+        import hashlib
+        root = Path.home() / '.local/state/multi-agent-collaboration/deliveries-v1'
+        root.mkdir(parents=True)
+        key = hashlib.sha256(b'SUPERVISOR').hexdigest()
+        with (root / ('target-' + key + '.lock')).open('a+b') as lock, \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as keys:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(b.TaskPackContractError, 'CALLBACK_TARGET_IN_PROGRESS'):
+                self.call()
+            send.assert_not_called(); keys.assert_not_called()
 
     def call(self, **kw):
         return b.submit_completion_callback(str(self.packpath), **kw)

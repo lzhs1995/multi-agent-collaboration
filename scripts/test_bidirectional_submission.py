@@ -20,10 +20,10 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 patch.object(b, 'send_text') as send, \
                 patch.object(b, 'send_key') as key, patch.object(b.time, 'sleep'):
             if expected:
-                self.assertTrue(b.submit_text('peer', text, marker='unique-marker-20261004')['confirmed'])
+                self.assertTrue(b._submit_text_once('peer', text, marker='unique-marker-20261004')['confirmed'])
             else:
                 with self.assertRaises(b.DispatchUnconfirmed):
-                    b.submit_text('peer', text, marker='unique-marker-20261004')
+                    b._submit_text_once('peer', text, marker='unique-marker-20261004')
             send.assert_called_once_with('peer', text)
             self.assertEqual(key.call_count, keys)
             self.assertTrue(all(c.args == ('peer', 'enter') for c in key.call_args_list))
@@ -100,10 +100,10 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                     patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key, \
                     patch.object(b.time, 'sleep'):
                 if accepted:
-                    self.assertTrue(b.submit_text('peer', text, marker='unique-marker-20261004')['confirmed'])
+                    self.assertTrue(b._submit_text_once('peer', text, marker='unique-marker-20261004')['confirmed'])
                 else:
                     with self.assertRaises(b.DispatchUnconfirmed):
-                        b.submit_text('peer', text, marker='unique-marker-20261004')
+                        b._submit_text_once('peer', text, marker='unique-marker-20261004')
                 self.assertEqual([c.args for c in key.call_args_list], [('peer', 'enter'), ('peer', 'tab')])
                 send.assert_called_once()
 
@@ -134,7 +134,7 @@ class DraftOwnershipTests(unittest.TestCase):
         for draft in ['GPT-this is my draft', 'claude/my-draft', '[Claude draft]']:
             screen='› '+draft+'\nGPT-6 high'
             with self.subTest(draft=draft), patch.object(b, 'read_screen', return_value=screen), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
-                with self.assertRaises(b.DispatchUnconfirmed): b.submit_text('peer','new',marker='new')
+                with self.assertRaises(b.DispatchUnconfirmed): b._submit_text_once('peer','new',marker='new')
                 send.assert_not_called(); key.assert_not_called()
 
     def test_extra_enter_refuses_foreign_text_with_own_marker(self):
@@ -142,7 +142,7 @@ class DraftOwnershipTests(unittest.TestCase):
             idle,prompt,pending,_=BidirectionalSubmissionTests().states(glyph)
             altered=pending.replace(prompt,prompt+' user added words')
             with self.subTest(glyph=glyph), patch.object(b,'read_screen',side_effect=[idle,altered]), patch.object(b,'send_text') as send, patch.object(b,'send_key') as key, patch.object(b.time,'sleep'):
-                with self.assertRaises(b.DispatchUnconfirmed): b.submit_text('peer',prompt,marker='unique-marker-20261004')
+                with self.assertRaises(b.DispatchUnconfirmed): b._submit_text_once('peer',prompt,marker='unique-marker-20261004')
                 send.assert_called_once(); self.assertEqual(key.call_count,1)
 
 

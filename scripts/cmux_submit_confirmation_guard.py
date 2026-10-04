@@ -451,6 +451,10 @@ def _attempt_evidence(call: dict[str, Any], surface: str, bridge) -> dict[str, A
     alone is insufficient. Recheck the pinned payload/files, target identity and
     full before/after observation through the sender's strict classifier.
     """
+    if (bridge is not None and call.get("kind") == "text"
+            and call.get("surface") == surface and call.get("text")):
+        from cmux_message_journal import verified_receipt
+        return verified_receipt(bridge, surface, call["text"], call.get("marker"))
     if call.get("kind") not in ("task", "callback") or not call.get("pack") or bridge is None:
         return None
     if call["kind"] == "task" and call.get("surface") == surface and call.get("text"):

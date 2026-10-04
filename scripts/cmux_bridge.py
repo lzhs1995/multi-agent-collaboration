@@ -1128,7 +1128,25 @@ def require_clearable_agent_input(screen, surface):
 
 
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
-                force_compose=False, delivery_observer=None):
+                force_compose=False, delivery_observer=None, *, reconcile_only=False):
+    """Journal ordinary messages; task/callback controllers retain their journals."""
+    if delivery_observer is not None:
+        if reconcile_only:
+            raise TaskPackContractError('RECONCILE_WITH_ORIGINAL_CONTROLLER')
+        return _submit_text_once(surface, text, marker, confirm_lines, task_pack_path,
+                                 force_compose, delivery_observer)
+    if task_pack_path is not None:
+        return submit_task_pack(surface, text, task_pack_path, marker, confirm_lines,
+                                force_compose, reconcile_only=reconcile_only)
+    if force_compose:
+        raise TaskPackContractError('MESSAGE_PRESERVE_COMPOSE: no forced replacement')
+    from cmux_message_journal import deliver
+    return deliver(sys.modules[__name__], surface, text, marker, confirm_lines,
+                   reconcile_only=reconcile_only)
+
+
+def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
+                      force_compose=False, delivery_observer=None):
     """Submit text with lowercase Enter and prove the TUI consumed it.
 
     ``cmux send`` only pastes text.  Submission is deliberately separate so a
@@ -1528,6 +1546,8 @@ def _cli_main(argv=None):
     submit.add_argument("--surface", required=True)
     submit.add_argument("--text", required=True)
     submit.add_argument("--marker")
+    submit.add_argument("--reconcile-only", action="store_true",
+                        help="observe the original ordinary message without terminal input")
     submit.add_argument("--confirm-lines", type=int, default=200)
     submit.add_argument(
         "--force-compose",
@@ -1579,6 +1599,7 @@ def _cli_main(argv=None):
                 marker=args.marker,
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
+                reconcile_only=args.reconcile_only,
             )
             result = {"command": "submit_text", "surface": args.surface, **result}
         elif args.command in {"submit-task-pack", "submit_task_pack"}:
