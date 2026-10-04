@@ -424,6 +424,11 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
     filenames, delivery markers, and block counts all pass, because none of them
     asserts a state that disk refutes.
     """
+    # End Stop-hook recursion without confirming delivery or disarming tasks.
+    if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
+            and payload.get("stop_hook_active") is True):
+        return True, "Stop hook reentry; task and callback remain unconfirmed"
+
     markers = _active_markers(payload)
     if not markers:
         return True, "no armed multi-agent task — pass through"

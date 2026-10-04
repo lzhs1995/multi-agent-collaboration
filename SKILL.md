@@ -193,3 +193,7 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 ## 双向投递与高效协作维护
 
 执行[高效握手、多执行者与双向投递](references/efficient-bidirectional-collaboration-20261004.md)：每次Enter后读回；输入框残留、排队与消费分别记录；可能已发送的回调仅只读核收，禁止重贴。
+
+### Stop hook reentry
+
+Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before task gates to prevent recursion. This does not confirm callbacks, disarm tasks, or bypass checks on the next normal turn. See [Stop hook lifecycle](references/stop-hook-lifecycle-20261005.md).
