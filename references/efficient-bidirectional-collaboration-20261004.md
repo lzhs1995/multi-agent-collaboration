@@ -55,6 +55,12 @@ Both directions require the complete submitted payload in one receiver prompt bl
 `submit-task-pack` now records task identity, complete payload hash, task-pack hash,
 workspace/caller/target/pane UUIDs and each input intent under
 `~/.local/state/multi-agent-collaboration/task-dispatch-v1/` before terminal input.
+The post-submit hook must read this same journal format. It revalidates the
+original pack, payload, live UUIDs, receipt, attempt and complete before/after
+observation; read-only reconciliation also requires its pinned observation.
+A new sender journal without a matching hook reader is an incomplete upgrade:
+do not deploy it merely because sender-only tests pass. Missing or changed
+evidence remains unconfirmed, and the hook never creates a receipt or sends input.
 The target lock excludes simultaneous dispatches from this controller. A changed
 prompt or pack cannot create a replacement attempt for the same caller/task.
 A process interruption after paste intent is uncertain, never permission to paste

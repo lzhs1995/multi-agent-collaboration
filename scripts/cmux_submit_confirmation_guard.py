@@ -453,6 +453,11 @@ def _attempt_evidence(call: dict[str, Any], surface: str, bridge) -> dict[str, A
     """
     if call.get("kind") not in ("task", "callback") or not call.get("pack") or bridge is None:
         return None
+    if call["kind"] == "task" and call.get("surface") == surface and call.get("text"):
+        from cmux_task_journal import verified_receipt
+        proof = verified_receipt(bridge, surface, call["text"], call.get("marker"), call["pack"])
+        if proof is not None:
+            return proof
     from cmux_delivery_evidence import confirmed, contains, digest, own_draft
     from delivery_receipts import snapshot
     for candidate in [Path(call["pack"])]:

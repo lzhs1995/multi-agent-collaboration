@@ -13,6 +13,74 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def verified_receipt(bridge, surface, text, marker, task_pack_path):
+    """Read only: revalidate original dispatch evidence, never synthesize a receipt."""
+    from delivery_receipts import snapshot
+    try:
+        path = Path(task_pack_path)
+        if not path.is_absolute():
+            return None
+        pack_pin = snapshot(path)
+        pack = bridge.validate_task_pack_contract(path, prompt_text=text)
+        marker = marker or pack['task_id']
+        live = bridge.pin_workspace(surface)
+        identity = {k: live[k] for k in ('workspace_uuid', 'caller_surface_uuid',
+                                        'target_surface_uuid', 'target_pane_uuid')}
+        if not all(isinstance(v, str) and v for v in identity.values()):
+            return None
+        binding = dict(task_id=pack['task_id'], marker=marker, payload_sha256=digest(text),
+                       task_pack_sha256=pack_pin['sha256'], identity=identity)
+        root = Path.home() / '.local/state/multi-agent-collaboration/task-dispatch-v1'
+        journal = root / digest(json.dumps([identity['caller_surface_uuid'], pack['task_id']]))
+        receipt_path = journal / 'receipt.json'
+        receipt_pin = snapshot(receipt_path)
+        receipt = json.loads(receipt_path.read_text())
+        attempts = sorted(journal.glob('attempt-*.json'))
+        if not attempts or receipt.get('attempt') != str(attempts[-1]):
+            return None
+        attempt_path = attempts[-1]
+        attempt_pin = snapshot(attempt_path)
+        attempt = json.loads(attempt_path.read_text())
+        if (receipt.get('confirmed') is not True or receipt.get('binding') != binding
+                or attempt.get('binding') != binding):
+            return None
+        events = attempt['events']
+        pastes = [e for e in events if e['phase'] == 'PASTE_INTENT']
+        if len(pastes) != 1:
+            return None
+        before = pastes[0]['screen']
+        if pastes[0].get('screen_sha256') != bridge.screen_hash(before):
+            return None
+        pins = [(path, pack_pin), (receipt_path, receipt_pin), (attempt_path, attempt_pin)]
+        if receipt.get('reconciled_read_only') is True:
+            observation_path = Path(receipt['observation'])
+            if observation_path.parent != journal or not observation_path.name.startswith('observation-'):
+                return None
+            observation_pin = snapshot(observation_path)
+            observation = json.loads(observation_path.read_text())
+            if type(observation.get('input_operations')) is not int or observation['input_operations'] != 0:
+                return None
+            pins.append((observation_path, observation_pin))
+        else:
+            if attempt.get('phase') != 'CONFIRMED':
+                return None
+            observations = [e for e in events if e['phase'] in
+                            ('POST_ENTER_OBSERVATION', 'POST_QUEUE_TAB_OBSERVATION')]
+            if not observations:
+                return None
+            observation = observations[-1]
+        after = observation['screen']
+        if (observation.get('screen_sha256') != bridge.screen_hash(after)
+                or not bridge._delivery_confirmed(before, after, marker, text)):
+            return None
+        if any(snapshot(p) != pin for p, pin in pins) or bridge.pin_workspace(surface) != live:
+            return None
+        return dict(source='revalidated_task_dispatch_v1', identity=identity,
+                    pack=pack_pin, attempt=attempt_pin, receipt=receipt_pin)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        return None
+
+
 def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=200,
             force_compose=False, *, reconcile_only=False):
     from availability_contract import require_action

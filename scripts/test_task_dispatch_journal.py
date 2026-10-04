@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 import cmux_bridge as b
 import cmux_task_journal as j
+import cmux_submit_confirmation_guard as guard
 
 IDLE = '❯ \n[claude-opus-5]'
 TEXT = 'STATUS: task-journal-test run original task'
@@ -51,6 +52,49 @@ class TaskDispatchJournalTests(unittest.TestCase):
                 self.call()
             send.assert_called_once()
             key.assert_called_once()
+
+    def hook_proof(self):
+        return guard._attempt_evidence(dict(kind='task', surface='peer',
+            text=TEXT, pack=str(self.path)), 'peer', b)
+
+    def test_post_hook_reads_new_journal_without_input(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            self.call()
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.assertEqual(self.hook_proof()['source'], 'revalidated_task_dispatch_v1')
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_post_hook_accepts_original_readonly_reconciliation(self):
+        self.uncertain()
+        with patch.object(b, 'read_screen', return_value=CONSUMED), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.call(reconcile_only=True)
+            self.assertIsNotNone(self.hook_proof())
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_post_hook_rejects_tampered_observation_and_pack(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            result = self.call()
+        attempt_path = Path(result['attempt'])
+        original = attempt_path.read_bytes()
+        data = json.loads(original)
+        data['events'][-1]['screen'] = 'unrelated activity'
+        attempt_path.write_text(json.dumps(data))
+        self.assertIsNone(self.hook_proof())
+        attempt_path.write_bytes(original)
+        self.path.write_text('changed task pack')
+        self.assertIsNone(self.hook_proof())
+
+    def test_post_hook_requires_receipt_not_only_confirmation(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            result = self.call()
+        Path(result['receipt']).unlink()
+        self.assertIsNone(self.hook_proof())
 
     def test_restart_after_uncertainty_is_read_only(self):
         self.uncertain()
