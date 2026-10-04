@@ -466,6 +466,28 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _block(message: str, marker_hint: str) -> int:
+    # Callback transport failures are not failed plan-consensus rounds.
+    # Keep evaluate() and its evidence requirements unchanged; give the
+    # executor the recovery action for the actual failing gate.
+    if any(term in message for term in (
+        "completion callback", "completion_receipt", "completion report",
+        "executor task has no absolute artifact_root",
+    )):
+        sys.stderr.write(
+            "cmux completion callback Stop guard blocked turn-end.\n"
+            f"{message}\n\n"
+            "Preserve the report and original callback attempt. Inspect its "
+            "submission/queue/receipt evidence before any resend. If nothing "
+            "was submitted, repair the exact transport failure and use the "
+            "task-pack callback entrypoint. If submitted or queued, reconcile "
+            "that original attempt; do not send a duplicate or fabricate a "
+            "confirmed receipt. Notify the supervisor through the task evidence "
+            "directory if transport is unavailable.\n"
+            "This callback failure does not require a new handshake or three "
+            "plan-consensus rounds. Do not disarm merely to bypass this gate.\n"
+            f"  (armed marker: {marker_hint})\n"
+        )
+        return 2
     sys.stderr.write(
         "cmux multi-agent consensus Stop guard blocked turn-end.\n"
         f"{message}\n\n"

@@ -2040,6 +2040,7 @@ class TaskPackDispatchContractTests(unittest.TestCase):
         nonce = "dispatch-contract-001"
         pack = {
             "task_id": "dispatch-contract",
+            "executor_uuid": "TEST-EXECUTOR",
             "draft": False,
             "required_skill": str(BRIDGE.COLLABORATION_SKILL_PATH),
             "report": str(report),
@@ -2101,9 +2102,10 @@ class TaskPackDispatchContractTests(unittest.TestCase):
             report.write_text("verified\n", encoding="utf-8")
             with mock.patch.object(
                 BRIDGE, "submit_text", return_value={"confirmed": True, "retries": 0}
-            ) as submit, mock.patch.object(
-                BRIDGE, "require_same_workspace", return_value={"target_surface_uuid": "test-target"}
-            ):
+            ) as submit, mock.patch.object(BRIDGE, "pin_workspace", return_value={
+                "workspace_uuid": "TEST-WS", "caller_surface_uuid": "TEST-EXECUTOR",
+                "target_surface_uuid": "TEST-SUPERVISOR", "target_pane_uuid": "TEST-PANE"
+            }):
                 receipt = BRIDGE.submit_completion_callback(path)
             submit.assert_called_once()
             self.assertTrue(receipt["confirmed"])

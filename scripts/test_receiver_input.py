@@ -1,6 +1,7 @@
 """No live terminal writes: regression probes use the public send entrypoint."""
 import contextlib
 import io
+import pathlib
 import unittest
 from unittest.mock import patch
 import cmux_bridge as bridge
@@ -134,6 +135,108 @@ class ReceiverInputTests(unittest.TestCase):
                 self.assertEqual(json.loads(error.getvalue())["delivery_state"], bridge.DELIVERY_QUEUED_AT_RECEIVER)
                 send.assert_called_once()
                 key.assert_called_once_with("peer", "enter")
+
+
+# --- 2026-10-04 measured regression: pane-width truncation of chrome rows ---
+# Both defects below were measured on real screens, not synthesized. A narrow
+# pane cuts a trailing chrome row mid-token. Because the row is matched with
+# `fullmatch` (receiver kind) or an anchored alternation (compose chrome), the
+# partial row stops matching and is then treated as unknown current input /
+# user content -- refusing executor<->supervisor delivery with zero keys sent.
+FIXTURES = pathlib.Path(__file__).resolve().parents[1] / "verification" / "fixtures"
+
+
+class TruncatedChromeRowTests(unittest.TestCase):
+    """A chrome row cut off by pane width must stay chrome."""
+
+    def test_measured_truncated_codex_footer_is_agent_tui(self):
+        screen = (FIXTURES / "codex-footer-truncated-20261004.txt").read_text()
+        self.assertEqual(bridge.receiver_input_kind(screen), "AGENT_TUI")
+
+    def test_progressive_truncation_of_hint_row_stays_agent_tui(self):
+        head = ("\u2022 Ran a tool\n \n\u203a Ask Codex to do anything\n \n"
+                "  GPT-6-Astra xhigh \u00b7 ~/work \u00b7 Context 34% used \u00b7 Fa\u2026 Pursuing goal\n")
+        tails = (
+            "  ? for shortcuts                    \u26a0 5 warnings \u00b7 f2 to view",
+            "  ? for shortcuts                    \u26a0 5 warnings \u00b7 f2 to",
+            "  ? for shortcuts                    \u26a0 5 warnings \u00b7 f2",
+            "  ? for shortcuts                    \u26a0 5 warnings \u00b7",
+            "  ? for shortcuts                    \u26a0 5 warnings ",
+            "  ? for shortcuts                    \u26a0 5 warning",
+            "  ? for shortcuts                    \u26a0 5 ",
+            "  ? for shortcuts                    \u26a0",
+            "  ? for shortcuts",
+            "  \u2190 for agents \u00b7 ? for shortcuts        \u26a0 12 warnings \u00b7 f2 to v",
+        )
+        for tail in tails:
+            with self.subTest(tail=tail.strip()[-28:]):
+                self.assertEqual(bridge.receiver_input_kind(head + tail), "AGENT_TUI")
+
+    def test_unknown_trailing_row_still_overrides_footer(self):
+        """Fail-closed direction preserved: only the known hint row is skipped."""
+        head = ("\u203a Ask Codex to do anything\n \n"
+                "  GPT-6-Astra xhigh \u00b7 ~/work \u00b7 Context 34% used\n")
+        for tail in ("  \u279c  project git:(main)", "  custom-host [main] >>",
+                     "  interpreter waiting", "  ? for shortcut",
+                     "  something ? for shortcuts elsewhere extra"):
+            with self.subTest(tail=tail.strip()):
+                self.assertEqual(bridge.receiver_input_kind(head + tail), "UNKNOWN")
+
+    def test_measured_truncated_claude_footer_is_not_user_content(self):
+        screen = (FIXTURES / "claude-compose-truncated-footer-20260924.txt").read_text()
+        body = bridge.compose_block_text(screen)
+        self.assertIsNotNone(body)
+        self.assertTrue(bridge.compose_block_is_empty(screen))
+
+    def test_truncated_model_and_cwd_rows_are_chrome(self):
+        for row in ("  [claude-opus\u2026", "  claude/u8-fo\u2026", "  [Opus 5\u2026",
+                    "  claude/feature-branch", "  10 MCPs | 6 \u2026"):
+            with self.subTest(row=row.strip()):
+                self.assertTrue(bridge._COMPOSE_CHROME_RE.match(row.strip()),
+                                f"{row!r} should be chrome")
+
+    def test_measured_tab_to_queue_footer_is_agent_tui(self):
+        """Codex swaps the shortcuts row for this one when the composer holds text.
+
+        Measured 2026-10-04 on surface:27 while a peer's callback sat unsent.
+        Same defect shape: the row renders BELOW the model row, so a
+        tail[-1]-only footer check never reaches the model row and a live agent
+        receiver classified as UNKNOWN, refusing every send with zero input.
+        """
+        screen = (FIXTURES / "codex-footer-tab-to-queue-20261004.txt").read_text()
+        self.assertEqual(bridge.receiver_input_kind(screen), "AGENT_TUI")
+
+    def test_tab_to_queue_row_truncates_without_losing_detection(self):
+        head = ("\u203a Ask Codex to do anything\n \n"
+                "  GPT-6-Astra xhigh \u00b7 ~/work \u00b7 Context 34% used\n")
+        for tail in ("  tab to queue message", "  tab to queue mess", "  tab to q"):
+            with self.subTest(tail=tail.strip()):
+                self.assertEqual(bridge.receiver_input_kind(head + tail), "AGENT_TUI")
+
+    def test_tab_row_near_misses_stay_unknown(self):
+        """Fail-closed: only the measured row is chrome, not any 'tab to ...' line."""
+        head = ("\u203a Ask Codex to do anything\n \n"
+                "  GPT-6-Astra xhigh \u00b7 ~/work \u00b7 Context 34% used\n")
+        for tail in ("  tab to something else", "  tab to", "  queue message"):
+            with self.subTest(tail=tail.strip()):
+                self.assertEqual(bridge.receiver_input_kind(head + tail), "UNKNOWN")
+
+    def test_tab_to_queue_does_not_expose_peer_unsent_text(self):
+        """Receiver-kind and compose-emptiness are separate gates; keep them so.
+
+        The row becoming chrome must not let a caller clear a peer's pending
+        callback: the compose check still sees the pasted text above it.
+        """
+        screen = (FIXTURES / "codex-footer-tab-to-queue-20261004.txt").read_text()
+        self.assertFalse(bridge.compose_block_is_empty(screen))
+
+    def test_genuine_typed_text_still_reads_occupied(self):
+        """Negative control: the fix must not erase real user input."""
+        screen = ("\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n"
+                  "\u2502 > please refactor the parser \u2502\n"
+                  "\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n"
+                  "  [claude-opus\u2026\n  \u23f5\u23f5 bypass")
+        self.assertFalse(bridge.compose_block_is_empty(screen))
 
 
 if __name__ == "__main__":

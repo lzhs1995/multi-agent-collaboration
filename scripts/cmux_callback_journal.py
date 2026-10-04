@@ -1,0 +1,145 @@
+"""Durable callback delivery; reconciliation never writes to a terminal."""
+import fcntl
+import json
+import os
+import time
+from pathlib import Path
+
+
+def write_json(path, value):
+    temporary = path.with_name(path.name + '.tmp')
+    with temporary.open('w', encoding='utf-8') as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+        handle.write('\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
+    from availability_contract import require_action
+    pack = bridge.validate_task_pack_contract(task_pack_path)
+    require_action(pack['task_id'], 'callback', pack)
+    report = Path(pack['report'])
+    if not report.is_file():
+        raise bridge.TaskPackContractError('COMPLETION_CALLBACK_REFUSED: report must exist first')
+    receipt_path = Path(pack['completion_receipt'])
+    journal = receipt_path.with_name(receipt_path.stem + '-attempts')
+    journal.mkdir(exist_ok=True)
+    # Persistent inode; a second process must never race the same callback.
+    with (journal / 'delivery.lock').open('a+b') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise bridge.TaskPackContractError('CALLBACK_IN_PROGRESS: preserve original attempt') from exc
+        if receipt_path.exists():
+            raise bridge.TaskPackContractError('COMPLETION_RECEIPT_EXISTS: refusing duplicate callback')
+        # Pre-journal releases persisted this file before any terminal input.
+        # Its presence means delivery may already have happened, even if its
+        # contents are truncated. Never silently migrate by sending again.
+        legacy = Path(str(receipt_path) + '.pending.json')
+        if legacy.exists():
+            raise bridge.TaskPackContractError(
+                'LEGACY_CALLBACK_PENDING: preserve original; supervisor must '
+                'review actual receipt evidence without resending')
+        proof = bridge.pin_workspace(pack['callback_target'])
+        identity = {k: proof[k] for k in ('workspace_uuid', 'caller_surface_uuid',
+                                        'target_surface_uuid', 'target_pane_uuid')}
+        if (not pack.get('executor_uuid') or
+                identity['caller_surface_uuid'].upper() != pack['executor_uuid'].upper()):
+            raise bridge.TaskPackContractError('CALLBACK_WRONG_EXECUTOR: exact original executor required')
+        binding = {
+            'task_id': pack['task_id'], 'completion_nonce': pack['completion_nonce'],
+            'completion_callback': pack['completion_callback'],
+            'callback_target': pack['callback_target'],
+            'task_pack_sha256': bridge._sha256_file(task_pack_path),
+            'report': str(report), 'report_sha256': bridge._sha256_file(report),
+            'report_bytes': report.stat().st_size,
+            'identity': identity,
+        }
+        attempts = sorted(journal.glob('attempt-*.json'))
+        old = json.loads(attempts[-1].read_text()) if attempts else None
+        if old and old['binding'] != binding:
+            raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED: preserve previous attempt')
+        if reconcile_only:
+            if not old or old['phase'] in ('PREPARED', 'NO_INPUT'):
+                raise bridge.TaskPackContractError('NO_SUBMITTED_ATTEMPT: cannot manufacture receipt')
+            screen = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
+            observation = {
+                'recorded_at_epoch': time.time(), 'screen': screen,
+                'screen_sha256': bridge.screen_hash(screen), 'input_operations': 0,
+            }
+            observed = journal / ('observation-' + str(time.time_ns()) + '.json')
+            write_json(observed, observation)
+            bridge.require_agent_input(screen, pack['callback_target'])
+            before = next(event['screen'] for event in old['events']
+                          if event['phase'] == 'PASTE_INTENT')
+            # Marker plus unrelated activity cannot reconcile a callback. Require
+            # its whole exact line (allow terminal wrapping), actual transcript
+            # activity after the marker, and no pending compose/queue copy.
+            full_line = ''.join(pack['completion_callback'].split())
+            confirmed = (
+                full_line in ''.join(screen.split())
+                and bridge._delivery_confirmed(before, screen, pack['completion_nonce'])
+            )
+            if not confirmed:
+                raise bridge.DispatchUnconfirmed(
+                    'CALLBACK_NOT_YET_CONFIRMED: read-only observation saved; do not resend',
+                    state=bridge.DELIVERY_UNVERIFIED_BY_DETECTOR)
+            result = {'confirmed': True, 'retries': old.get('extra_enter', 0)}
+            evidence = {'reconciled_read_only': True, 'observation': str(observed),
+                        'attempt': str(attempts[-1])}
+        else:
+            if old and old['phase'] != 'NO_INPUT':
+                raise bridge.TaskPackContractError(
+                    'CALLBACK_ATTEMPT_EXISTS: use --reconcile-only; never repaste uncertain delivery')
+            # One explicit retry is allowed only after recorded zero input and
+            # a fresh identity/composer check. Persistent failure becomes local
+            # work, not an endless transport retry loop.
+            if len(attempts) >= 2:
+                raise bridge.TaskPackContractError('CALLBACK_RETRY_BUDGET_EXHAUSTED: supervisor must review')
+            attempt_path = journal / f'attempt-{len(attempts)+1:04d}.json'
+            attempt = {'binding': binding, 'phase': 'PREPARED', 'events': [],
+                       'started_at_epoch': time.time()}
+            write_json(attempt_path, attempt)
+
+            def observe(phase, screen=None):
+                attempt['phase'] = phase
+                event = {'phase': phase, 'at_epoch': time.time()}
+                if screen is not None:
+                    event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
+                attempt['events'].append(event)
+                if phase == 'EXTRA_ENTER_INTENT':
+                    attempt['extra_enter'] = 1
+                write_json(attempt_path, attempt)
+
+            try:
+                result = bridge.submit_text(
+                    pack['callback_target'], pack['completion_callback'],
+                    marker=pack['completion_nonce'], confirm_lines=confirm_lines,
+                    delivery_observer=observe)
+                if result.get('confirmed') is not True:
+                    raise bridge.DispatchUnconfirmed('callback not confirmed')
+            except BaseException as exc:
+                if attempt['phase'] == 'PREPARED':
+                    attempt['phase'] = 'NO_INPUT'
+                attempt.update(error=str(exc), delivery_state=getattr(exc, 'state', None),
+                               ended_at_epoch=time.time())
+                write_json(attempt_path, attempt)
+                raise
+            attempt.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time())
+            write_json(attempt_path, attempt)
+            evidence = {'reconciled_read_only': False, 'attempt': str(attempt_path)}
+        # The report must remain the exact document whose callback was sent.
+        if bridge._sha256_file(report) != binding['report_sha256']:
+            raise bridge.TaskPackContractError('REPORT_CHANGED_DURING_CALLBACK: receipt refused')
+        receipt = {**{k: v for k, v in binding.items() if k != 'identity'},
+                   'confirmed': True, 'bridge_retries': result.get('retries', 0),
+                   'recorded_at_epoch': time.time(), **evidence}
+        encoded = (json.dumps(receipt, ensure_ascii=False, indent=2) + '\n').encode()
+        fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return receipt

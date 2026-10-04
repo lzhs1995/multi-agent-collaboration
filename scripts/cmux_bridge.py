@@ -541,26 +541,67 @@ CLAUDE_VIRTUAL_COMPOSE_PROMPTS = (
     "请澄清 203 Python 测试的位置和接口",
 )
 
-# Status/footer lines some TUIs render inside or directly under the compose box.
-# They are chrome, not user content, but they are not fixed strings either, so
-# they need patterns rather than substring removal.
+# A provider hint row rendered BELOW the model/provider row. Measured
+# 2026-10-04T12:22Z on a GPT-6-Astra TUI (fixture
+# claude-output/fixture-codex-footer-20261004.txt) and on 2026-10-02 with the
+# `← for agents` prefix. Because it sits below the model row, the old
+# tail[-1]-only footer check never reached the model row and an idle, empty
+# composer classified as UNKNOWN, refusing every send with zero input.
+# Keep this anchored and token-exact: it is the one trailing shape allowed to
+# be skipped, so any NEW unmeasured row must still override a stale footer.
 def _clipped_prefix_pattern(literal):
+    """Regex source matching any prefix of ``literal`` (including empty).
+
+    Pane width clips a footer row at an arbitrary column, so the tail of a
+    known row can arrive as any prefix of itself. Expanding the literal into
+    nested optional characters keeps the match token-exact: `warnings · f2`
+    matches, `warnings · f3` does not. A looser `.*` here would let any
+    trailing text pose as known chrome and defeat the fail-closed gate.
+    """
     pattern = ""
     for char in reversed(literal):
         pattern = "(?:" + re.escape(char) + pattern + ")?"
     return pattern
 
 
+# The provider hint row, tolerant of width truncation. Measured
+# 2026-10-04T12:33Z on surface:27 (verification/fixtures/) where the SAME idle
+# composer classified AGENT_TUI at full width and UNKNOWN once clipped,
+# refusing an executor completion callback with zero input. The `⚠` warning
+# segment, its count, and the `f2 to view` hint may each be cut mid-token.
+# Two measured shapes share this slot. Codex renders the shortcuts row when
+# the composer is empty and `tab to queue message` when it holds un-submitted
+# text (measured 2026-10-04, fixture codex-footer-tab-to-queue-20261004.txt).
+# Both sit BELOW the model row, so both defeat a tail[-1]-only footer check.
+# Treating them as chrome only answers "is the receiver an agent"; the
+# separate compose check still sees the pasted text and still refuses, so a
+# peer's un-submitted callback is not at risk from this row alone.
 _PROVIDER_HINT_ROW_RE = re.compile(
-    r"\s*(?:←\s*for agents\s*·\s*)?\?\s*for shortcuts\s*"
+    r"\s*(?:"
+    r"(?:←\s*for agents\s*·\s*)?\?\s*for shortcuts\s*"
     r"(?:⚠\s*(?:\d+\s*" + _clipped_prefix_pattern("warnings · f2 to view") +
-    r")?)?\s*", re.IGNORECASE,
+    r")?)?"
+    r"|"
+    r"tab to " + _clipped_prefix_pattern("queue message") +
+    r")\s*",
+    re.IGNORECASE,
 )
 
-
+# Status/footer lines some TUIs render inside or directly under the compose box.
+# They are chrome, not user content, but they are not fixed strings either, so
+# they need patterns rather than substring removal.
 _COMPOSE_CHROME_RE = re.compile(
     r"^" + _PROVIDER_HINT_ROW_RE.pattern + r"$|"
     r"^\s*(?:gpt-[\w.\-]+|claude-[\w.\-]+|opus-[\w.\-]+|sonnet-[\w.\-]+)\b.*$|"
+    # Width-clipped forms of the model banner and cwd segment. A narrow
+    # pane cuts the banner before its closing "]" and renders the cwd as
+    # "claude/<branch>", so the strict forms above miss and
+    # compose_block_is_empty counted both as typed user text -> false
+    # COMPOSE_OCCUPIED. Measured 2026-10-04 on three saved captures.
+    # Deliberately narrow: a provider token followed by "/" or "-", or an
+    # unclosed provider bracket -- never arbitrary trailing text.
+    r"^\s*\[(?:Opus|Claude|Sonnet|GPT)[^\]]*$|"
+    r"^\s*(?:claude|codex|opus|sonnet|gpt)[/\-][\w.\-/]*…?\s*$|"
     r"^\s*\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\].*$|"
     r"^\s*[^\n]*\bgit:\([^)]*\).*$|"
     r"^\s*\d+%\s+context.*$|"
@@ -612,11 +653,11 @@ def compose_block_is_empty(screen):
     if body is None:
         return False
     residual_lines = []
-    for raw in body.splitlines():
+    for row_index, raw in enumerate(body.splitlines()):
         line = raw.strip(" \t\r\n│─╭╮╰╯")
         if not line:
             continue
-        if _COMPOSE_CHROME_RE.match(line):
+        if row_index > 0 and _COMPOSE_CHROME_RE.match(line):
             continue
         # Remove any placeholder this line consists of. Longest-first, because
         # replacing "for shortcuts" before "? for shortcuts" leaves a stray "?"
@@ -664,7 +705,7 @@ def pending_queue_holds(screen, marker):
     lines = screen.splitlines()
     for index, line in enumerate(lines):
         if _PENDING_QUEUE_RE.search(line):
-            if marker in "\n".join(lines[index:]):
+            if "".join(marker.split()) in "".join("\n".join(lines[index:]).split()):
                 return True
     return False
 
@@ -737,17 +778,17 @@ def _prompt_block_pending(screen, marker):
             continue
         if in_prompt:
             block.append(line)
-    return in_prompt and marker in "\n".join(block)
+    return in_prompt and "".join(marker.split()) in "".join("\n".join(block).split())
 
 
 def _submission_confirmed(screen, marker):
-    """Require marker followed by a fresh assistant/spinner output block."""
-    found = False
+    """Require marker followed by activity; terminal wrapping may split marker."""
+    preceding = ""
+    token = "".join(marker.split())
     for line in screen.splitlines():
-        if found and _ACTIVITY_LINE_RE.match(line):
+        if token in preceding and _ACTIVITY_LINE_RE.match(line):
             return True
-        if marker in line:
-            found = True
+        preceding += "".join(line.split())
     return False
 
 
@@ -755,6 +796,56 @@ _ACTIVITY_LINE_RE = re.compile(
     r"^\s*(?:⏺|✻|✢|✳|✶|✽|◐|◑|◒|◓)(?:\s|$)|"
     r"^\s*•\s+(?:Edited|Ran|Read|Updated|Created|Deleted|Applied|Searched|Checked|Viewed|Wrote)(?:\s|$)"
 )
+
+
+def _exact_pending_text(screen, text):
+    """Compare the entire editable payload; strip only the final footer."""
+    body = compose_block_text(screen)
+    if body is None:
+        return False
+    rows = body.splitlines()
+    while rows and not rows[-1].strip():
+        rows.pop()
+    if rows and _PROVIDER_HINT_ROW_RE.fullmatch(rows[-1]):
+        rows.pop()
+    model = re.compile(r"^\s*(?:GPT-[\w.-]+(?:\s.*)?|\[(?:claude|Opus|Sonnet|GPT)[^\]]*\](?:\s.*)?)$", re.I)
+    while len(rows) > 1 and not model.fullmatch(rows[-1]) and _COMPOSE_CHROME_RE.fullmatch(rows[-1]):
+        rows.pop()
+    if not rows or not model.fullmatch(rows[-1]):
+        return False
+    # The last model row is footer. Any earlier model-looking or path-looking
+    # text remains part of the payload and prevents a full-text match.
+    rows.pop()
+    if rows and re.fullmatch(r"\s*─{8,}\s*", rows[-1]):
+        rows.pop()
+    return "".join(text.split()) == "".join("\n".join(rows).split())
+
+
+def _codex_tab_queue_allowed(screen, text):
+    """Only the measured Codex busy composer with its explicit queue key."""
+    return bool(
+        receiver_input_kind(screen) == "AGENT_TUI"
+        and re.search(r"(?m)^\s*tab to queue message\s*$", screen)
+        and re.search(r"(?m)^\s*›(?:\s|$)", screen)
+        and _exact_pending_text(screen, text)
+        and not re.search(r"Compacting context|Reconnecting", screen, re.I)
+        and not pending_queue_holds(screen, text)
+    )
+
+
+def _delivery_confirmed(before, after, marker):
+    # A reused/stale marker followed by unrelated new activity is not proof
+    # of this submission. Nonces must be fresh relative to the pre-paste view.
+    return bool(
+        marker and not compose_contains(before, marker)
+        and "".join(marker.split()) not in "".join(before.split())
+        and receiver_input_kind(after) == "AGENT_TUI"
+        and compose_block_is_empty(after)
+        and not compose_contains(after, marker)
+        and not pending_queue_holds(after, marker)
+        and _submission_confirmed(after, marker)
+        and _new_activity_after_submit(before, after)
+    )
 
 
 def _new_activity_after_submit(before, after):
@@ -874,6 +965,10 @@ def receiver_input_kind(screen):
                 and all(footer.fullmatch(row) for row in tail[3:])):
             return "AGENT_TUI"
         # A historical footer cannot override unknown current input below it.
+        # Exactly one measured exception: the provider hint row renders BELOW
+        # the model row, so skip that single known row (and nothing else)
+        # before looking for model chrome. Any other trailing content still
+        # wins, keeping the fail-closed direction intact.
         footer_tail = tail
         if (len(footer_tail) > 2
                 and _PROVIDER_HINT_ROW_RE.fullmatch(footer_tail[-1])):
@@ -908,17 +1003,16 @@ def require_clearable_agent_input(screen, surface):
 
 
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
-                force_compose=False):
+                force_compose=False, delivery_observer=None):
     """Submit text with lowercase Enter and prove the TUI consumed it.
 
     ``cmux send`` only pastes text.  Submission is deliberately separate so a
     caller cannot mistake a successful paste for an executed prompt.  When a
     marker is supplied it must disappear from the active compose block -- the
     LAST prompt-glyph block on screen, either UI's glyph (see
-    ``_PROMPT_GLYPH_RE``); an earlier such block is transcript echo and proves
-    delivery rather than a stuck paste.  Marker-linked output or a new
-    structural activity line relative to the
-    pre-submit snapshot proves consumption when the marker has scrolled away.
+    ``_PROMPT_GLYPH_RE``). An earlier block alone is insufficient.
+    Marker-linked new activity AND an empty composer are required. Unrelated
+    tool output or a marker that scrolled away cannot certify consumption.
     One bounded retry handles a known paste-without-submit event, but queued or
     active input is never double-submitted.
     """
@@ -992,15 +1086,25 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                         # protected by the branch above.
             before = cleared
             require_agent_input(before, surface)
+    if delivery_observer:
+        delivery_observer("PASTE_INTENT", before)
     send_text(surface, text)
+    if delivery_observer:
+        delivery_observer("PASTED")
     time.sleep(float(os.environ.get("CMUX_AGENT_SUBMIT_DELAY", "0.25")))
+    if delivery_observer:
+        delivery_observer("ENTER_INTENT")
     send_key(surface, "enter")
+    if delivery_observer:
+        delivery_observer("ENTER_SENT")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     if not marker:
         return {"confirmed": False, "submitted": True, "retries": 0,
                 "state": DELIVERY_UNVERIFIED_BY_DETECTOR}
 
     screen = read_screen(surface, lines=confirm_lines)
+    if delivery_observer:
+        delivery_observer("POST_ENTER_OBSERVATION", screen)
     # A slow first render is not a failed delivery. Observe the same submission
     # once more; never paste or press Enter while its outcome is unknown.
     if (not _submission_confirmed(screen, marker)
@@ -1015,8 +1119,9 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             late_delay = 3.0
         time.sleep(max(0.0, min(5.0, late_delay)))
         screen = read_screen(surface, lines=confirm_lines)
-        if (not _prompt_block_pending(screen, marker) and not pending_queue_holds(screen, marker)
-                and (_submission_confirmed(screen, marker) or _new_activity_after_submit(before, screen))):
+        if delivery_observer:
+            delivery_observer("POST_ENTER_OBSERVATION", screen)
+        if _delivery_confirmed(before, screen, marker):
             return {"confirmed": True, "retries": 0, "late_confirmation": True}
     # This marker's explicit queue entry overrides activity from earlier work.
     # Check it before inferred consumption as well as before any retry path.
@@ -1026,13 +1131,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
             state=DELIVERY_QUEUED_AT_RECEIVER,
         )
-    if (
-        not _prompt_block_pending(screen, marker)
-        and (
-            _submission_confirmed(screen, marker)
-            or _new_activity_after_submit(before, screen)
-        )
-    ):
+    if _delivery_confirmed(before, screen, marker):
         return {"confirmed": True, "retries": 0}
     if not _prompt_block_pending(screen, marker):
         raise DispatchUnconfirmed(
@@ -1040,6 +1139,24 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "(marker not visible after submit)",
             state=DELIVERY_UNVERIFIED_BY_DETECTOR,
         )
+    # Enter does not queue a message in the measured busy Codex UI. Only
+    # its exact, displayed Tab action and our unchanged full payload authorize
+    # one queue key. Never paste again, press on compaction, or call it consumed.
+    if _codex_tab_queue_allowed(screen, text):
+        if delivery_observer:
+            delivery_observer("QUEUE_TAB_INTENT", screen)
+        send_key(surface, "tab")
+        time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
+        screen = read_screen(surface, lines=confirm_lines)
+        if delivery_observer:
+            delivery_observer("POST_QUEUE_TAB_OBSERVATION", screen)
+        if _delivery_confirmed(before, screen, marker):
+            return {"confirmed": True, "retries": 0, "queue_key": "tab"}
+        raise DispatchUnconfirmed(
+            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+            "(one explicit Tab queue action observed; inspect original, never repaste)",
+            state=classify_submission_failure(screen, marker, submitted=True))
+
     if _queued_or_active_input(screen):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
@@ -1047,21 +1164,25 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             state=COMPOSE_OCCUPIED,
         )
 
-    retry_before = screen
+    if not _exact_pending_text(screen, text):
+        raise DispatchUnconfirmed(
+            f"COMPOSE_CHANGED surface={surface}; full payload ownership unconfirmed; no extra key",
+            state=COMPOSE_OCCUPIED)
     require_agent_input(screen, surface)
+    if delivery_observer:
+        delivery_observer("EXTRA_ENTER_INTENT", screen)
     send_key(surface, "enter")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     screen = read_screen(surface, lines=confirm_lines)
+    if delivery_observer:
+        delivery_observer("POST_ENTER_OBSERVATION", screen)
     if pending_queue_holds(screen, marker):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(delivery queued at receiver after one retry — wait, do not resend)",
             state=DELIVERY_QUEUED_AT_RECEIVER,
         )
-    if _prompt_block_pending(screen, marker) or (
-        not _submission_confirmed(screen, marker)
-        and not _new_activity_after_submit(retry_before, screen)
-    ):
+    if not _delivery_confirmed(before, screen, marker):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(compose still pending or marker missing after one retry)",
@@ -1094,118 +1215,11 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def _exclusive_json(path, value):
-    encoded = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except BaseException:
-        # Preserve a partial intent: uncertainty must never cause a resend.
-        raise
-
-
-def observe_completion_callback(task_pack_path, confirm_lines=200):
-    """Observe an existing attempt without pasting or pressing any key."""
-    pack = validate_task_pack_contract(task_pack_path)
-    from availability_contract import require_action
-    require_action(pack["task_id"], "callback", pack)
-    receipt_path = Path(pack["completion_receipt"])
-    pending_path = Path(str(receipt_path) + ".pending.json")
-    pending = json.loads(pending_path.read_text(encoding="utf-8"))
-    for key in ("task_id", "completion_nonce", "completion_callback", "callback_target", "report"):
-        if pending.get(key) != pack.get(key):
-            raise TaskPackContractError("CALLBACK_PENDING_BINDING_CHANGED: " + key)
-    if pending.get("task_pack_sha256") != _sha256_file(task_pack_path):
-        raise TaskPackContractError("CALLBACK_PENDING_PACK_CHANGED")
-    if pending.get("report_sha256") != _sha256_file(pack["report"]):
-        raise TaskPackContractError("CALLBACK_PENDING_REPORT_CHANGED")
-    binding = require_same_workspace(pack["callback_target"])
-    if binding != pending.get("workspace_binding"):
-        raise TaskPackContractError("CALLBACK_PENDING_WORKSPACE_CHANGED")
-    screen = read_screen(binding["target_surface_uuid"], lines=confirm_lines)
-    if (pending_queue_holds(screen, pack["completion_nonce"])
-            or compose_contains(screen, pack["completion_nonce"])
-            or _prompt_block_pending(screen, pack["completion_nonce"])
-            or not _submission_confirmed(screen, pack["completion_nonce"])):
-        raise DispatchUnconfirmed(
-            "CALLBACK_PENDING: not yet proven consumed; no input sent",
-            state=DELIVERY_QUEUED_AT_RECEIVER,
-        )
-    receipt = dict(pending, confirmed=True, bridge_retries=0,
-                   recorded_at_epoch=time.time(), confirmation_method="observe_existing_attempt",
-                   receiver_screen_sha256=hashlib.sha256(screen.encode()).hexdigest())
-    _exclusive_json(receipt_path, receipt)
-    return receipt
-
-
-def submit_completion_callback(task_pack_path, confirm_lines=200):
-    """Deliver the exact terminal callback and persist confirmation evidence."""
-    pack = validate_task_pack_contract(task_pack_path)
-    from availability_contract import require_action
-    require_action(pack["task_id"], "callback", pack)
-    report = Path(pack["report"])
-    if not report.is_file():
-        raise TaskPackContractError(
-            "COMPLETION_CALLBACK_REFUSED: report must exist before callback"
-        )
-    receipt_path = Path(pack["completion_receipt"])
-    if receipt_path.exists():
-        raise TaskPackContractError(
-            f"COMPLETION_RECEIPT_EXISTS: refusing duplicate callback for {receipt_path}"
-        )
-    pending_path = Path(str(receipt_path) + ".pending.json")
-    if pending_path.exists():
-        return observe_completion_callback(task_pack_path, confirm_lines=confirm_lines)
-    # Persist before input. A timeout, crash or queued callback must not erase
-    # knowledge of the attempt and trigger another paste on the next call.
-    pending = {
-        key: pack[key] for key in ("task_id", "completion_nonce", "completion_callback",
-                                  "callback_target", "report")
-    }
-    pending.update(report_sha256=_sha256_file(report), report_bytes=report.stat().st_size,
-                   task_pack_sha256=_sha256_file(task_pack_path),
-                   workspace_binding=require_same_workspace(pack["callback_target"]),
-                   attempted_at_epoch=time.time(), confirmed=False)
-    _exclusive_json(pending_path, pending)
-    result = submit_text(
-        pack["callback_target"],
-        pack["completion_callback"],
-        marker=pack["completion_nonce"],
-        confirm_lines=confirm_lines,
-    )
-    if result.get("confirmed") is not True:
-        raise DispatchUnconfirmed("completion callback delivery was not confirmed")
-    if _sha256_file(report) != pending["report_sha256"]:
-        raise TaskPackContractError("CALLBACK_PENDING_REPORT_CHANGED")
-
-    receipt = {
-        "task_id": pack["task_id"],
-        "completion_nonce": pack["completion_nonce"],
-        "completion_callback": pack["completion_callback"],
-        "callback_target": pack["callback_target"],
-        "report": str(report),
-        "report_sha256": pending["report_sha256"],
-        "report_bytes": pending["report_bytes"],
-        "confirmed": True,
-        "bridge_retries": result.get("retries", 0),
-        "recorded_at_epoch": time.time(),
-    }
-    encoded = (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    try:
-        fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as exc:
-        raise TaskPackContractError(
-            f"COMPLETION_RECEIPT_EXISTS: refusing to replace {receipt_path}"
-        ) from exc
-    try:
-        os.write(fd, encoded)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    return receipt
+def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False):
+    """Report-bound delivery with durable attempts and zero-input reconciliation."""
+    from cmux_callback_journal import deliver
+    return deliver(sys.modules[__name__], task_pack_path, confirm_lines,
+                   reconcile_only=reconcile_only)
 
 
 def read_screen(surface, lines=200):
@@ -1423,6 +1437,8 @@ def _cli_main(argv=None):
     )
     completion.add_argument("--task-pack", required=True)
     completion.add_argument("--confirm-lines", type=int, default=200)
+    completion.add_argument("--reconcile-only", action="store_true",
+                            help="verify an existing callback attempt without sending input")
 
     args = parser.parse_args(argv)
     try:
@@ -1466,7 +1482,8 @@ def _cli_main(argv=None):
             "submit_completion_callback",
         }:
             result = submit_completion_callback(
-                args.task_pack, confirm_lines=args.confirm_lines
+                args.task_pack, confirm_lines=args.confirm_lines,
+                reconcile_only=args.reconcile_only
             )
             result = {"command": "submit_completion_callback", **result}
         else:  # pragma: no cover - argparse makes this unreachable

@@ -189,3 +189,7 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 - `schemas/` contains versioned contracts; active-marker version 1 is unchanged.
   Capability data is observation-only: no ACP interoperability claim until two
   endpoints have actually been measured. Unknown capabilities remain null.
+
+## 双向投递与高效协作维护
+
+执行[高效握手、多执行者与双向投递](references/efficient-bidirectional-collaboration-20261004.md)：每次Enter后读回；输入框残留、排队与消费分别记录；可能已发送的回调仅只读核收，禁止重贴。
