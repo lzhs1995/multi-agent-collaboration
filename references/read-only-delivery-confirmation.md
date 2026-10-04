@@ -34,3 +34,8 @@ The semantic command checker runs in a subprocess to prevent a script-level
 `sys.exit` from prematurely terminating test discovery. All examples are synthetic.
 Offline test results, hook registration, loaded runtime, live delivery and final
 report acceptance must be recorded separately.
+
+
+## Full visible draft ownership
+
+The sender now uses the exact-composer renderer when deciding whether an additional Enter or the displayed Codex Tab action belongs to its original payload. It no longer deletes all whitespace before comparison. Full content, indentation and unknown footer rows are preserved; known wrapping, empty model-footer gaps and the measured single Claude cursor cell are display equivalences, not access to native editor bytes. Whitespace-only content rows are not empty footer gaps. Folded paste summaries and extra content cannot authorize another key. This selectively changes draft ownership; the original callback journal and late-ACK controller remain authoritative. It does not certify a new native delivery or migrate the complete installed sender.

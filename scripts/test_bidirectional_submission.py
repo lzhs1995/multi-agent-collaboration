@@ -146,6 +146,50 @@ class DraftOwnershipTests(unittest.TestCase):
                 send.assert_called_once(); self.assertEqual(key.call_count,1)
 
 
+class ExactDraftWhitespaceTests(unittest.TestCase):
+    def test_bordered_renderer_requires_complete_content(self):
+        border = '─' * 16
+        screen = border + '\n❯\u00a0STATUS: ok\n' + border + '\n[claude-opus-5]'
+        self.assertTrue(b._exact_pending_text(screen, 'STATUS: ok'))
+        self.assertFalse(b._exact_pending_text(screen, 'STATUS:ok'))
+        self.assertFalse(b._exact_pending_text(screen, 'STATUS: ok extra'))
+        cursor = screen.replace('STATUS: ok\n', 'STATUS: ok \n')
+        self.assertTrue(b._exact_pending_text(cursor, 'STATUS: ok'))
+        self.assertFalse(b._exact_pending_text(cursor.replace('ok \n', 'ok  \n'), 'STATUS: ok'))
+
+    def test_known_empty_footer_gap_but_not_whitespace_content(self):
+        for gap in ['\n', '\n\n']:
+            self.assertTrue(b._exact_pending_text('› STATUS: ok\n' + gap + 'GPT-6 high', 'STATUS: ok'))
+        self.assertFalse(b._exact_pending_text('› STATUS: ok\n  \nGPT-6 high', 'STATUS: ok'))
+
+    def test_changed_whitespace_never_authorizes_an_extra_key(self):
+        for glyph in ['›', '❯']:
+            case = BidirectionalSubmissionTests()
+            idle, prompt, pending, _ = case.states(glyph)
+            for altered in [prompt.replace('STATUS: ', 'STATUS:'),
+                            prompt.replace('STATUS: ', 'STATUS:  '),
+                            prompt + ' ', prompt + '\n  ']:
+                with self.subTest(glyph=glyph, altered=altered):
+                    case.run_case(glyph, [idle, pending.replace(prompt, altered)], False, 1)
+
+    def test_changed_whitespace_never_authorizes_tab(self):
+        idle, prompt, pending, _ = BidirectionalSubmissionTests().states('›')
+        changed = pending.replace('STATUS: ', 'STATUS:  ')
+        busy = '• Working (3s • esc to interrupt)\n' + changed + '\ntab to queue message'
+        BidirectionalSubmissionTests().run_case('›', [idle, busy], False, 1)
+
+    def test_exact_multiline_gutter_preserves_payload_spaces(self):
+        text = 'STATUS: first\n  second'
+        screen = '› STATUS: first\n    second\nGPT-6 high'
+        self.assertTrue(b._exact_pending_text(screen, text))
+        self.assertFalse(b._exact_pending_text(screen, 'STATUS: first\nsecond'))
+
+    def test_unknown_footer_and_folded_paste_are_not_owned(self):
+        for screen in ['› STATUS: original\nunknown footer',
+                       '› [Pasted text #1 +7 lines]\nGPT-6 high']:
+            self.assertFalse(b._exact_pending_text(screen, 'STATUS: original'))
+
+
 class StaleMarkerProgressTests(unittest.TestCase):
     def test_old_marker_plus_unrelated_new_activity_is_not_consumption(self):
         for glyph in ['›', '❯']:

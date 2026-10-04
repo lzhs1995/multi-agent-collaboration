@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 from cmux_workspace_guard import require_same_workspace, WorkspaceScopeError, uuid_value, CMUX as VERIFIED_CMUX
 from collections import Counter
 from pathlib import Path
@@ -798,27 +799,177 @@ _ACTIVITY_LINE_RE = re.compile(
 )
 
 
+def require_exact_composer(screen, surface, text):
+    """Match the complete payload under measured terminal rendering only.
+
+    Claude can render one extra ASCII cell after the last character. This
+    cannot be distinguished from a typed trailing space using read-screen;
+    it is display equivalence, not byte-exact access to the native editor.
+    No body whitespace, unknown footer, or extra content is normalized.
+    """
+    try:
+        return _require_exact_composer_without_cursor_cell(screen, surface, text)
+    except DispatchUnconfirmed:
+        rows = screen.splitlines()
+        start = next((i for i in range(len(rows)-1, -1, -1)
+                      if _PROMPT_GLYPH_RE.match(rows[i])), None)
+        if (not text or text[-1].isspace() or start is None or start == 0
+                or not rows[start].startswith("❯\u00a0")
+                or not re.fullmatch(r"─{8,}", rows[start-1])):
+            raise
+        end = next((i for i in range(start+1, len(rows))
+                    if rows[i] == rows[start-1]), None)
+        if (end is None or end+1 >= len(rows)
+                or not re.fullmatch(r"\s*\[(?:claude|opus|sonnet)[^\]]*\](?:\])?\s*",
+                                    rows[end+1], re.I)
+                or not rows[end-1].endswith(" ")
+                or len(rows[end-1]) < 2 or rows[end-1][-2].isspace()):
+            raise
+        # Exactly one terminal cell on the final content row, never strip().
+        rows[end-1] = rows[end-1][:-1]
+        return _require_exact_composer_without_cursor_cell("\n".join(rows), surface, text)
+
+
+def _require_exact_composer_without_cursor_cell(screen, surface, text):
+    """Require the expected visible draft, allowing known bordered hard wrapping.
+
+    Only the renderer's two-column continuation gutter and measured wrap width
+    may be added. Do not collapse whitespace or accept truncated/paste summaries.
+    Screen evidence cannot distinguish buffers with identical visual rendering.
+    """
+    require_agent_input(screen, surface)
+    rows = screen.splitlines()
+    start = next((i for i in range(len(rows)-1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    if start is None:
+        raise DispatchUnconfirmed("COMPOSE_UNVERIFIED: no Enter", state=COMPOSE_OCCUPIED)
+    # Remove the renderer's single prompt separator, never user whitespace.
+    first = re.sub(r"^\s*[›❯][ \u00a0]?", "", rows[start], count=1)
+    bordered = start > 0 and re.fullmatch(r"─{8,}", rows[start-1])
+    if bordered:
+        end = next((i for i in range(start+1, len(rows))
+                    if rows[i] == rows[start-1]), None)
+        if end is None:
+            raise DispatchUnconfirmed("COMPOSE_TRUNCATED: no Enter", state=COMPOSE_OCCUPIED)
+        body = "\n".join([first] + rows[start+1:end])
+    else:
+        lines = [first] + rows[start+1:]
+        # Remove only terminal chrome, never similar lines inside the draft.
+        if len(lines) > 2 and _PROVIDER_HINT_ROW_RE.fullmatch(lines[-1]):
+            lines.pop()
+        has_model_footer = len(lines) > 1 and re.fullmatch(
+                r"\s*(?:\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\](?: context \d+%)?|"
+                r"(?:GPT|claude)-[\w.-]+(?: (?:low|medium|high|xhigh|max|ultra))?"
+                r"(?: · [^\n]+)?)\s*",
+                lines[-1], re.I)
+        if has_model_footer:
+            lines.pop()
+        body = "\n".join(lines)
+        bodies = [body]
+        # Measured Codex footer gaps: one or two blank UI rows immediately
+        # before verified model chrome. Keep all payload whitespace; each
+        # candidate must still match the entire expected message. Never trim
+        # an arbitrary blank suffix or infer chrome from unknown trailing text.
+        if has_model_footer:
+            for gap in (1, 2):
+                if len(lines) > gap and all(row == "" for row in lines[-gap:]):
+                    bodies.append("\n".join(lines[:-gap]))
+        for candidate in bodies:
+            if candidate == text:
+                return
+            parts = candidate.split("\n")
+            if not all(row.startswith("  ") for row in parts[1:]):
+                continue
+            # Preserve every content character. Only the two-column gutter
+            # and hard/soft visual row boundaries are renderer-dependent.
+            positions = {0}
+            for number, part in enumerate(parts):
+                part = part if number == 0 else part[2:]
+                next_positions = set()
+                for pos in positions:
+                    # Empty continuation rows are explicit blank content,
+                    # never a soft wrap that can silently disappear.
+                    separators = (("",) if number == 0 else
+                                  (("", "\n") if part else ("\n",)))
+                    for sep in separators:
+                        chunk = sep + part
+                        if text.startswith(chunk, pos):
+                            next_positions.add(pos + len(chunk))
+                positions = next_positions
+            if len(text) in positions:
+                return
+    if body == text:
+        return
+    if bordered:
+        # Claude's editor reserves two additional cursor cells in some builds.
+        # Word wrapping can consume exactly one separator at a visual boundary.
+        # Match complete content against measured geometry; never strip user
+        # whitespace or treat a paste summary as the original draft.
+        parts = body.split("\n")
+        if all(row.startswith("  ") for row in parts[1:]):
+            content = [parts[0]] + [row[2:] for row in parts[1:]]
+            def cells(value):
+                return sum(0 if unicodedata.combining(c) else
+                           (2 if unicodedata.east_asian_width(c) in "WF" else 1)
+                           for c in value)
+            if not any(unicodedata.category(c).startswith("C")
+                       for row in content for c in row):
+                for width in (len(rows[start-1]) - 4, len(rows[start-1]) - 2):
+                    positions = {0}
+                    previous = ""
+                    for number, part in enumerate(content):
+                        if cells(part) > width:
+                            positions = set()
+                            break
+                        separators = ("",) if number == 0 else ("\n",)
+                        if number and previous and part:
+                            if cells(previous) + cells(part[0]) > width:
+                                separators += ("",)
+                            word = re.match(r"[^\s]+", part)
+                            if (word and not previous[-1].isspace()
+                                    and cells(previous) + 1 + cells(word.group()) > width):
+                                separators += (" ",)
+                        positions = {pos + len(sep) + len(part)
+                                     for pos in positions for sep in separators
+                                     if text.startswith(sep + part, pos)}
+                        previous = part
+                    if len(text) in positions:
+                        return
+    # Claude's bordered editor uses a two-column prompt/continuation gutter.
+    # Preserve explicit newlines, spaces and Unicode; generate expected rows
+    # rather than deleting arbitrary whitespace from the observed draft.
+    if bordered:
+        width = len(rows[start-1]) - 2
+        expected = []
+        for line in text.split("\n"):
+            chunk, cells = "", 0
+            for char in line:
+                if unicodedata.category(char).startswith("C"):
+                    raise DispatchUnconfirmed("COMPOSE_CONTROL_CHARACTER: no Enter", state=COMPOSE_OCCUPIED)
+                size = 0 if unicodedata.combining(char) else (2 if unicodedata.east_asian_width(char) in "WF" else 1)
+                if cells + size > width:
+                    expected.append(chunk); chunk, cells = "", 0
+                chunk += char; cells += size
+            expected.append(chunk)
+        rendered = expected[0] + "".join("\n  " + row for row in expected[1:])
+        if body == rendered:
+            return
+    if body != text:
+        raise DispatchUnconfirmed("COMPOSE_CHANGED_OR_UNVERIFIED: preserve draft; no Enter",
+                                  state=COMPOSE_OCCUPIED)
+
+
+
 def _exact_pending_text(screen, text):
-    """Compare the entire editable payload; strip only the final footer."""
-    body = compose_block_text(screen)
-    if body is None:
+    """Require full visible payload; only a final explicit queue hint is chrome."""
+    rows = screen.splitlines()
+    if rows and re.fullmatch(r"\s*tab to queue message\s*", rows[-1]):
+        rows.pop()
+    try:
+        require_exact_composer("\n".join(rows), "receiver", text)
+    except DispatchUnconfirmed:
         return False
-    rows = body.splitlines()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    if rows and _PROVIDER_HINT_ROW_RE.fullmatch(rows[-1]):
-        rows.pop()
-    model = re.compile(r"^\s*(?:GPT-[\w.-]+(?:\s.*)?|\[(?:claude|Opus|Sonnet|GPT)[^\]]*\](?:\s.*)?)$", re.I)
-    while len(rows) > 1 and not model.fullmatch(rows[-1]) and _COMPOSE_CHROME_RE.fullmatch(rows[-1]):
-        rows.pop()
-    if not rows or not model.fullmatch(rows[-1]):
-        return False
-    # The last model row is footer. Any earlier model-looking or path-looking
-    # text remains part of the payload and prevents a full-text match.
-    rows.pop()
-    if rows and re.fullmatch(r"\s*─{8,}\s*", rows[-1]):
-        rows.pop()
-    return "".join(text.split()) == "".join("\n".join(rows).split())
+    return True
 
 
 def _codex_tab_queue_allowed(screen, text):
