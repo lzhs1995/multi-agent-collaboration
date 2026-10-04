@@ -135,6 +135,53 @@ class ReceiptOrderingTests(unittest.TestCase):
             self.assertIsNotNone(receipt["ack_observed_at"])
             self.assertIsNotNone(receipt["parser_confirmed_at"])
 
+    def test_handshake_uncertain_dispatch_polls_same_nonce_without_resend(self):
+        for state in (BRIDGE.DELIVERY_UNVERIFIED_BY_DETECTOR,
+                      BRIDGE.DELIVERY_QUEUED_AT_RECEIVER,
+                      BRIDGE.SUPERVISOR_DID_NOT_SUBMIT):
+            for acknowledge in (True, False):
+                with self.subTest(state=state, acknowledge=acknowledge), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "identity-gate.json").write_text(json.dumps({
+                        "status": "PASS", "executor": "surface:2",
+                        "supervisor": "surface:1", "workspace_uuid": "ws-uuid",
+                        "supervisor_surface_uuid": "sup-uuid",
+                        "executor_surface_uuid": "uuid-2", "executor_provider": "claude",
+                    }))
+                    (root / "bridge-test-evidence.json").write_text(json.dumps({
+                        "task_id": "receipt-test", "executor": "surface:2",
+                        "clear_confirmed": True,
+                    }))
+                    expected = "PREFLIGHT_ACK|receipt-test|claude:identity|READY|INLINE|nonce"
+                    with (
+                        mock.patch.object(BRIDGE, "pin_workspace"),
+                        mock.patch.object(HARNESS.secrets, "token_hex", return_value="nonce"),
+                        mock.patch.object(BRIDGE, "submit_text", side_effect=BRIDGE.DispatchUnconfirmed("original detector failure", state=state)) as send,
+                        mock.patch.object(BRIDGE, "wait_for_ack", return_value=expected,
+                                          side_effect=None if acknowledge else TimeoutError("no matching ACK")) as wait,
+                    ):
+                        try:
+                            HARNESS.cmd_handshake(self.args(root))
+                        except SystemExit as exc:
+                            self.assertEqual(exc.code, 1)
+                    send.assert_called_once()
+                    r = json.loads((root / "handshake-receipt.json").read_text())["executors"][0]
+                    self.assertEqual(r["submission_state"], state)
+                    self.assertEqual(r["dispatch_error"], "original detector failure")
+                    self.assertIsNone(r["dispatch_submitted_at"])
+                    if state == BRIDGE.SUPERVISOR_DID_NOT_SUBMIT:
+                        wait.assert_not_called()
+                        self.assertEqual(r["status"], "FAIL")
+                    else:
+                        wait.assert_called_once()
+                        self.assertEqual(wait.call_args.kwargs["nonce"], "nonce")
+                        self.assertEqual(wait.call_args.kwargs["task_id"], "receipt-test")
+                        self.assertEqual(wait.call_args.kwargs["provider"], "claude")
+                        self.assertEqual(wait.call_args.kwargs["timeout"], 1)
+                        self.assertEqual(r["status"], "PASS" if acknowledge else "FAIL")
+                        self.assertEqual(r["late_ack_recovered"], acknowledge)
+                        self.assertFalse(r["attributable_to_executor"])
+
     def test_later_round_can_explicitly_resolve_prior_blocker(self):
         rounds = [
             {"round_id": "R1", "blocks_consensus": True, "resolves_rounds": []},

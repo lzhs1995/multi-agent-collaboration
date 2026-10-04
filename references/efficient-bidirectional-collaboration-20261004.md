@@ -35,3 +35,8 @@ supervisor→executor的prompt和executor→supervisor的callback都通过受保
 维护源与实际安装两边都保留本文及对应入口。实体目录安装若被manage_install.py判为foreign，保留目录；按已授权窄维护调用现有mutation_locks及replace_bytes，先核原字节，备份后安装，保留mode与before/after SHA。不得将实体目录强换symlink或整树覆盖。回调journal先安装、bridge后安装。
 
 安装完成、测试通过、新进程实际导入和旧客户端热加载是四件事；不为更新skill重启正在工作的应用。已冻结任务包保留旧pins，后继显式记录维护版本，不冒称旧输入未变。通用文档不含研究数据；本机维护patch另归档，无Git元数据不得声称已提交或发布。
+
+
+### Handshake detector recovery (2026-10-04)
+
+A `DELIVERY_UNVERIFIED_BY_DETECTOR` or `DELIVERY_QUEUED_AT_RECEIVER` result must not end the handshake before the configured ACK wait runs. Retain the dispatch error and original task/provider/nonce; use the existing strict assistant-response parser for a bounded read-only wait. Never resend text or Enter. A matching ACK may complete the handshake while the original transport uncertainty remains recorded; do not fabricate a dispatch-submitted timestamp. Compose-busy and never-submitted states still fail immediately. No matching ACK means failure, not permission to resend or proof of executor silence. This source change does not retroactively rewrite frozen receipts or prove live-client reload.

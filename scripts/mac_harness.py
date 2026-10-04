@@ -1499,26 +1499,30 @@ def _handshake_one(args, root, gate, item, per_executor):
         receipt["updated_at"] = _now()
         _write_handshake_receipt(root, per_executor)
     except cmux.DispatchUnconfirmed as e:
-        # Record WHICH transport state occurred. The five delivery states used to
-        # collapse into one string, so "never pasted" and "delivered but queued at
-        # the receiver" were indistinguishable — and only one means wait rather
-        # than fix.
         state = getattr(e, "state", None) or cmux.SUPERVISOR_DID_NOT_SUBMIT
-        receipt["status"] = "FAIL"
-        receipt["lifecycle"] = "REJECTED"
         receipt["submission_state"] = state
         receipt["detector_side"] = "supervisor"
-        receipt["error"] = str(e)
-        receipt["terminal_error_at"] = _now()
+        receipt["dispatch_error"] = str(e)
+        receipt["dispatch_error_at"] = _now()
         receipt["updated_at"] = _now()
-        if state in cmux.SUBMISSION_STATES_MEANING_WAIT:
-            _fail(
-                f"{state} — the executor has the message and will consume it at its "
-                f"next tool boundary. Wait and re-read; do NOT resend."
-            )
-        else:
+        if state not in (
+            cmux.DELIVERY_UNVERIFIED_BY_DETECTOR,
+            cmux.DELIVERY_QUEUED_AT_RECEIVER,
+        ):
+            receipt["status"] = "FAIL"
+            receipt["lifecycle"] = "REJECTED"
+            receipt["error"] = str(e)
+            receipt["terminal_error_at"] = _now()
+            _write_handshake_receipt(root, per_executor)
             _fail(f"{state} — {e}")
-        return False
+            return False
+        # Input may already have reached the executor. Preserve the original
+        # transport failure and poll the exact challenge through the ordinary
+        # strict ACK parser. Never retry paste/Enter or invent a submitted time.
+        receipt["late_ack_recovery_attempted"] = True
+        receipt["late_ack_recovered"] = False
+        _write_handshake_receipt(root, per_executor)
+        _info(f"{state} — polling the original nonce; no resend.")
 
     _info(f"Polling for PREFLIGHT_ACK (timeout={handshake_timeout}s, poll=3s)...")
     try:
@@ -1539,6 +1543,8 @@ def _handshake_one(args, root, gate, item, per_executor):
         receipt["ack_observed_at"] = _now()
         receipt["parser_confirmed_at"] = receipt["ack_observed_at"]
         receipt["status"] = "PASS"
+        if receipt.get("late_ack_recovery_attempted"):
+            receipt["late_ack_recovered"] = True
         _ok(f"ACK received: {ack_line}")
     except TimeoutError as e:
         # Two different facts wear one word. A timeout under a budget that was
@@ -1552,9 +1558,11 @@ def _handshake_one(args, root, gate, item, per_executor):
         receipt["lifecycle"] = "EXPIRED"
         receipt["ack_state"] = ack_state
         receipt["detector_side"] = (
-            "supervisor" if ack_state == "SUPERVISOR_BUDGET_TOO_SHORT" else "executor"
+            "supervisor" if (below_minimum or receipt.get("late_ack_recovery_attempted")) else "executor"
         )
-        receipt["attributable_to_executor"] = not below_minimum
+        receipt["attributable_to_executor"] = (
+            not below_minimum and not receipt.get("late_ack_recovery_attempted", False)
+        )
         receipt["error"] = str(e)
         receipt["terminal_error_at"] = _now()
         if below_minimum:
