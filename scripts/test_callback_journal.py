@@ -170,6 +170,53 @@ class JournalTests(unittest.TestCase):
                     self.assertFalse(self.receipt.exists())
                     self.assertEqual(legacy.read_text(), content)
 
+    def hook_proof(self):
+        from cmux_submit_confirmation_guard import _attempt_evidence
+        return _attempt_evidence(dict(kind='callback', pack=str(self.packpath)), 'surface:46', b)
+
+    def complete(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, self.confirmed_screen()]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            self.call()
+
+    def test_posthook_original_receipt_readonly(self):
+        self.complete()
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.assertEqual(self.hook_proof()['source'], 'revalidated_callback_journal')
+            send.assert_not_called()
+            key.assert_not_called()
+        Path(self.pack['report']).write_text('changed report')
+        self.assertIsNone(self.hook_proof())
+
+    def test_posthook_reconciliation_observation(self):
+        self.queued()
+        with patch.object(b, 'read_screen', return_value=self.confirmed_screen()):
+            result = self.call(reconcile_only=True)
+        self.assertIsNotNone(self.hook_proof())
+        observation = Path(result['observation'])
+        data = json.loads(observation.read_text())
+        data['input_operations'] = True
+        observation.write_text(json.dumps(data))
+        self.assertIsNone(self.hook_proof())
+
+    def test_posthook_missing_or_changed_receipt(self):
+        self.complete()
+        data = json.loads(self.receipt.read_text())
+        data['report_sha256'] = 'wrong'
+        self.receipt.write_text(json.dumps(data))
+        self.assertIsNone(self.hook_proof())
+        self.receipt.unlink()
+        self.assertIsNone(self.hook_proof())
+
+    def test_posthook_changed_pack_and_identity(self):
+        self.complete()
+        original = self.packpath.read_text()
+        self.packpath.write_text(original + ' ')
+        self.assertIsNone(self.hook_proof())
+        self.packpath.write_text(original)
+        self.proof['caller_surface_uuid'] = 'OTHER'
+        self.assertIsNone(self.hook_proof())
+
     def test_cli_read_only_flag(self):
         with patch.object(b, 'submit_completion_callback', return_value={}) as call, \
                 contextlib.redirect_stdout(io.StringIO()):

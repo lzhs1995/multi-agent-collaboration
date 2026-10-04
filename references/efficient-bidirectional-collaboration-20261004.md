@@ -80,3 +80,11 @@ task dispatch. Preserve the original draft and use the original recovery flow.
 This contract covers the canonical task dispatch entrypoint. Generic status and
 handshake transport retain their own existing control flow; this is not a claim
 that every legacy sender has been migrated or that a running client hot-reloaded.
+
+The post-submit hook also reads the canonical callback's original `*-attempts`
+journal and completion receipt. It revalidates the task pack, report bytes/hash,
+executor and receiver identity, original attempt, and full message observations.
+Read-only reconciliation must bind its zero-input observation. A receipt flag
+alone is insufficient. Missing or changed evidence remains unconfirmed; the hook
+never resends input or manufactures a receipt. This prevents a valid callback
+from being rejected merely because a hook understands only a legacy journal.

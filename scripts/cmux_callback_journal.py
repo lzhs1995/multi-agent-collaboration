@@ -21,6 +21,75 @@ def write_json(path, value):
         os.close(directory)
 
 
+def verified_receipt(bridge, surface, task_pack_path):
+    """Validate the original journal read-only; never send or create a receipt."""
+    from delivery_receipts import snapshot
+    from cmux_submit_confirmation_guard import submission_target
+    try:
+        path = Path(task_pack_path)
+        if not path.is_absolute():
+            return None
+        pins = {path: snapshot(path)}
+        pack = bridge.validate_task_pack_contract(path)
+        if submission_target(pack['callback_target']) != surface:
+            return None
+        live = bridge.pin_workspace(surface)
+        identity = {k: live[k] for k in ('workspace_uuid', 'caller_surface_uuid',
+                                       'target_surface_uuid', 'target_pane_uuid')}
+        if not all(isinstance(v, str) and v for v in identity.values()):
+            return None
+        if identity['caller_surface_uuid'].upper() != pack['executor_uuid'].upper():
+            return None
+        report = Path(pack['report'])
+        pins[report] = snapshot(report)
+        binding = dict(task_id=pack['task_id'], completion_nonce=pack['completion_nonce'],
+                       completion_callback=pack['completion_callback'],
+                       callback_target=pack['callback_target'], task_pack_sha256=pins[path]['sha256'],
+                       report=str(report), report_sha256=pins[report]['sha256'],
+                       report_bytes=report.stat().st_size)
+        receipt_path = Path(pack['completion_receipt'])
+        pins[receipt_path] = snapshot(receipt_path)
+        receipt = json.loads(receipt_path.read_text())
+        journal = receipt_path.with_name(receipt_path.stem + '-attempts')
+        attempts = sorted(journal.glob('attempt-*.json'))
+        if not attempts or receipt.get('attempt') != str(attempts[-1]):
+            return None
+        pins[attempts[-1]] = snapshot(attempts[-1])
+        attempt = json.loads(attempts[-1].read_text())
+        if (receipt.get('confirmed') is not True
+                or any(receipt.get(k) != v for k, v in binding.items())
+                or attempt.get('binding') != dict(binding, identity=identity)):
+            return None
+        pastes = [e for e in attempt['events'] if e['phase'] == 'PASTE_INTENT']
+        if len(pastes) != 1 or pastes[0].get('screen_sha256') != bridge.screen_hash(pastes[0]['screen']):
+            return None
+        if receipt.get('reconciled_read_only') is True:
+            observed = Path(receipt['observation'])
+            if observed.parent != journal or not observed.name.startswith('observation-'):
+                return None
+            pins[observed] = snapshot(observed)
+            observation = json.loads(observed.read_text())
+            if type(observation.get('input_operations')) is not int or observation['input_operations'] != 0:
+                return None
+        else:
+            observations = [e for e in attempt['events'] if e['phase'] in
+                            ('POST_ENTER_OBSERVATION', 'POST_QUEUE_TAB_OBSERVATION')]
+            if attempt.get('phase') != 'CONFIRMED' or not observations:
+                return None
+            observation = observations[-1]
+        after = observation['screen']
+        if (observation.get('screen_sha256') != bridge.screen_hash(after)
+                or not bridge._delivery_confirmed(pastes[0]['screen'], after,
+                                                   pack['completion_nonce'], pack['completion_callback'])):
+            return None
+        if any(snapshot(p) != pin for p, pin in pins.items()) or bridge.pin_workspace(surface) != live:
+            return None
+        return dict(source='revalidated_callback_journal', identity=identity,
+                    pack=pins[path], report=pins[report], receipt=pins[receipt_path])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        return None
+
+
 def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
     from availability_contract import require_action
     pack = bridge.validate_task_pack_contract(task_pack_path)
