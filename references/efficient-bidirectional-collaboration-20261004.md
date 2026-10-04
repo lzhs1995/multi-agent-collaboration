@@ -48,3 +48,29 @@ A `DELIVERY_UNVERIFIED_BY_DETECTOR` or `DELIVERY_QUEUED_AT_RECEIVER` result must
 ## Complete-message post-submit confirmation
 
 Both directions require the complete submitted payload in one receiver prompt block, followed by receiver activity. A marker alone, appended foreign content, fragments across prompt blocks, or activity preceding the payload cannot confirm delivery. Read-only callback reconciliation applies the same rule and must not send text or keys. Transcript whitespace normalization is display equivalence only, not byte-exact native receipt proof. Preserve the original attempt journal on uncertainty; do not repaste.
+
+
+## Durable task dispatch
+
+`submit-task-pack` now records task identity, complete payload hash, task-pack hash,
+workspace/caller/target/pane UUIDs and each input intent under
+`~/.local/state/multi-agent-collaboration/task-dispatch-v1/` before terminal input.
+The target lock excludes simultaneous dispatches from this controller. A changed
+prompt or pack cannot create a replacement attempt for the same caller/task.
+A process interruption after paste intent is uncertain, never permission to paste
+again. Only a recorded zero-input attempt permits one explicit retry. Existing
+delivery10 `deliveries-v1` records require their original controller; this journal
+does not migrate or replace them.
+
+After an uncertain attempt, invoke the same `submit-task-pack` command with
+`--reconcile-only`, preserving surface, text, pack and marker. This only observes:
+no paste, Enter or Tab. It requires the complete original prompt and subsequent
+receiver activity, then writes a receipt. A queued, partial or cross-block message
+remains unconfirmed. An existing receipt rejects another dispatch. The default
+marker is the task ID and must occur literally in the prompt; an explicit marker
+must also occur in the prompt. Forced composer replacement is refused for durable
+task dispatch. Preserve the original draft and use the original recovery flow.
+
+This contract covers the canonical task dispatch entrypoint. Generic status and
+handshake transport retain their own existing control flow; this is not a claim
+that every legacy sender has been migrated or that a running client hot-reloaded.

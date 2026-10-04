@@ -1346,19 +1346,11 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
 
 
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
-                     force_compose=False):
-    """Only dispatch entry point for executor tasks."""
-    from availability_contract import require_action
-    pack = validate_task_pack_contract(task_pack_path)
-    require_action(pack["task_id"], "dispatch", pack)
-    return submit_text(
-        surface,
-        text,
-        marker=marker,
-        confirm_lines=confirm_lines,
-        task_pack_path=task_pack_path,
-        force_compose=force_compose,
-    )
+                     force_compose=False, *, reconcile_only=False):
+    """Durable task dispatch; ambiguous attempts are observed, never repasted."""
+    from cmux_task_journal import deliver
+    return deliver(sys.modules[__name__], surface, text, task_pack_path, marker,
+                   confirm_lines, force_compose, reconcile_only=reconcile_only)
 
 
 def _sha256_file(path):
@@ -1579,6 +1571,8 @@ def _cli_main(argv=None):
     pack.add_argument("--task-pack", required=True)
     pack.add_argument("--marker")
     pack.add_argument("--confirm-lines", type=int, default=200)
+    pack.add_argument("--reconcile-only", action="store_true",
+                      help="observe the original task dispatch without terminal input")
     pack.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
@@ -1624,6 +1618,7 @@ def _cli_main(argv=None):
                 marker=args.marker,
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
+                reconcile_only=args.reconcile_only,
             )
             result = {
                 "command": "submit_task_pack",

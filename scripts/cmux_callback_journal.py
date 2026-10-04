@@ -14,6 +14,11 @@ def write_json(path, value):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
