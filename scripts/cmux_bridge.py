@@ -958,6 +958,7 @@ def receiver_input_kind(screen):
             r"^\s*(?:[^\n]+\bgit:\([^)]*\)[^\n]*|"
             r"上下文\s+[^\n]+|\d+\s+CLAUDE\.md\s*\|[^\n]+|"
             r"✓\s+[^\n]+|▸\s+.+\(\d+/\d+\)|"
+            r"⏱\ufe0f?\s+\d+h\s+\d+m|◐\s+Bash:\s+[^\n]+|"
             r"⏵⏵\s+bypass permissions on[^\n]*)\s*$")
         if (prompts[-1] > 0 and border.fullmatch(lines[prompts[-1] - 1])
                 and len(tail) >= 4 and border.fullmatch(tail[1])
