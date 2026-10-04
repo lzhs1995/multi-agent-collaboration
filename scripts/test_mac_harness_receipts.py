@@ -242,7 +242,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]"]),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            result = BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
         self.assertEqual(result, {"confirmed": True, "retries": 0})
         send_key.assert_called_once_with("surface:2", "enter")
 
@@ -340,9 +340,9 @@ class SubmissionConfirmationTests(unittest.TestCase):
               mock.patch.object(BRIDGE, "send_key") as key,
               mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
               mock.patch.object(BRIDGE.time, "sleep")):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            result = BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
         self.assertTrue(result["late_confirmation"])
-        paste.assert_called_once_with("surface:2", "prompt")
+        paste.assert_called_once_with("surface:2", "delivery:x")
         key.assert_called_once_with("surface:2", "enter")
 
     def test_late_queued_message_is_not_reported_as_confirmed(self):

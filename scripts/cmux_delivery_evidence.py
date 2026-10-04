@@ -49,9 +49,17 @@ def confirmed(bridge, before, screen, marker, text, adopted=False):
         return False
     if contains(delivery_compose_text(bridge, screen) or '', marker):
         return False
-    prefix = []
+    # Match one complete prompt block, not fragments anywhere in history.
+    # Whitespace is display-equivalent here because transcript wrapping loses
+    # row boundaries. This does not prove byte-exact native message content.
+    block = None
     for line in screen.splitlines():
-        if bridge._ACTIVITY_LINE_RE.match(line) and contains('\n'.join(prefix), text):
-            return True
-        prefix.append(line)
+        if bridge._PROMPT_GLYPH_RE.match(line):
+            block = [bridge._PROMPT_GLYPH_RE.sub('', line, count=1)]
+        elif bridge._ACTIVITY_LINE_RE.match(line):
+            if block is not None and compact('\n'.join(block)) == compact(text):
+                return True
+            block = None
+        elif block is not None:
+            block.append(line)
     return False

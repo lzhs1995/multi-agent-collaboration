@@ -43,3 +43,8 @@ A `DELIVERY_UNVERIFIED_BY_DETECTOR` or `DELIVERY_QUEUED_AT_RECEIVER` result must
 
 ### 当前Claude页脚识别（2026-10-05）
 真实边框、模型行和完整已知页脚同时满足时，允许识别计时行与运行中Bash状态行；未知尾行、shell提示或缺边框仍拒绝。识别为agent仅证明输入界面类型，不等于身份、空compose、任务可接收或消息已消费。不能因UNKNOWN重新握手或重贴未确认回调。
+
+
+## Complete-message post-submit confirmation
+
+Both directions require the complete submitted payload in one receiver prompt block, followed by receiver activity. A marker alone, appended foreign content, fragments across prompt blocks, or activity preceding the payload cannot confirm delivery. Read-only callback reconciliation applies the same rule and must not send text or keys. Transcript whitespace normalization is display equivalence only, not byte-exact native receipt proof. Preserve the original attempt journal on uncertainty; do not repaste.

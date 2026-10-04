@@ -984,11 +984,12 @@ def _codex_tab_queue_allowed(screen, text):
     )
 
 
-def _delivery_confirmed(before, after, marker):
+def _delivery_confirmed(before, after, marker, text=None):
     # A reused/stale marker followed by unrelated new activity is not proof
     # of this submission. Nonces must be fresh relative to the pre-paste view.
+    from cmux_delivery_evidence import confirmed
     return bool(
-        marker and not compose_contains(before, marker)
+        marker and text and not compose_contains(before, marker)
         and "".join(marker.split()) not in "".join(before.split())
         and receiver_input_kind(after) == "AGENT_TUI"
         and compose_block_is_empty(after)
@@ -996,6 +997,7 @@ def _delivery_confirmed(before, after, marker):
         and not pending_queue_holds(after, marker)
         and _submission_confirmed(after, marker)
         and _new_activity_after_submit(before, after)
+        and confirmed(sys.modules[__name__], before, after, marker, text)
     )
 
 
@@ -1273,7 +1275,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         screen = read_screen(surface, lines=confirm_lines)
         if delivery_observer:
             delivery_observer("POST_ENTER_OBSERVATION", screen)
-        if _delivery_confirmed(before, screen, marker):
+        if _delivery_confirmed(before, screen, marker, text):
             return {"confirmed": True, "retries": 0, "late_confirmation": True}
     # This marker's explicit queue entry overrides activity from earlier work.
     # Check it before inferred consumption as well as before any retry path.
@@ -1283,7 +1285,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
             state=DELIVERY_QUEUED_AT_RECEIVER,
         )
-    if _delivery_confirmed(before, screen, marker):
+    if _delivery_confirmed(before, screen, marker, text):
         return {"confirmed": True, "retries": 0}
     if not _prompt_block_pending(screen, marker):
         raise DispatchUnconfirmed(
@@ -1302,7 +1304,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         screen = read_screen(surface, lines=confirm_lines)
         if delivery_observer:
             delivery_observer("POST_QUEUE_TAB_OBSERVATION", screen)
-        if _delivery_confirmed(before, screen, marker):
+        if _delivery_confirmed(before, screen, marker, text):
             return {"confirmed": True, "retries": 0, "queue_key": "tab"}
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
@@ -1334,7 +1336,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "(delivery queued at receiver after one retry — wait, do not resend)",
             state=DELIVERY_QUEUED_AT_RECEIVER,
         )
-    if not _delivery_confirmed(before, screen, marker):
+    if not _delivery_confirmed(before, screen, marker, text):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(compose still pending or marker missing after one retry)",

@@ -80,7 +80,8 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
             full_line = ''.join(pack['completion_callback'].split())
             confirmed = (
                 full_line in ''.join(screen.split())
-                and bridge._delivery_confirmed(before, screen, pack['completion_nonce'])
+                and bridge._delivery_confirmed(before, screen, pack['completion_nonce'],
+                                               pack['completion_callback'])
             )
             if not confirmed:
                 raise bridge.DispatchUnconfirmed(

@@ -191,6 +191,31 @@ class ExactDraftWhitespaceTests(unittest.TestCase):
 
 
 class StaleMarkerProgressTests(unittest.TestCase):
+    def test_marker_without_complete_original_message_is_not_consumption(self):
+        for glyph in ['›', '❯']:
+            case = BidirectionalSubmissionTests()
+            idle, prompt, pending, consumed = case.states(glyph)
+            for replacement in ['unique-marker-20261004',
+                                prompt + ' extra foreign content',
+                                'changed STATUS unique-marker-20261004']:
+                with self.subTest(glyph=glyph, replacement=replacement):
+                    case.run_case(glyph, [idle, consumed.replace(prompt, replacement)], False, 1)
+
+    def test_payload_in_different_prompt_block_does_not_prove_this_marker(self):
+        for glyph in ['›', '❯']:
+            case = BidirectionalSubmissionTests()
+            idle, prompt, pending, consumed = case.states(glyph)
+            after = glyph + ' ' + prompt + '\n' + consumed.replace(prompt, 'unrelated')
+            case.run_case(glyph, [idle, after], False, 1)
+
+    def test_activity_before_complete_payload_is_not_consumption(self):
+        for glyph in ['›', '❯']:
+            case = BidirectionalSubmissionTests()
+            idle, prompt, pending, consumed = case.states(glyph)
+            after = consumed.replace(prompt, 'unique-marker-20261004')
+            after = after.replace(idle, 'full message quoted later: ' + prompt + '\n' + idle)
+            case.run_case(glyph, [idle, after], False, 1)
+
     def test_old_marker_plus_unrelated_new_activity_is_not_consumption(self):
         for glyph in ['›', '❯']:
             case = BidirectionalSubmissionTests()

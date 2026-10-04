@@ -97,6 +97,23 @@ class JournalTests(unittest.TestCase):
                 key.assert_not_called()
         self.assertFalse(self.receipt.exists())
 
+    def test_partial_or_cross_block_callback_cannot_reconcile(self):
+        self.queued()
+        callback = self.pack['completion_callback']
+        screens = [
+            '› nonce12345\n• Read report\n' + IDLE,
+            '› ' + callback + '\n› unrelated\n• Read report\n' + IDLE,
+            '› ' + callback + ' extra\n• Read report\n' + IDLE,
+        ]
+        for screen in screens:
+            with self.subTest(screen=screen), patch.object(b, 'read_screen', return_value=screen), \
+                    patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+                with self.assertRaises(b.DispatchUnconfirmed):
+                    self.call(reconcile_only=True)
+                send.assert_not_called()
+                key.assert_not_called()
+        self.assertFalse(self.receipt.exists())
+
     def test_report_change_refuses_reconcile(self):
         self.queued()
         Path(self.pack['report']).write_text('different report')
