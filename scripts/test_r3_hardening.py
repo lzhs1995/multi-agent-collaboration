@@ -1805,6 +1805,12 @@ class GuardWiringSymmetryTests(unittest.TestCase):
     def _args(self, root: Path):
         return SimpleNamespace(artifact_root=str(root), task_id="r3-test")
 
+    def _complete_wiring(self):
+        wiring = {}
+        for guard, event in HARNESS.REQUIRED_GUARD_WIRING.items():
+            wiring.setdefault(event, []).append(guard)
+        return wiring
+
     def test_symmetric_wiring_passes(self):
         every_guard = dict(HARNESS.REQUIRED_GUARD_WIRING)
         pre = [g for g, e in every_guard.items() if e == "PreToolUse"]
@@ -1812,7 +1818,7 @@ class GuardWiringSymmetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._validation(root)
-            both = {"PreToolUse": pre, "Stop": stop}
+            both = self._complete_wiring()
             configs = {
                 "codex": self._config(root, "a.json", both),
                 "claude": self._config(root, "b.json", both),
@@ -1830,7 +1836,7 @@ class GuardWiringSymmetryTests(unittest.TestCase):
             self._validation(root)
             configs = {
                 "codex": self._config(root, "a.json",
-                                      {"PreToolUse": pre, "Stop": stop}),
+                                      self._complete_wiring()),
                 # Executor side has only the panel guard, as observed.
                 "claude": self._config(root, "b.json",
                                        {"PreToolUse": ["cmux_agent_panel_guard"]}),
@@ -1852,10 +1858,12 @@ class GuardWiringSymmetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._validation(root)
-            good = {"PreToolUse": pre, "Stop": stop}
+            good = self._complete_wiring()
             # Same guards present on both sides, but the Stop guard is misfiled
             # under PreToolUse on one side.
-            bad = {"PreToolUse": pre + stop}
+            bad = {event: list(guards) for event, guards in good.items()}
+            bad["PreToolUse"] = pre + stop
+            bad.pop("Stop", None)
             configs = {
                 "codex": self._config(root, "a.json", good),
                 "claude": self._config(root, "b.json", bad),

@@ -11,8 +11,10 @@ quoted examples and tool output do not supply targets. Dynamic unresolved input
 remains unverified. Current compose/queue evidence overrides historical success.
 Confirmed task/callback evidence must match the full payload, original identity,
 attempt, and unchanged file pins. The checker never sends keys or writes receipts.
-It is a client hook, not an operating-system sandbox. This change supplies the
-entrypoint but does not add installer registration or hot-reload existing clients.
+It is a client hook, not an operating-system sandbox. `manage_install.py` registers
+it on PostToolUse for both clients; doctor and harness wiring checks require it.
+Installing a configuration does not hot-reload existing clients. Tests exercise
+installation, removal and missing registration in temporary configuration roots.
 
 `scripts/delivery_receipts.py` can reconcile an exact callback already present as
 a native Codex user message. It checks the original task, receiver session,

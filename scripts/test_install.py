@@ -61,3 +61,23 @@ class InstallationTests(unittest.TestCase):
             cfg = Path(td) / ".codex/hooks.json"
             cfg.write_text('{"hooks":{}}')
             self.assertFalse(m.manage(td, "doctor")["ok"])
+
+    def test_post_submit_hook_both_clients_and_missing_registration(self):
+        with tempfile.TemporaryDirectory() as td:
+            m.manage(td, "install", True)
+            for client, filename in [('codex', 'hooks.json'), ('claude', 'settings.json')]:
+                cfg = Path(td) / ('.' + client) / filename
+                original = cfg.read_bytes()
+                doc = json.loads(original)
+                commands = [h['command'] for entry in doc['hooks']['PostToolUse']
+                            for h in entry['hooks']]
+                self.assertEqual(commands.count(m.command('cmux_submit_confirmation_guard')), 1)
+                self.assertEqual(mac_harness._wired_guards(cfg)['cmux_submit_confirmation_guard'], {'PostToolUse'})
+                doc['hooks']['PostToolUse'] = []
+                cfg.write_text(json.dumps(doc))
+                self.assertFalse(m.manage(td, 'doctor')['ok'])
+                cfg.write_bytes(original)
+            m.manage(td, 'uninstall', True)
+            for client, filename in [('codex', 'hooks.json'), ('claude', 'settings.json')]:
+                cfg = Path(td) / ('.' + client) / filename
+                self.assertNotIn('cmux_submit_confirmation_guard', mac_harness._wired_guards(cfg))
