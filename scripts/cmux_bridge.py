@@ -643,57 +643,28 @@ def compose_block_text(screen):
     return "\n".join(block)
 
 
-def compose_block_is_empty(screen):
-    """True only when the current compose block holds no user content.
+def delivery_compose_text(screen):
+    """Conservative last glyph block; payload bullets never close an editor."""
+    lines = screen.splitlines()
+    positions = [i for i,line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
+    if not positions:
+        return None
+    i = positions[-1]
+    return "\n".join([_PROMPT_GLYPH_RE.sub("", lines[i], count=1), *lines[i+1:]])
 
-    Returns False when no block is open, because 'cannot see the box' must never
-    read as 'the box is safe to overwrite'. A block containing only a known
-    placeholder counts as empty.
-    """
-    body = compose_block_text(screen)
+
+def compose_block_is_empty(screen):
+    body = delivery_compose_text(screen)
     if body is None:
         return False
-    residual_lines = []
-    for row_index, raw in enumerate(body.splitlines()):
-        line = raw.strip(" \t\r\n│─╭╮╰╯")
-        if not line:
-            continue
-        if row_index > 0 and _COMPOSE_CHROME_RE.match(line):
-            continue
-        # Remove any placeholder this line consists of. Longest-first, because
-        # replacing "for shortcuts" before "? for shortcuts" leaves a stray "?"
-        # that then reads as user content -- measured while building this.
-        for ph in sorted(COMPOSE_PLACEHOLDERS, key=len, reverse=True):
-            line = line.replace(ph, "")
-        line = line.strip(" \t\r\n│─╭╮╰╯>?")
-        if line:
-            residual_lines.append(line)
-    if not residual_lines:
-        return True
-    normalized = re.sub(r"\s+", "", "".join(residual_lines))
-    virtual_prompts = {
-        re.sub(r"\s+", "", prompt)
-        for prompt in CLAUDE_VIRTUAL_COMPOSE_PROMPTS
-    }
-    if normalized in virtual_prompts:
-        return True
-    # Near its automatic compaction threshold, Claude Code renders `/compact`
-    # as a dim product suggestion even though the editable compose buffer is
-    # empty. Plain `cmux read-screen` loses that styling. Bind this exception to
-    # the product's adjacent percentage banner so a real `/compact` command in
-    # any other screen state remains occupied.
-    if normalized == "/compact" and re.search(
-        r"\b\d+%\s+until\s+auto-compact\b", screen, re.I
-    ):
-        return True
-    # Claude's automatic retry UI may put its queue-control hint directly
-    # after a confirmed virtual suggestion. The hint by itself still means an
-    # unknown queued message and must remain occupied; only this exact pair is
-    # a product-owned empty compose rendering.
-    queue_hint = re.sub(r"\s+", "", "Press up to edit queued messages")
-    return bool(
-        normalized.endswith(queue_hint)
-        and normalized[:-len(queue_hint)] in virtual_prompts)
+    lines = body.splitlines()
+    # Never discard a typed first line, even when it resembles footer chrome.
+    while len(lines) > 1 and (not lines[-1].strip() or _COMPOSE_CHROME_RE.fullmatch(lines[-1].strip())):
+        lines.pop()
+    rendered = "\n".join(lines).strip(" \t\r\n│─╭╮╰╯")
+    # Plain screen text cannot distinguish a dim suggestion from a user who
+    # typed continue, /context, /compact, or a prior virtual-prompt allowlist.
+    return rendered in ("", "Ask Codex to do anything", "Ask Claude to do anything")
 
 
 def pending_queue_holds(screen, marker):

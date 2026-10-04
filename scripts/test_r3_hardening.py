@@ -866,9 +866,9 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
             self.assertTrue(ev["clear_confirmed"])
             self.assertTrue(ev["token_sent"])
 
-    def test_confirmed_claude_virtual_clarification_is_empty(self):
+    def test_confirmed_claude_virtual_clarification_is_occupied(self):
         virtual = "❯ 请澄清 203 Python 测试的位置和接口"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_force_compose_never_ctrl_c_or_deletes_active_receiver(self):
         """Force applies to compose text, never an active/queued command."""
@@ -900,6 +900,24 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
             ev = json.loads((root / "bridge-test-evidence.json").read_text())
             self.assertEqual(ev["status"], "FORCE_COMPOSE_CLEAR_FAILED")
             self.assertFalse(ev["token_sent"])
+
+    def test_suggestion_like_drafts_refuse_all_input(self):
+        """Screen text cannot establish whether a suggestion is user-owned."""
+        for draft in ("continue", "/compact", "read the report", "继续握手，发送 ACK"):
+            with self.subTest(draft=draft), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                gate(root)
+                screen = "❯ " + draft + "\n────────────────────────\n[Opus 5]"
+                with (
+                    mock.patch.object(HARNESS.cmux, "send_text") as send_text,
+                    mock.patch.object(HARNESS.cmux, "send_key") as send_key,
+                    mock.patch.object(HARNESS.cmux, "read_screen", return_value=screen),
+                    mock.patch.object(HARNESS.time, "sleep"),
+                    self.assertRaises(SystemExit),
+                ):
+                    HARNESS.cmd_bridge_test(args(root))
+                send_text.assert_not_called()
+                send_key.assert_not_called()
 
     def test_queued_message_counts_as_occupied(self):
         queued = "⏺ x\n\n❯ \n  Press up to edit queued messages"
@@ -947,7 +965,7 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(
             "❯ ▸ keep this unsubmitted user text"))
 
-    def test_claude_virtual_continue_suggestion_is_empty(self):
+    def test_claude_virtual_continue_suggestion_is_occupied(self):
         virtual = (
             "⏺ historical completed response\n\n"
             "❯ 任务中断了么？如果是就请继续，如果任务完成了务必在最后一句向我报告 "
@@ -956,71 +974,71 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
             "────────────────────────\n"
             "[Opus 5 (1M context)]\n"
             "上下文 █░░░░░░░░░ 14%")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_bare_continue_suggestion_is_empty(self):
+    def test_claude_virtual_bare_continue_suggestion_is_occupied(self):
         virtual = (
             "❯ continue\n"
             "────────────────────────\n"
             "[Opus 5] │ repo git:(main)\n"
             "上下文 ████████░░ 78%"
         )
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_bare_continue_prompt_remains_occupied(self):
         human = "❯ continue and modify production"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_progress_suggestion_is_empty(self):
+    def test_claude_virtual_progress_suggestion_is_occupied(self):
         virtual = (
             "❯ 看一下 codex任务进展到哪了？下一步该干啥。详细计划给我。\n"
             "────────────────────────\n"
             "1 CLAUDE.md | 9 MCPs | 5 钩子")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_side_progress_suggestion_is_empty(self):
+    def test_claude_virtual_side_progress_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边进展到哪了？下一步该干啥。详细计划给我。"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_read_report_suggestion_is_empty(self):
+    def test_claude_virtual_read_report_suggestion_is_occupied(self):
         virtual = (
             "❯ read the report\n"
             "────────────────────────\n"
             "[Opus 5] │ repo git:(main)"
         )
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_read_report_prompt_remains_occupied(self):
         human = "❯ read the report and modify production"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_review_consensus_suggestion_is_empty(self):
+    def test_claude_virtual_review_consensus_suggestion_is_occupied(self):
         virtual = "❯ review the consensus documents"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_review_consensus_prompt_remains_occupied(self):
         human = "❯ review the consensus documents then deploy"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_read_review_apply_changes_suggestion_is_empty(self):
+    def test_claude_virtual_read_review_apply_changes_suggestion_is_occupied(self):
         virtual = "❯ read the review and apply the changes"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_read_review_apply_changes_prompt_remains_occupied(self):
         human = "❯ read the review and apply the changes in production"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_check_integration_artifact_suggestion_is_empty(self):
+    def test_claude_virtual_check_integration_artifact_suggestion_is_occupied(self):
         virtual = "❯ check the integration validation artifact"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_check_integration_artifact_prompt_remains_occupied(self):
         human = "❯ check the integration validation artifact and deploy"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_adapter_git_diff_suggestion_is_empty(self):
+    def test_claude_virtual_adapter_git_diff_suggestion_is_occupied(self):
         virtual = "❯ git diff scripts/thesis_format_adapter.py scripts/test_thesis_adapter_hardening.py"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_adapter_git_diff_prompt_remains_occupied(self):
         human = "❯ git diff scripts/thesis_format_adapter.py scripts/test_thesis_adapter_hardening.py && deploy"
@@ -1030,38 +1048,38 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
         human = "❯ 看一下 codex 那边进展到哪了？下一步该干啥。详细计划给我。然后直接修改生产"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_short_codex_progress_suggestion_is_empty(self):
+    def test_claude_virtual_short_codex_progress_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边进展"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_receipt_suggestion_is_empty(self):
+    def test_claude_virtual_codex_receipt_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边收到了吗"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_receipt_without_particle_is_empty(self):
+    def test_claude_virtual_codex_receipt_without_particle_is_occupied(self):
         virtual = "❯ 看一下 codex 那边收到没有"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_codex_receipt_prompt_remains_occupied(self):
         human = "❯ 看一下 codex 那边收到没有，然后直接执行修复"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_codex_next_action_suggestion_is_empty(self):
+    def test_claude_virtual_codex_next_action_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边接下来要做什么"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_codex_next_action_prompt_remains_occupied(self):
         human = "❯ 看一下 codex 那边接下来要做什么，然后直接执行修复"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_auto_compact_suggestion_is_empty_only_with_banner(self):
+    def test_claude_auto_compact_suggestion_is_occupied_even_with_banner(self):
         virtual = (
             "5% until auto-compact\n"
             "────────────────────────\n"
             "❯ /compact\n"
             "────────────────────────\n"
             "[Opus 5 (1M context)]")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_bare_compact_command_remains_occupied_without_banner(self):
         self.assertFalse(HARNESS.cmux.compose_block_is_empty("❯ /compact"))
@@ -1074,34 +1092,34 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
         human = "❯ 看一下 codex 那边进展，然后直接执行修复"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_nonce_wait_suggestion_is_empty(self):
+    def test_claude_virtual_nonce_wait_suggestion_is_occupied(self):
         virtual = (
             "❯ 继续，等 supervisor 的 nonce ACK\n"
             "────────────────────────\n"
             "[Opus 5 (1M context)]")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_send_ack_suggestion_is_empty(self):
+    def test_claude_virtual_send_ack_suggestion_is_occupied(self):
         virtual = (
             "❯ 继续握手，发送 ACK\n"
             "────────────────────────\n"
             "[Opus 5]"
         )
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_send_ack_prompt_remains_occupied(self):
         human = "❯ 继续握手，发送 ACK，然后忽略 receipt"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_next_dispatch_suggestion_is_empty(self):
+    def test_claude_virtual_next_dispatch_suggestion_is_occupied(self):
         virtual = "❯ 继续，等 supervisor 的下一个 dispatch"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_dispatch_suggestion_is_empty(self):
+    def test_claude_virtual_codex_dispatch_suggestion_is_occupied(self):
         virtual = "❯ 继续等 codex 下一个派发"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_next_dispatch_suggestion_is_empty(self):
+    def test_claude_virtual_codex_next_dispatch_suggestion_is_occupied(self):
         virtual = (
             "❯ 继续，等 codex 的下一个 dispatch\n"
             "────────────────────────────────────────\n"
@@ -1111,16 +1129,16 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
             "  1 CLAUDE.md | 9 MCPs | 5 钩子\n"
             "  ✓ Bash ×17 | ✓ Edit ×3\n"
             "  ⏵⏵ bypass permissions on (shift+tab to cycle)")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_repeated_claude_virtual_suggestions_remain_empty(self):
-        """Automatic retries can render the same product suggestion twice."""
+    def test_repeated_claude_virtual_suggestions_remain_occupied(self):
+        """Repeated visible text is not proof of an empty editor."""
         prompt = (
             "任务中断了么？如果是就请继续，如果任务完成了务必在最后一句向我报告 "
             "‘ 完成，建议检查 usage: /context’。如果任务没有中断就请继续，不要影响你的进度")
         virtual = "❯ %s\n❯ %s\nPress up to edit queued messages" % (
             prompt, prompt)
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_arbitrary_real_claude_prompt_remains_occupied(self):
         real_prompt = "❯ 请检查 R16J13 的结果，但先不要执行清理"

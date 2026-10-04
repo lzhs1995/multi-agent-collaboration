@@ -46,3 +46,7 @@ zero sends to a shell, preserved user input, one send for queued delivery, and
 the distinction between current and historical UI. They do not certify another
 terminal, restart a peer or change its model. Cross-agent review records who
 actually responded; unavailable peers' old evidence is not new consensus.
+
+## 2026-10-05: Suggestion-like text preserves draft ownership
+
+Screen text alone cannot distinguish a product suggestion from a typed draft. Treat visible `continue`, `/compact`, review requests and handshake suggestions as occupied, including with an auto-compact banner. Only an actually empty editor or the exact standard empty placeholder passes the empty-editor predicate. Preserve the first typed row and payload bullets; trim recognized footer rows only. Normal dispatch must refuse with zero paste/key operations. This source regression fix does not authorize force clearing or imply a running client has reloaded.
