@@ -2101,7 +2101,9 @@ class TaskPackDispatchContractTests(unittest.TestCase):
             report.write_text("verified\n", encoding="utf-8")
             with mock.patch.object(
                 BRIDGE, "submit_text", return_value={"confirmed": True, "retries": 0}
-            ) as submit:
+            ) as submit, mock.patch.object(
+                BRIDGE, "require_same_workspace", return_value={"target_surface_uuid": "test-target"}
+            ):
                 receipt = BRIDGE.submit_completion_callback(path)
             submit.assert_called_once()
             self.assertTrue(receipt["confirmed"])

@@ -544,7 +544,22 @@ CLAUDE_VIRTUAL_COMPOSE_PROMPTS = (
 # Status/footer lines some TUIs render inside or directly under the compose box.
 # They are chrome, not user content, but they are not fixed strings either, so
 # they need patterns rather than substring removal.
+def _clipped_prefix_pattern(literal):
+    pattern = ""
+    for char in reversed(literal):
+        pattern = "(?:" + re.escape(char) + pattern + ")?"
+    return pattern
+
+
+_PROVIDER_HINT_ROW_RE = re.compile(
+    r"\s*(?:←\s*for agents\s*·\s*)?\?\s*for shortcuts\s*"
+    r"(?:⚠\s*(?:\d+\s*" + _clipped_prefix_pattern("warnings · f2 to view") +
+    r")?)?\s*", re.IGNORECASE,
+)
+
+
 _COMPOSE_CHROME_RE = re.compile(
+    r"^" + _PROVIDER_HINT_ROW_RE.pattern + r"$|"
     r"^\s*(?:gpt-[\w.\-]+|claude-[\w.\-]+|opus-[\w.\-]+|sonnet-[\w.\-]+)\b.*$|"
     r"^\s*\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\].*$|"
     r"^\s*[^\n]*\bgit:\([^)]*\).*$|"
@@ -859,7 +874,11 @@ def receiver_input_kind(screen):
                 and all(footer.fullmatch(row) for row in tail[3:])):
             return "AGENT_TUI"
         # A historical footer cannot override unknown current input below it.
-        if len(tail) > 1 and chrome.search(tail[-1]):
+        footer_tail = tail
+        if (len(footer_tail) > 2
+                and _PROVIDER_HINT_ROW_RE.fullmatch(footer_tail[-1])):
+            footer_tail = footer_tail[:-1]
+        if len(footer_tail) > 1 and chrome.search(footer_tail[-1]):
             return "AGENT_TUI"
         if len(tail) == 1 and re.fullmatch(r"\s*[›❯]\s*Ask (?:Codex|Claude) to do anything\s*", tail[0]):
             return "AGENT_TUI"
@@ -1075,6 +1094,53 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
+def _exclusive_json(path, value):
+    encoded = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        # Preserve a partial intent: uncertainty must never cause a resend.
+        raise
+
+
+def observe_completion_callback(task_pack_path, confirm_lines=200):
+    """Observe an existing attempt without pasting or pressing any key."""
+    pack = validate_task_pack_contract(task_pack_path)
+    from availability_contract import require_action
+    require_action(pack["task_id"], "callback", pack)
+    receipt_path = Path(pack["completion_receipt"])
+    pending_path = Path(str(receipt_path) + ".pending.json")
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    for key in ("task_id", "completion_nonce", "completion_callback", "callback_target", "report"):
+        if pending.get(key) != pack.get(key):
+            raise TaskPackContractError("CALLBACK_PENDING_BINDING_CHANGED: " + key)
+    if pending.get("task_pack_sha256") != _sha256_file(task_pack_path):
+        raise TaskPackContractError("CALLBACK_PENDING_PACK_CHANGED")
+    if pending.get("report_sha256") != _sha256_file(pack["report"]):
+        raise TaskPackContractError("CALLBACK_PENDING_REPORT_CHANGED")
+    binding = require_same_workspace(pack["callback_target"])
+    if binding != pending.get("workspace_binding"):
+        raise TaskPackContractError("CALLBACK_PENDING_WORKSPACE_CHANGED")
+    screen = read_screen(binding["target_surface_uuid"], lines=confirm_lines)
+    if (pending_queue_holds(screen, pack["completion_nonce"])
+            or compose_contains(screen, pack["completion_nonce"])
+            or _prompt_block_pending(screen, pack["completion_nonce"])
+            or not _submission_confirmed(screen, pack["completion_nonce"])):
+        raise DispatchUnconfirmed(
+            "CALLBACK_PENDING: not yet proven consumed; no input sent",
+            state=DELIVERY_QUEUED_AT_RECEIVER,
+        )
+    receipt = dict(pending, confirmed=True, bridge_retries=0,
+                   recorded_at_epoch=time.time(), confirmation_method="observe_existing_attempt",
+                   receiver_screen_sha256=hashlib.sha256(screen.encode()).hexdigest())
+    _exclusive_json(receipt_path, receipt)
+    return receipt
+
+
 def submit_completion_callback(task_pack_path, confirm_lines=200):
     """Deliver the exact terminal callback and persist confirmation evidence."""
     pack = validate_task_pack_contract(task_pack_path)
@@ -1090,6 +1156,20 @@ def submit_completion_callback(task_pack_path, confirm_lines=200):
         raise TaskPackContractError(
             f"COMPLETION_RECEIPT_EXISTS: refusing duplicate callback for {receipt_path}"
         )
+    pending_path = Path(str(receipt_path) + ".pending.json")
+    if pending_path.exists():
+        return observe_completion_callback(task_pack_path, confirm_lines=confirm_lines)
+    # Persist before input. A timeout, crash or queued callback must not erase
+    # knowledge of the attempt and trigger another paste on the next call.
+    pending = {
+        key: pack[key] for key in ("task_id", "completion_nonce", "completion_callback",
+                                  "callback_target", "report")
+    }
+    pending.update(report_sha256=_sha256_file(report), report_bytes=report.stat().st_size,
+                   task_pack_sha256=_sha256_file(task_pack_path),
+                   workspace_binding=require_same_workspace(pack["callback_target"]),
+                   attempted_at_epoch=time.time(), confirmed=False)
+    _exclusive_json(pending_path, pending)
     result = submit_text(
         pack["callback_target"],
         pack["completion_callback"],
@@ -1098,6 +1178,8 @@ def submit_completion_callback(task_pack_path, confirm_lines=200):
     )
     if result.get("confirmed") is not True:
         raise DispatchUnconfirmed("completion callback delivery was not confirmed")
+    if _sha256_file(report) != pending["report_sha256"]:
+        raise TaskPackContractError("CALLBACK_PENDING_REPORT_CHANGED")
 
     receipt = {
         "task_id": pack["task_id"],
@@ -1105,8 +1187,8 @@ def submit_completion_callback(task_pack_path, confirm_lines=200):
         "completion_callback": pack["completion_callback"],
         "callback_target": pack["callback_target"],
         "report": str(report),
-        "report_sha256": _sha256_file(report),
-        "report_bytes": report.stat().st_size,
+        "report_sha256": pending["report_sha256"],
+        "report_bytes": pending["report_bytes"],
         "confirmed": True,
         "bridge_retries": result.get("retries", 0),
         "recorded_at_epoch": time.time(),

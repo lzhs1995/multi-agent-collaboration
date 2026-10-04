@@ -101,6 +101,39 @@ not an OS sandbox against arbitrary self-written socket clients.
 
 ## Delivery And Monitoring
 
+### Fast handshake and verified delivery in both directions
+
+- Give the executor the absolute pending handshake receipt path in the initial
+  challenge. It reads that file and the bound skill, then returns the exact ACK;
+  no registry search, task audit or formal consensus is part of a handshake.
+  A healthy current-task handshake is reused, not repeated for each status turn.
+- Match the observation budget to the harness phase minimum. A shorter local
+  observation is a supervisor budget limitation, not executor silence. Recover a
+  late genuine ACK against the original task/provider/nonce without resending.
+- **Paste is not submission; Enter is not delivery.** For prompts and callbacks
+  alike, use the guarded bridge, lowercase `enter`, and a post-key screen check.
+  A marker still in compose is not delivered. A queued marker is pending, not
+  failed and not confirmed. Only real receiver activity after the marker can
+  confirm delivery; a prompt echo or unrelated activity cannot.
+- `submit_completion_callback` writes an exclusive `.pending.json` intent before
+  input, binding task pack SHA, report SHA, nonce and live workspace identities.
+  Calling it again with that intent performs **observation only**, never another
+  paste/key. `observe_completion_callback` is the explicit no-input recovery
+  entrypoint. Changed report/pack/peer bindings fail closed. Keep an uncertain
+  attempt; do not delete its journal to retry. Older attempts without a journal
+  require their original delivery evidence and receiver history; do not create a
+  retroactive send intent or manufacture a confirmed receipt.
+- A pending intent is not a completion receipt and cannot satisfy the Stop hook.
+  If zero-input refusal is proven, preserve that evidence and fix the input
+  classifier before authorizing a successor attempt. Do not treat a classifier
+  error as executor unavailability or bypass workspace/compose guards.
+- Two user-authorized existing executors are useful for independent bounded
+  tasks. Give each a separate task id, nonce, artifact root and write scope;
+  shared repositories have one writer. Two tabs in one executor pane are not
+  two independent UI channels: serialize input and recheck exact surface UUIDs.
+  Supervisors continue independent work while callbacks are pending. Persistent
+  executor failures use the authorized solo takeover boundary below.
+
 Read [receiver input and delivery](references/receiver-input-and-delivery.md)
 when a surface may have returned to a shell or a send is unconfirmed. Current
 input type, submission, consumption, agreement and accepted output are separate
