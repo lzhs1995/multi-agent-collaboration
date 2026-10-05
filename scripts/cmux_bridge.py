@@ -843,7 +843,9 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
         # an arbitrary blank suffix or infer chrome from unknown trailing text.
         if has_model_footer:
             for gap in (1, 2):
-                if len(lines) > gap and all(row == "" for row in lines[-gap:]):
+                if len(lines) > gap and all(
+                        row == "" or (row == " " and rows[start].startswith("› "))
+                        for row in lines[-gap:]):
                     bodies.append("\n".join(lines[:-gap]))
         for candidate in bodies:
             if candidate == text:
