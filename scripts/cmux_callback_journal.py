@@ -65,6 +65,24 @@ def verified_receipt(bridge, surface, task_pack_path):
         pastes = [e for e in attempt['events'] if e['phase'] == 'PASTE_INTENT']
         if len(pastes) != 1 or pastes[0].get('screen_sha256') != bridge.screen_hash(pastes[0]['screen']):
             return None
+        if receipt.get('confirmation_source') == 'original_journal_native_user_record':
+            from callback_native_evidence import validate
+            evidence = receipt['native_evidence']
+            native = evidence['native']
+            receiver = receipt['receiver_identity']
+            if (type(receipt.get('input_operations')) is not int
+                    or receipt['input_operations'] != 0
+                    or receipt.get('reconciled_read_only') is not True
+                    or receiver['caller_surface_uuid'] != identity['target_surface_uuid']
+                    or receiver['target_surface_uuid'] != identity['caller_surface_uuid']
+                    or receiver['workspace_uuid'] != identity['workspace_uuid']
+                    or validate(path, attempts[-1], native['path'], native['line'],
+                                native['session_id']) != evidence):
+                return None
+            if any(snapshot(p) != pin for p, pin in pins.items()) or bridge.pin_workspace(surface) != live:
+                return None
+            return dict(source='revalidated_native_callback_journal', identity=identity,
+                        pack=pins[path], report=pins[report], receipt=pins[receipt_path])
         if receipt.get('reconciled_read_only') is True:
             observed = Path(receipt['observation'])
             if observed.parent != journal or not observed.name.startswith('observation-'):

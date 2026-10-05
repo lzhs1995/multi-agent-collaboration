@@ -29,6 +29,25 @@ silently interpreted as an absent attempt. An old bound bridge remains subject
 to its original task skill; this module does not migrate sender state. The legacy
 sender and its bounded late-ACK recovery are unchanged.
 
+### Existing journal: exact native reception
+
+`callback_native_evidence.validate` checks an existing journal against the exact
+native receiver user record. It creates evidence only. Explicit receiver-side
+`reconcile_received` may publish a receipt using the original bound bridge and
+existing delivery lock: authenticate the receiver session and live participants,
+check original pack/report/attempt hashes and post-send native text, revalidate
+the evidence and lock inode, then atomically publish without overwriting. It never
+pastes, presses Enter, disarms a task, or changes availability. A legacy pending
+file, active sender lock, replaced inode or existing receipt refuses settlement.
+
+The journal reader revalidates native evidence before accepting this receipt.
+Do not install that reader alone over an incompatible bridge. Preserve fixed
+task controllers; test their receipt contract separately. A real receiver-side
+settlement proves receipt, not a subsequent executor Stop invocation, global
+deployment, report acceptance, or success of the underlying research. Record
+those results independently. This is explicit recovery for already-delivered
+messages, not permission to fabricate a missing attempt or replay a callback.
+
 Validation: `python3 -B -m unittest discover -s scripts -p 'test_*.py' -q`.
 The semantic command checker runs in a subprocess to prevent a script-level
 `sys.exit` from prematurely terminating test discovery. All examples are synthetic.

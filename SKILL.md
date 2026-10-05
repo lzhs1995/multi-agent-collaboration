@@ -200,4 +200,10 @@ Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before
 
 ### Read-only confirmation
 
+For an existing callback journal with an exact native receiver user record,
+use the explicit original-lock settlement described below. Preserve the original
+task/report/attempt and authenticate the live receiver; never resend to repair a
+missing receipt. Evidence validation alone is not receipt publication, and a
+published receipt does not prove a later Stop hook or whole-task acceptance.
+
 Use [read-only confirmation and native receipts](references/read-only-delivery-confirmation.md) to distinguish compose, queue, consumption, and report acceptance. Preserve the original sender journal and runtime; the new checker does not authorize retries or silently migrate old attempts.
