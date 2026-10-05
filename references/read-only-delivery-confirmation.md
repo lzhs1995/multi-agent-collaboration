@@ -60,3 +60,27 @@ receiver. Low-level observer calls are reserved for those original controllers.
 These are source behavior changes. Passing offline tests does not establish
 that a pinned installed release or running client has loaded them. Preserve old
 controllers and journals until a separately verified runtime transition.
+
+## Keep the reader and bridge in one version root
+
+A reader-only overlay is not a supported transition. A focused comparison found
+that the retained bridge lacked `_delivery_confirmed`, which the new journal
+reader requires: the mixed pair failed five of nine cases (two failures and
+three errors), while the complete candidate passed all nine. Broad suites with
+unchanged failure names did not detect this incompatibility reliably.
+
+Point new-task wrappers and hook commands at the same complete, pinned version
+root. Before applying a scoped transition, preserve original bytes, modes and
+hashes, validate exact changes, and use the supported mutation lock and
+compare-and-swap installer. Do not overwrite foreign skill directories or
+rewrite historical task controllers and journals. Verify actual import roots,
+wrapper startup and semantic hook cases after installation. Configuration edits
+still do not prove existing clients reloaded or that callbacks were delivered.
+
+For a late handshake ACK, retain the expired receipt, original detector error and
+task/provider/nonce. Recheck live workspace and peer identity, parse the actual
+assistant response with the canonical ACK parser, and publish the recovery
+through the original receipt writer. Do not resend the challenge, invent an
+earlier submission time, or blame executor silence for a supervisor timeout
+below the phase minimum. Finalize a task pack before dispatch and include every
+required prompt binding; a pre-input contract refusal is not a sent task.
