@@ -39,6 +39,69 @@ class JournalTests(unittest.TestCase):
     def confirmed_screen(self):
         return '› ' + self.pack['completion_callback'] + '\n• Read report\n' + IDLE
 
+    def pending_original(self):
+        screen = '• Working (3s • esc to interrupt)\n› ' + self.pack['completion_callback'] + '\nGPT-6 high'
+        with patch.object(b, 'read_screen', side_effect=[IDLE, screen]), patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            with self.assertRaises(b.DispatchUnconfirmed):
+                self.call()
+        return screen + '\ntab to queue message'
+
+    def test_original_enter_resume_one_tab_no_paste(self):
+        pending = self.pending_original()
+        with patch.object(b, 'read_screen', side_effect=[pending, self.confirmed_screen()]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.assertTrue(self.call(resume_queue_only=True)['confirmed'])
+            send.assert_not_called()
+            key.assert_called_once_with('surface:46', 'tab')
+
+    def test_queue_observation_does_not_create_receipt(self):
+        pending = self.pending_original()
+        queue = 'Messages to be submitted after next tool call\n' + self.pack['completion_callback'] + '\n' + IDLE
+        with patch.object(b, 'read_screen', side_effect=[pending, queue]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.DispatchUnconfirmed):
+                self.call(resume_queue_only=True)
+            key.assert_called_once(); send.assert_not_called()
+        self.assertFalse(self.receipt.exists())
+
+    def test_replaced_lock_blocks_recovery(self):
+        pending = self.pending_original()
+        def screen(*args, **kwargs):
+            lock = self.journal / 'delivery.lock'
+            lock.rename(lock.with_suffix('.retired'))
+            lock.touch()
+            return pending
+        with patch.object(b, 'read_screen', side_effect=screen), patch.object(b, 'send_key') as key:
+            with self.assertRaisesRegex(b.TaskPackContractError, 'LOCK_CHANGED'):
+                self.call(resume_queue_only=True)
+            key.assert_not_called()
+
+    def test_failed_queue_key_is_never_retried(self):
+        pending = self.pending_original()
+        with patch.object(b, 'read_screen', return_value=pending), patch.object(b, 'send_text') as send, patch.object(b, 'send_key', side_effect=RuntimeError('transport lost')) as key:
+            with self.assertRaises(RuntimeError):
+                self.call(resume_queue_only=True)
+            with self.assertRaisesRegex(b.TaskPackContractError, 'NO_RECOVERABLE'):
+                self.call(resume_queue_only=True)
+            key.assert_called_once(); send.assert_not_called()
+        self.assertFalse(self.receipt.exists())
+
+    def test_changed_composer_cannot_resume(self):
+        pending = self.pending_original().replace('DONE|', 'CHANGED|')
+        with patch.object(b, 'read_screen', return_value=pending), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.DispatchUnconfirmed):
+                self.call(resume_queue_only=True)
+            key.assert_not_called(); send.assert_not_called()
+
+    def test_recovery_rejects_tampered_event(self):
+        self.pending_original()
+        path = self.journal / 'attempt-0001.json'
+        data = json.loads(path.read_text())
+        data['events'][0]['screen'] = 'tampered'
+        path.write_text(json.dumps(data))
+        with patch.object(b, 'send_key') as key:
+            with self.assertRaisesRegex(b.TaskPackContractError, 'EVIDENCE_CHANGED'):
+                self.call(resume_queue_only=True)
+            key.assert_not_called()
+
     def test_other_sender_target_lock_blocks_callback_without_input(self):
         import hashlib
         root = Path.home() / '.local/state/multi-agent-collaboration/deliveries-v1'

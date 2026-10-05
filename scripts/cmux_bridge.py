@@ -1352,11 +1352,11 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False):
+def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False, resume_queue_only=False):
     """Report-bound delivery with durable attempts and zero-input reconciliation."""
     from cmux_callback_journal import deliver
     return deliver(sys.modules[__name__], task_pack_path, confirm_lines,
-                   reconcile_only=reconcile_only)
+                   reconcile_only=reconcile_only, resume_queue_only=resume_queue_only)
 
 
 def read_screen(surface, lines=200):

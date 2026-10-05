@@ -110,7 +110,9 @@ def verified_receipt(bridge, surface, task_pack_path):
         return None
 
 
-def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
+def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, resume_queue_only=False):
+    if reconcile_only and resume_queue_only:
+        raise bridge.TaskPackContractError("CONFLICTING_RECOVERY_MODES")
     from availability_contract import require_action
     pack = bridge.validate_task_pack_contract(task_pack_path)
     require_action(pack['task_id'], 'callback', pack)
@@ -164,7 +166,54 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False):
         old = json.loads(attempts[-1].read_text()) if attempts else None
         if old and old['binding'] != binding:
             raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED: preserve previous attempt')
-        if reconcile_only:
+        if resume_queue_only:
+            # Resume only a recorded Enter that left this exact payload in the
+            # measured Codex composer. Never paste, Enter again, or retry Tab.
+            events = old.get('events', []) if old else []
+            phases = [e.get('phase') for e in events]
+            if (not old or phases.count('PASTE_INTENT') != 1
+                    or phases.count('ENTER_INTENT') != 1
+                    or 'POST_ENTER_OBSERVATION' not in phases
+                    or any('TAB' in str(p) or p == 'EXTRA_ENTER_INTENT' for p in phases)):
+                raise bridge.TaskPackContractError('NO_RECOVERABLE_ENTER_ATTEMPT')
+            if any(not isinstance(e.get('screen'), str) or
+                   e.get('screen_sha256') != bridge.screen_hash(e['screen'])
+                   for e in events if 'screen' in e or 'screen_sha256' in e):
+                raise bridge.TaskPackContractError('RECOVERY_SCREEN_EVIDENCE_CHANGED')
+            screen = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
+            if not bridge._codex_tab_queue_allowed(screen, pack['completion_callback']):
+                raise bridge.DispatchUnconfirmed('ORIGINAL_COMPOSER_NOT_RECOVERABLE: no input')
+            # Revalidate identity/report immediately before persisting key intent.
+            if bridge.pin_workspace(pack['callback_target']) != proof or bridge._sha256_file(report) != binding['report_sha256']:
+                raise bridge.TaskPackContractError('RECOVERY_BINDING_CHANGED')
+            for held in (lock, target_lock):
+                opened = os.fstat(held.fileno())
+                current = os.lstat(held.name)
+                if (opened.st_dev, opened.st_ino, opened.st_nlink) != (current.st_dev, current.st_ino, 1):
+                    raise bridge.TaskPackContractError('RECOVERY_LOCK_CHANGED')
+            if bridge._sha256_file(task_pack_path) != binding['task_pack_sha256']:
+                raise bridge.TaskPackContractError('RECOVERY_TASK_CHANGED')
+            attempt_path = attempts[-1]
+            if json.loads(attempt_path.read_text()) != old:
+                raise bridge.TaskPackContractError('RECOVERY_JOURNAL_CHANGED')
+            old['phase'] = 'QUEUE_TAB_INTENT'
+            old['events'].append(dict(phase='QUEUE_TAB_INTENT', at_epoch=time.time(),
+                                      screen=screen, screen_sha256=bridge.screen_hash(screen)))
+            write_json(attempt_path, old)
+            bridge.send_key(pack['callback_target'], 'tab')
+            after = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
+            old['phase'] = 'POST_QUEUE_TAB_OBSERVATION'
+            old['events'].append(dict(phase=old['phase'], at_epoch=time.time(),
+                                      screen=after, screen_sha256=bridge.screen_hash(after)))
+            write_json(attempt_path, old)
+            before = next(e['screen'] for e in events if e['phase'] == 'PASTE_INTENT')
+            if not bridge._delivery_confirmed(before, after, pack['completion_nonce'], pack['completion_callback']):
+                raise bridge.DispatchUnconfirmed('QUEUE_ACTION_UNCONFIRMED: observe original; no more input')
+            result = {'confirmed': True, 'retries': 0, 'queue_key': 'tab'}
+            old.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time())
+            write_json(attempt_path, old)
+            evidence = {'reconciled_read_only': False, 'attempt': str(attempt_path)}
+        elif reconcile_only:
             if not old or old['phase'] in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_ATTEMPT: cannot manufacture receipt')
             screen = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
