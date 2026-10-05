@@ -207,3 +207,8 @@ missing receipt. Evidence validation alone is not receipt publication, and a
 published receipt does not prove a later Stop hook or whole-task acceptance.
 
 Use [read-only confirmation and native receipts](references/read-only-delivery-confirmation.md) to distinguish compose, queue, consumption, and report acceptance. Preserve the original sender journal and runtime; the new checker does not authorize retries or silently migrate old attempts.
+
+
+## 归档双执行者现场经验（2026-10-05）
+
+见[归档回调与独立收尾](references/archive-callback-boundaries-20261005.md)。区分原生入站、正式回执与候选补丁实效；仅文档增量，不替换在途控制器。
