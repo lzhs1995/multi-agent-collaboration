@@ -67,6 +67,26 @@ well as identity helpers. Once an executor accepts useful work, continue the
 main product task instead of adding coordination-only reviews.
 
 
+## Attribute a blocked Stop to its actual task
+
+With two executors in one workspace, a Stop failure must name the marker that
+produced that verdict. Return the failing marker from the same evaluation; do
+not rescan the registry and print its first entry. A wrong task hint can send an
+executor looking for another task's receipt even when the underlying participant
+check is correct. Test callback failures, evidence contradictions and missing
+summaries with a different executor's marker first, plus registry changes after
+evaluation. Keep callback, report-hash and reentry requirements intact.
+
+For an already-submitted task, later user prompts may separate its marker from
+visible activity. That makes screen attribution inconclusive; it does not prove
+that the executor never received the task. Preserve the attempt and do not add
+reminder prompts, repeat the task or relax cross-prompt evidence checks. Read a
+completed report independently and record report acceptance separately from the
+transport receipt. While useful work is already assigned, continue supervisor
+work instead of creating another communication review or repeatedly polling.
+
+
+
 ## Compaction and delayed observation are separate from idle capacity
 
 An executor compacting after a submitted challenge is not idle or unreachable.

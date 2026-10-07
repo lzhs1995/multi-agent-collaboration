@@ -1,5 +1,7 @@
 """Real stdin/exit-code tests; no native session or transport is invoked."""
 import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -8,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 HOOK = Path(os.environ.get('STOP_GUARD_UNDER_TEST', Path(__file__).with_name('cmux_consensus_stop_guard.py')))
 
@@ -95,6 +98,63 @@ class StopReentryTests(unittest.TestCase):
         r = self.call(dict(stop_hook_active=True), check_file=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn('ALLOW:', r.stdout)
+
+    def earlier_other_task(self):
+        """A different executor's v2 marker precedes this task's v1 marker."""
+        directory = self.marker.parent / self.workspace
+        directory.mkdir()
+        self.addCleanup(directory.rmdir)
+        path = directory / 'first.json'
+        self.addCleanup(path.unlink)
+        other_root = self.root / 'other-task'
+        other_root.mkdir()
+        path.write_text(json.dumps(dict(
+            task_id='other-task', artifact_root=str(other_root),
+            participants=[dict(role='executor', surface_uuid='other-executor')],
+        )))
+        for filename in ('validation.json', 'consensus-validation.json'):
+            (other_root / filename).write_text(json.dumps(dict(status='PASS', task_id='other-task')))
+        return path
+
+    def test_callback_failure_names_its_task_not_first_marker(self):
+        other = self.earlier_other_task()
+        before = self.snapshot() | {str(other): other.read_bytes()}
+        result = self.call({})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('completion callback receipt missing', result.stderr)
+        self.assertIn(f'(armed marker: task=offline-test root={self.root})', result.stderr)
+        self.assertNotIn('(armed marker: task=other-task', result.stderr)
+        self.assertEqual(before, self.snapshot() | {str(other): other.read_bytes()})
+
+    def test_contradiction_names_the_failing_task(self):
+        self.earlier_other_task()
+        (self.root / 'task-pack.json').unlink()
+        result = self.call(dict(last_assistant_message='consensus-validation PASS'))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(f'(armed marker: task=offline-test root={self.root})', result.stderr)
+
+    def test_missing_summary_names_the_failing_task(self):
+        self.earlier_other_task()
+        (self.root / 'task-pack.json').unlink()
+        result = self.call(dict(last_assistant_message='all rounds are recorded'))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('validation.json missing/not PASS', result.stderr)
+        self.assertIn(f'(armed marker: task=offline-test root={self.root})', result.stderr)
+
+    def test_diagnostic_does_not_rescan_markers_after_verdict(self):
+        spec = importlib.util.spec_from_file_location('stop_guard_marker_test', HOOK)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        marker = json.loads(self.marker.read_text())
+        payload = dict(surface_id=self.surface, final_message='Report pending')
+        with mock.patch.dict(os.environ, {'CMUX_SURFACE_ID': self.surface}), \
+                mock.patch.object(guard, '_active_markers', side_effect=[[marker], []]) as read, \
+                mock.patch.object(sys, 'argv', [str(HOOK)]), \
+                mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+            self.assertEqual(guard.main(), 2)
+            self.assertEqual(read.call_count, 1)
+            self.assertIn(f'(armed marker: task=offline-test root={self.root})', stderr.getvalue())
 
 
 if __name__ == '__main__':
