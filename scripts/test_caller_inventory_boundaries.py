@@ -154,6 +154,7 @@ class ProcessExitEvidenceTests(unittest.TestCase):
         libc = SimpleNamespace(sysctl=Mock(return_value=0))
         with patch.object(daemon.sys, 'platform', 'darwin'), \
              patch.object(daemon.os, 'getuid', return_value=501), \
+             patch.object(daemon.os, 'sysconf', return_value=262144), \
              patch.object(daemon.ctypes, 'CDLL', side_effect=lambda name, **kw: lib if name else libc), \
              patch.object(daemon, '_args', return_value=(['codex', 'resume', T], {})):
             return read_kernel_process(99, arguments=arguments, validate_argv=validate_argv)
