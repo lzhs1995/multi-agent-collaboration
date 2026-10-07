@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import cmux_hook_identity as hook_identity
 import re
 import shlex
 import sys
@@ -49,8 +50,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _workspace_key(payload: dict[str, Any]) -> str:
-    return (os.environ.get("CMUX_WORKSPACE_ID")
-            or payload.get("workspace_id") or "default")
+    return hook_identity.identity(payload)[0]
 
 
 def _workspace_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -206,7 +206,7 @@ def _lease_is_stale(rec: dict[str, Any], now: datetime | None = None) -> bool:
     return expires <= now
 
 
-def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
+def _evaluate_resolved(payload: dict[str, Any]) -> tuple[bool, str]:
     tokens: list[str] = []
     cmd = _tool_input(payload).get("command") or payload.get("command") or ""
     if isinstance(cmd, str) and cmd:
@@ -290,6 +290,18 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
             "blocking yourself."
         )
     return False, "\n".join(lines)
+
+
+def evaluate(payload):
+    # Only known read tools skip discovery. A shell command with no extracted
+    # write target can still carry an invalid explicit artifact root.
+    if not payload or _tool_name(payload) in ("read", "glob", "grep"):
+        return True, "no absolute mutation target detected"
+    try:
+        with hook_identity.evaluation(payload):
+            return _evaluate_resolved(payload)
+    except hook_identity.ERRORS as exc:
+        return False, "HOOK_CALLER_UNRESOLVED: " + str(exc)
 
 
 def main() -> int:

@@ -2,6 +2,7 @@
 """Offline test entrypoint; capture fixture chatter without hiding failures."""
 import contextlib
 import io
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -33,7 +34,13 @@ class OfflineResult(unittest.TextTestResult):
 
 if __name__ == "__main__":
     chatter = io.StringIO()
-    with contextlib.redirect_stdout(chatter), contextlib.redirect_stderr(chatter):
+    # CLI fixtures run subprocesses, so the in-process ancestry mock is not
+    # enough: they must not inherit the invoking live native thread selector.
+    # Managed-caller tests provide their own explicit identity environments.
+    fixture_env = dict(os.environ)
+    fixture_env.pop("CODEX_THREAD_ID", None)
+    with patch.dict(os.environ, fixture_env, clear=True), \
+            contextlib.redirect_stdout(chatter), contextlib.redirect_stderr(chatter):
         suite = unittest.defaultTestLoader.discover(str(Path(__file__).parent), pattern="test_*.py")
         result = unittest.TextTestRunner(stream=sys.__stderr__, verbosity=1,
                                          resultclass=OfflineResult).run(suite)

@@ -15,6 +15,20 @@ ownership. A correct send check alone does not repair a registry using inherited
 workspace values. Test both positive routing and foreign-workspace/identity-drift
 rejection. Test the assembled runtime, preserving existing delivery guards.
 
+Hook readers must use that same identity too: Stop callback/ACK checks, executor
+closeout and lease lookup resolve workspace and surface together. Reuse one
+snapshot only within a hook evaluation; never cache it across calls or rewrite
+process environment. Discovery failure denies the check, and a managed caller
+cannot downgrade to inherited identity mid-resolution. Boolean Stop reentry
+still exits before discovery without confirming or releasing a task.
+
+CLI subprocess fixtures must not inherit the invoking live thread selector.
+The offline runner removes it only from its test environment; managed identity
+tests install explicit ancestry fixtures. Production guards remain unchanged.
+`test_hook_identity.py` covers native/foreign markers, leases, returned callback
+journals, discovery failure and successive caller changes. Preserve explicit
+relative-root rejection even when no shell write target was extracted.
+
 ## Recycled TTY names are not caller identity
 
 Resolve the unique live resumed native client first, then join its kernel-read
