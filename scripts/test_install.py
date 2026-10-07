@@ -1,13 +1,41 @@
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import manage_install as m
 import cmux_bridge
 import mac_harness
+import offline_test_hook
 
 
 class InstallationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='install-hook-fixture-')
+        self.addCleanup(self.tmp.cleanup)
+        self.active = Path(self.tmp.name) / 'active'
+        self.active.mkdir()
+        self.env = dict(os.environ, CMUX_WORKSPACE_ID='offline-doctor',
+                        CMUX_SURFACE_ID='offline-doctor-surface')
+
+        def run_hook(argv, **kwargs):
+            # Manage's generated command and every hook's actual main remain
+            # under test. Only its subprocess receives private process/marker
+            # inputs; returning the real CompletedProcess preserves failures.
+            self.assertEqual(argv[:2], [sys.executable, '-B'])
+            self.assertEqual(len(argv), 3)
+            self.assertIn(Path(argv[2]).stem, m.GUARDS)
+            kwargs.setdefault('env', self.env)
+            return subprocess.run(offline_test_hook.command(argv[2], self.active), **kwargs)
+
+        runner = patch.object(m, 'subprocess', SimpleNamespace(run=run_hook))
+        runner.start()
+        self.addCleanup(runner.stop)
+
     def test_skill_path_is_portable_and_shared(self):
         self.assertEqual(cmux_bridge.COLLABORATION_SKILL_PATH, m.ROOT / "SKILL.md")
         self.assertEqual(mac_harness.COLLABORATION_SKILL_PATH, cmux_bridge.COLLABORATION_SKILL_PATH)
@@ -61,6 +89,20 @@ class InstallationTests(unittest.TestCase):
             cfg = Path(td) / ".codex/hooks.json"
             cfg.write_text('{"hooks":{}}')
             self.assertFalse(m.manage(td, "doctor")["ok"])
+
+    def test_doctor_preserves_real_stop_guard_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            m.manage(td, 'install', True)
+            root = Path(self.tmp.name) / 'task'
+            root.mkdir()
+            (root / 'task-pack.json').write_text(json.dumps(dict(
+                draft=False, completion_receipt=str(root / 'missing-receipt.json'))))
+            (self.active / 'offline-doctor.json').write_text(json.dumps(dict(
+                task_id='offline-doctor-task', artifact_root=str(root),
+                participants=[dict(role='executor', surface_uuid='offline-doctor-surface')])))
+            result = m.manage(td, 'doctor')
+            self.assertFalse(result['ok'])
+            self.assertFalse(result['checks']['cmux_consensus_stop_guard']['benignExitZero'])
 
     def test_post_submit_hook_both_clients_and_missing_registration(self):
         with tempfile.TemporaryDirectory() as td:
