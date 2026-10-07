@@ -29,6 +29,9 @@ do not turn a zero-hit mutation or an exception into a product defect or a PASS.
 
 ## Avoid Process Inflation
 
+See [efficiency and task closeout](efficiency-and-closeout.md) for phase budgets,
+bounded callback settlement, authorized SOLO continuation and acceptance records.
+
 Apply [bounded collaboration](bounded-collaboration.md): freeze the business
 report, reconcile the original send without replay, and stop task-specific
 callback diagnostics after verified receipt and marker disarm. That protocol is

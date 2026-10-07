@@ -1,0 +1,200 @@
+"""Restart/uncertainty regression tests for supervisor-to-executor dispatch."""
+import fcntl
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+import cmux_bridge as b
+import cmux_task_journal as j
+import cmux_submit_confirmation_guard as guard
+
+IDLE = '❯ \n[claude-opus-5]'
+TEXT = 'STATUS: task-journal-test run original task'
+CONSUMED = '❯ ' + TEXT + '\n⏺ Read original task\n' + IDLE
+
+
+class TaskDispatchJournalTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.path = self.home / 'task-pack.json'
+        self.pack = dict(task_id='task-journal-test', executor_uuid='EXECUTOR')
+        self.path.write_text(json.dumps(self.pack))
+        self.proof = dict(workspace_uuid='WS', caller_surface_uuid='SUPERVISOR',
+                          target_surface_uuid='EXECUTOR', target_pane_uuid='PANE')
+        for item in (patch.object(Path, 'home', return_value=self.home),
+                     patch.object(b, 'validate_task_pack_contract', return_value=self.pack),
+                     patch('availability_contract.require_action'),
+                     patch.object(b, 'pin_workspace', return_value=self.proof),
+                     patch.object(b.time, 'sleep')):
+            item.start()
+            self.addCleanup(item.stop)
+
+    def call(self, **kw):
+        return b.submit_task_pack('peer', TEXT, str(self.path), **kw)
+
+    def uncertain(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, '⏺ Read unrelated\n'+IDLE]), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.DispatchUnconfirmed):
+                self.call()
+            send.assert_called_once()
+            key.assert_called_once()
+
+    def test_confirmed_dispatch_is_not_sent_twice(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            result = self.call()
+            self.assertTrue(Path(result['receipt']).is_file())
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            send.assert_called_once()
+            key.assert_called_once()
+
+    def hook_proof(self):
+        return guard._attempt_evidence(dict(kind='task', surface='peer',
+            text=TEXT, pack=str(self.path)), 'peer', b)
+
+    def test_post_hook_reads_new_journal_without_input(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            self.call()
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.assertEqual(self.hook_proof()['source'], 'revalidated_task_dispatch_v1')
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_post_hook_accepts_original_readonly_reconciliation(self):
+        self.uncertain()
+        with patch.object(b, 'read_screen', return_value=CONSUMED), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.call(reconcile_only=True)
+            self.assertIsNotNone(self.hook_proof())
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_post_hook_rejects_tampered_observation_and_pack(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            result = self.call()
+        attempt_path = Path(result['attempt'])
+        original = attempt_path.read_bytes()
+        data = json.loads(original)
+        data['events'][-1]['screen'] = 'unrelated activity'
+        attempt_path.write_text(json.dumps(data))
+        self.assertIsNone(self.hook_proof())
+        attempt_path.write_bytes(original)
+        self.path.write_text('changed task pack')
+        self.assertIsNone(self.hook_proof())
+
+    def test_post_hook_requires_receipt_not_only_confirmation(self):
+        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+            result = self.call()
+        Path(result['receipt']).unlink()
+        self.assertIsNone(self.hook_proof())
+
+    def test_restart_after_uncertainty_is_read_only(self):
+        self.uncertain()
+        with patch.object(b, 'read_screen', return_value=CONSUMED), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            self.assertTrue(self.call(reconcile_only=True)['reconciled_read_only'])
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_partial_cross_block_and_queue_never_reconcile(self):
+        self.uncertain()
+        for screen in ['❯ task-journal-test\n⏺ Read original task\n'+IDLE,
+                       '❯ '+TEXT+'\n❯ other task\n⏺ Read original task\n'+IDLE,
+                       'Messages to be submitted after next tool call\n'+TEXT+'\n'+IDLE]:
+            with self.subTest(screen=screen), patch.object(b, 'read_screen', return_value=screen), \
+                    patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+                with self.assertRaises(b.DispatchUnconfirmed):
+                    self.call(reconcile_only=True)
+                send.assert_not_called()
+                key.assert_not_called()
+
+    def test_crash_after_paste_intent_never_repastes(self):
+        with patch.object(b, 'read_screen', return_value=IDLE), \
+                patch.object(b, 'send_text', side_effect=RuntimeError('ACK lost')) as send, \
+                patch.object(b, 'send_key') as key:
+            with self.assertRaises(RuntimeError):
+                self.call()
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            send.assert_called_once()
+            key.assert_not_called()
+        attempts = list(self.home.rglob('attempt-*.json'))
+        self.assertEqual(json.loads(attempts[0].read_text())['phase'], 'PASTE_INTENT')
+
+    def test_changed_prompt_cannot_create_fresh_attempt(self):
+        self.uncertain()
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.TaskPackContractError):
+                b.submit_task_pack('peer', TEXT+' changed', str(self.path))
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_pack_change_between_paste_and_enter_stops_key(self):
+        def mutate(*args):
+            self.path.write_text('changed after paste')
+        with patch.object(b, 'read_screen', return_value=IDLE), \
+                patch.object(b, 'send_text', side_effect=mutate) as send, \
+                patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            send.assert_called_once()
+            key.assert_not_called()
+
+    def test_target_change_before_paste_stops_all_input(self):
+        changed = dict(self.proof, target_pane_uuid='DIFFERENT')
+        with patch.object(b, 'pin_workspace', side_effect=[self.proof, changed]), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_no_input_retry_is_bounded(self):
+        with patch.object(b, 'read_screen', return_value='host ~ %'), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            for _ in range(2):
+                with self.assertRaises(b.DispatchUnconfirmed):
+                    self.call()
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_missing_attempt_cannot_be_reconciled(self):
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.TaskPackContractError):
+                self.call(reconcile_only=True)
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_original_delivery10_attempt_requires_original_controller(self):
+        key = j.digest(json.dumps(['SUPERVISOR', self.pack['task_id']], sort_keys=True))
+        old = self.home / '.local/state/multi-agent-collaboration/deliveries-v1' / (key+'.json')
+        old.parent.mkdir(parents=True)
+        old.write_text('truncated')
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.TaskPackContractError):
+                self.call()
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_target_lock_prevents_concurrent_different_task(self):
+        root = self.home / '.local/state/multi-agent-collaboration/task-dispatch-v1'
+        root.mkdir(parents=True)
+        with (root / ('target-'+j.digest('EXECUTOR')+'.lock')).open('a+b') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+                with self.assertRaises(b.TaskPackContractError):
+                    self.call()
+                send.assert_not_called()
+                key.assert_not_called()

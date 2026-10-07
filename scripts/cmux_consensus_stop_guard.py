@@ -31,6 +31,7 @@ import math
 import os
 import re
 import sys
+from executor_closeout import terminal_report, handoff_line
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -257,11 +258,16 @@ def _protocol_callback_evidence(
         created = datetime.fromisoformat(receipt["created_at"])
         age = (_now() - created).total_seconds()
         budget = receipt["budget_seconds"]
+        # Handshake receipts carry the harness's configured observation budget.
+        # Its 600-second default is not an upper limit: rejecting a 900-second
+        # receipt here blocks even an immediate, otherwise valid ACK.
         if (type(budget) not in (int, float) or not math.isfinite(budget)
-                or not 0 < budget <= 600 or not 0 <= age <= budget):
+                or budget <= 0 or not 0 <= age <= budget):
             return False
         if handshake:
             return True
+        if budget > 600:
+            return False  # Preserve the separate review-round freshness limit.
         review = receipt["requested_review"]
         artifact = Path(review["artifact"])
         return (
@@ -396,6 +402,7 @@ def _completion_callback_evidence(
     digest = hashlib.sha256(report.read_bytes()).hexdigest()
     expected = {
         "task_id": pack.get("task_id"),
+        "task_pack_sha256": hashlib.sha256((root / "task-pack.json").read_bytes()).hexdigest(),
         "completion_nonce": pack.get("completion_nonce"),
         "completion_callback": pack.get("completion_callback"),
         "callback_target": pack.get("callback_target"),
@@ -410,7 +417,9 @@ def _completion_callback_evidence(
     return True, "confirmed completion callback receipt matches pack and report"
 
 
-def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
+def _evaluate_with_marker(
+    payload: dict[str, Any],
+) -> tuple[bool, str, dict[str, Any] | None]:
     """Block only an unnegated evidence-shaped claim that on-disk state refutes.
 
     Three conditions, all required:
@@ -424,9 +433,14 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
     filenames, delivery markers, and block counts all pass, because none of them
     asserts a state that disk refutes.
     """
+    # End Stop-hook recursion without confirming delivery or disarming tasks.
+    if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
+            and payload.get("stop_hook_active") is True):
+        return True, "Stop hook reentry; task and callback remain unconfirmed", None
+
     markers = _active_markers(payload)
     if not markers:
-        return True, "no armed multi-agent task — pass through"
+        return True, "no armed multi-agent task — pass through", None
 
     final = _final_message(payload)
     protocol_ack = any(
@@ -435,18 +449,27 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
         for marker in markers
     )
     if protocol_ack:
-        return True, "fresh bound protocol ACK; this does not complete the task"
+        return True, "fresh bound protocol ACK; this does not complete the task", None
     for marker in markers:
+        surface = (os.environ.get("CMUX_SURFACE_ID") or payload.get("surface_id")
+                   or payload.get("surface_uuid"))
+        terminal = terminal_report(marker, _workspace_key(payload), surface)
+        if terminal and final.strip() == handoff_line(terminal):
+            # Honest report handoff is turn-end, never callback confirmation.
+            continue
         callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
         if not callback_ok:
-            return False, callback_msg
+            if terminal:
+                callback_msg += ("; original attempt returned. End without more tools "
+                                 "using exactly:\n" + handoff_line(terminal))
+            return False, callback_msg, marker
 
     claims = _positive_evidence_claims(final)
     if not claims:
         return True, (
             "armed, but the final message makes no unnegated evidence-shaped claim "
             "beyond any already-verified terminal callback"
-        )
+        ), None
 
     # With concurrent collaborations, block when ANY armed artifact tree
     # contradicts the claim; allow only when every armed task's evidence holds.
@@ -454,18 +477,46 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
     for marker in markers:
         contradicted, why = _contradicts_disk(marker, claims)
         if contradicted:
-            return False, why
+            return False, why, marker
 
         # Claims are consistent with rounds.json; still require the summary
         # artifacts to be genuinely PASS before letting a positive claim stand.
         ok, msg = _evidence_ok(marker)
         if not ok:
-            return False, msg
+            return False, msg, marker
         last_msg = msg
-    return True, last_msg
+    return True, last_msg, None
+
+
+def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Preserve the public verdict API; diagnostics use the same evaluation."""
+    ok, message, _marker = _evaluate_with_marker(payload)
+    return ok, message
 
 
 def _block(message: str, marker_hint: str) -> int:
+    # Callback transport failures are not failed plan-consensus rounds.
+    # Keep evaluate() and its evidence requirements unchanged; give the
+    # executor the recovery action for the actual failing gate.
+    if any(term in message for term in (
+        "completion callback", "completion_receipt", "completion report",
+        "executor task has no absolute artifact_root",
+    )):
+        sys.stderr.write(
+            "cmux completion callback Stop guard blocked turn-end.\n"
+            f"{message}\n\n"
+            "Preserve the report and original callback attempt. Inspect its "
+            "submission/queue/receipt evidence before any resend. If nothing "
+            "was submitted, repair the exact transport failure and use the "
+            "task-pack callback entrypoint. If submitted or queued, reconcile "
+            "that original attempt; do not send a duplicate or fabricate a "
+            "confirmed receipt. Notify the supervisor through the task evidence "
+            "directory if transport is unavailable.\n"
+            "This callback failure does not require a new handshake or three "
+            "plan-consensus rounds. Do not disarm merely to bypass this gate.\n"
+            f"  (armed marker: {marker_hint})\n"
+        )
+        return 2
     sys.stderr.write(
         "cmux multi-agent consensus Stop guard blocked turn-end.\n"
         f"{message}\n\n"
@@ -502,11 +553,10 @@ def main() -> int:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return 0  # non-JSON → don't wedge the session
-    ok, msg = evaluate(payload)
+    ok, msg, marker = _evaluate_with_marker(payload)
     if ok:
         return 0
-    markers = _active_markers(payload)
-    marker = markers[0] if markers else {}
+    marker = marker or {}
     return _block(msg, f"task={marker.get('task_id')} root={marker.get('artifact_root')}")
 
 

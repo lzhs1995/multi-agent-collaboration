@@ -20,6 +20,22 @@ access remains serial; a second agent does not create a second application lease
 An idle executor is appropriate when no valuable independent task remains or its
 previous task has not safely closed. Do not fill the panel with busywork.
 
+While a useful task is running, prepare the next unresolved question and its
+stable inputs locally. At verified closeout, actively check whether that work is
+still needed and dispatch it through the normal lifecycle; do not wait for the
+user to notice an idle executor. Keep one active task per executor. A healthy
+ACK should lead promptly to finalization and dispatch of the prepared pack, not
+a second discovery or research phase. Never paste the next task during callback
+recovery or another active command.
+
+State the independence of a review precisely. Grouping or recounting a table
+derived by the supervisor verifies that summary, not its derivation. If the
+unresolved claim concerns classification, reconstruct it from the original
+commands, samples or other primary inputs. Controls must exercise a nonempty
+case; an empty set that makes an aggregate predicate true is not a passing
+control. Compare the actual classified members when equal totals can hide
+different membership.
+
 ## Identify the real caller and coordinate authorized resource requests
 
 Resolve the originating client's workspace and surface UUIDs before deciding
@@ -124,9 +140,31 @@ what was independently checked, what was only reused, and coordination overhead
 agent uptime as productivity. A cached receipt check is not a new model run or a
 new scientific review; mixed content/liveness checks need separate denominators.
 
+Give the main deliverable priority over lesson maintenance. Capture a short
+reusable lesson after accepting the relevant evidence, then return to the task.
+Do not expand communication tooling or repeat completed research merely to
+produce a richer retrospective.
+
 An observed failure pattern is accepted work followed by prolonged callback
 diagnostics despite a confirmed original receipt. The remedy is the explicit
 terminal boundary above, not a larger retry limit. A document change, offline
 test, installation, active-client loading and actual delivery are five distinct
 claims. Public lessons contain generic rules; private transcripts, research data,
 accounts and machine-specific paths stay in the task evidence.
+
+## Verify the operation at the real boundary
+
+A shared tool daemon can report a different terminal from the requesting agent.
+Before calling a surface mismatch a migration, reconcile the current thread's
+unique live client, process birth, TTY and live cmux UUIDs. Forward only that
+verified client's identity to its child operation. Do not select a client from
+the desired surface number or rewrite shared daemon state. Ambiguous evidence
+still stops the send; this check prevents asking the user to move an unchanged
+terminal after a false mismatch.
+
+Use a captured real response to test the narrow failure before dispatching more
+review. A fixture derived from intended values can miss differences in the live
+application. On a pre-write failure, preserve the original operation and its
+zero-write evidence, release its resources through the existing coordinator,
+and prepare a successor only for the observed difference. This is not permission
+to replay the old operation or weaken unknown-value checks.

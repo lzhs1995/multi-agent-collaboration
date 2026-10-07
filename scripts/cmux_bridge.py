@@ -13,13 +13,12 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
+from cmux_workspace_guard import require_same_workspace, WorkspaceScopeError, uuid_value, CMUX as VERIFIED_CMUX
 from collections import Counter
 from pathlib import Path
 
-CMUX = os.environ.get(
-    "CMUX_BIN",
-    "/Applications/cmux.app/Contents/Resources/bin/cmux",
-)
+CMUX = VERIFIED_CMUX
 
 COLLABORATION_SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
 
@@ -120,9 +119,40 @@ def validate_task_pack_contract(task_pack_path, prompt_text=None):
     return pack
 
 
+_workspace_pins = {}
+
+
+def pin_workspace(surface, *, workspace_uuid=None, target_uuid=None, caller_uuid=None):
+    expected = dict(_workspace_pins.get(surface, {}))
+    for key, value in (("workspace_uuid", workspace_uuid),
+                       ("target_surface_uuid", target_uuid),
+                       ("caller_surface_uuid", caller_uuid)):
+        if value is not None:
+            if key in expected and uuid_value(expected[key]) != uuid_value(value):
+                raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: cannot overwrite a bound identity: " + key)
+            expected[key] = value
+    proof = require_same_workspace(surface, expected=expected)
+    _workspace_pins[surface] = {key: proof[key] for key in
+        ("workspace_uuid", "caller_surface_uuid", "target_surface_uuid", "target_pane_uuid")}
+    return proof
+
+
 def _run(*args, check=True, capture=True):
     """Run cmux with given args, return stdout string."""
-    cmd = [CMUX] + list(args)
+    args = list(args)
+    if args and args[0] in {"send", "send-key"}:
+        if "--surface" not in args:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit surface required")
+        index = args.index("--surface") + 1
+        proof = pin_workspace(args[index])
+        args[index] = proof["target_surface_uuid"]
+        if "--workspace" in args:
+            wi = args.index("--workspace") + 1
+            if args[wi].upper() != proof["workspace_uuid"]:
+                raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: workspace override")
+        else:
+            args[1:1] = ["--workspace", proof["workspace_uuid"]]
+    cmd = [CMUX] + args
     result = subprocess.run(
         cmd,
         capture_output=capture,
@@ -156,8 +186,8 @@ def whoami():
     Keys: workspace_ref, surface_ref, surface_type, pane_ref, window_ref,
           workspace_id (from env).
     """
-    raw = _run("identify", "--json")
-    data = json.loads(raw)
+    from cmux_workspace_guard import caller_snapshot
+    data, _tree, caller_env, _proof = caller_snapshot()
     caller = data.get("caller", {})
     return {
         "workspace_ref":  caller.get("workspace_ref", ""),
@@ -165,8 +195,9 @@ def whoami():
         "surface_type":   caller.get("surface_type", ""),
         "pane_ref":       caller.get("pane_ref", ""),
         "window_ref":     caller.get("window_ref", ""),
-        "workspace_id":   os.environ.get("CMUX_WORKSPACE_ID", ""),
-        "surface_id":     os.environ.get("CMUX_SURFACE_ID", ""),
+        "workspace_id":   caller_env.get("CMUX_WORKSPACE_ID", ""),
+        "surface_id":     caller_env.get("CMUX_SURFACE_ID", ""),
+        "provider":       "codex" if _proof is not None else "unknown",
     }
 
 
@@ -239,14 +270,33 @@ def surface_uuid_map():
 
 def list_surfaces(workspace=None):
     """
-    Return list of surface dicts using `cmux list-panels` (preferred, workspace-wide).
+    Return live tree members of the resolved caller's workspace by default.
 
-    list-panels output: "* surface:17  terminal  [focused]  \"title\""
-                        "  surface:25  agentSession  \"title\""
-
-    Fallback: cmux list-pane-surfaces (pane-scope only).
-    Each dict: {ref, title, selected, surface_type}.
+    Every row carries workspace/surface UUIDs. ``selected`` denotes the
+    verified caller, not the focused tab or a globally docked surface.
     """
+    # A managed daemon's default workspace is its origin, not this caller.
+    # Tree membership also excludes global dock panels from the local inventory.
+    from cmux_workspace_guard import caller_snapshot
+    identity, tree, env, _proof = caller_snapshot()
+    caller = identity["caller"]
+    selector = workspace or env.get("CMUX_WORKSPACE_ID") or caller["workspace_ref"]
+    matches = [ws for win in tree.get("windows", []) for ws in win.get("workspaces", [])
+               if selector in (ws.get("id"), ws.get("ref"))]
+    if len(matches) != 1:
+        raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: inventory workspace missing or ambiguous")
+    ws = matches[0]
+    return [{"ref": s["ref"], "surface_id": s["id"],
+             "workspace_id": ws["id"], "workspace_ref": ws["ref"],
+             "pane_ref": pane.get("ref", ""), "title": s.get("title", ""),
+             "selected": s["ref"] == caller["surface_ref"],
+             "surface_type": s.get("type", "unknown"),
+             "is_terminal": s.get("type") == "terminal"}
+            for pane in ws.get("panes", []) for s in pane.get("surfaces", [])]
+
+
+def _legacy_list_surfaces(workspace):
+    """Legacy text parser adapter; not used for identity or task discovery."""
     # Try list-panels first (workspace-wide, shows type)
     args = ["list-panels"]
     if workspace:
@@ -512,11 +562,67 @@ CLAUDE_VIRTUAL_COMPOSE_PROMPTS = (
     "请澄清 203 Python 测试的位置和接口",
 )
 
+# A provider hint row rendered BELOW the model/provider row. Measured
+# 2026-10-04T12:22Z on a GPT-6-Astra TUI (fixture
+# claude-output/fixture-codex-footer-20261004.txt) and on 2026-10-02 with the
+# `← for agents` prefix. Because it sits below the model row, the old
+# tail[-1]-only footer check never reached the model row and an idle, empty
+# composer classified as UNKNOWN, refusing every send with zero input.
+# Keep this anchored and token-exact: it is the one trailing shape allowed to
+# be skipped, so any NEW unmeasured row must still override a stale footer.
+def _clipped_prefix_pattern(literal):
+    """Regex source matching any prefix of ``literal`` (including empty).
+
+    Pane width clips a footer row at an arbitrary column, so the tail of a
+    known row can arrive as any prefix of itself. Expanding the literal into
+    nested optional characters keeps the match token-exact: `warnings · f2`
+    matches, `warnings · f3` does not. A looser `.*` here would let any
+    trailing text pose as known chrome and defeat the fail-closed gate.
+    """
+    pattern = ""
+    for char in reversed(literal):
+        pattern = "(?:" + re.escape(char) + pattern + ")?"
+    return pattern
+
+
+# The provider hint row, tolerant of width truncation. Measured
+# 2026-10-04T12:33Z on surface:27 (verification/fixtures/) where the SAME idle
+# composer classified AGENT_TUI at full width and UNKNOWN once clipped,
+# refusing an executor completion callback with zero input. The `⚠` warning
+# segment, its count, and the `f2 to view` hint may each be cut mid-token.
+# Two measured shapes share this slot. Codex renders the shortcuts row when
+# the composer is empty and `tab to queue message` when it holds un-submitted
+# text (measured 2026-10-04, fixture codex-footer-tab-to-queue-20261004.txt).
+# Both sit BELOW the model row, so both defeat a tail[-1]-only footer check.
+# Treating them as chrome only answers "is the receiver an agent"; the
+# separate compose check still sees the pasted text and still refuses, so a
+# peer's un-submitted callback is not at risk from this row alone.
+_PROVIDER_HINT_ROW_RE = re.compile(
+    r"\s*(?:"
+    r"(?:←\s*for agents\s*·\s*)?\?\s*for shortcuts\s*"
+    r"(?:⚠\s*(?:\d+\s*" + _clipped_prefix_pattern("warnings · f2 to view") +
+    r")?)?"
+    r"|"
+    r"tab to " + _clipped_prefix_pattern("queue message") +
+    r")\s*",
+    re.IGNORECASE,
+)
+
 # Status/footer lines some TUIs render inside or directly under the compose box.
 # They are chrome, not user content, but they are not fixed strings either, so
 # they need patterns rather than substring removal.
 _COMPOSE_CHROME_RE = re.compile(
+    r"^" + _PROVIDER_HINT_ROW_RE.pattern + r"$|"
     r"^\s*(?:gpt-[\w.\-]+|claude-[\w.\-]+|opus-[\w.\-]+|sonnet-[\w.\-]+)\b.*$|"
+    # Width-clipped forms of the model banner and cwd segment. A narrow
+    # pane cuts the banner before its closing "]" and renders the cwd as
+    # "claude/<branch>", so the strict forms above miss and
+    # compose_block_is_empty counted both as typed user text -> false
+    # COMPOSE_OCCUPIED. Measured 2026-10-04 on three saved captures.
+    # Deliberately narrow: a provider token followed by "/" or "-", or an
+    # unclosed provider bracket -- never arbitrary trailing text.
+    r"^\s*\[(?:Opus|Claude|Sonnet|GPT)[^\]]*$|"
+    r"^\s*(?:claude|codex|opus|sonnet|gpt)[/\-][\w.\-/]*…?\s*$|"
     r"^\s*\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\].*$|"
     r"^\s*[^\n]*\bgit:\([^)]*\).*$|"
     r"^\s*\d+%\s+context.*$|"
@@ -557,57 +663,28 @@ def compose_block_text(screen):
     return "\n".join(block)
 
 
-def compose_block_is_empty(screen):
-    """True only when the current compose block holds no user content.
+def delivery_compose_text(screen):
+    """Conservative last glyph block; payload bullets never close an editor."""
+    lines = screen.splitlines()
+    positions = [i for i,line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
+    if not positions:
+        return None
+    i = positions[-1]
+    return "\n".join([_PROMPT_GLYPH_RE.sub("", lines[i], count=1), *lines[i+1:]])
 
-    Returns False when no block is open, because 'cannot see the box' must never
-    read as 'the box is safe to overwrite'. A block containing only a known
-    placeholder counts as empty.
-    """
-    body = compose_block_text(screen)
+
+def compose_block_is_empty(screen):
+    body = delivery_compose_text(screen)
     if body is None:
         return False
-    residual_lines = []
-    for raw in body.splitlines():
-        line = raw.strip(" \t\r\n│─╭╮╰╯")
-        if not line:
-            continue
-        if _COMPOSE_CHROME_RE.match(line):
-            continue
-        # Remove any placeholder this line consists of. Longest-first, because
-        # replacing "for shortcuts" before "? for shortcuts" leaves a stray "?"
-        # that then reads as user content -- measured while building this.
-        for ph in sorted(COMPOSE_PLACEHOLDERS, key=len, reverse=True):
-            line = line.replace(ph, "")
-        line = line.strip(" \t\r\n│─╭╮╰╯>?")
-        if line:
-            residual_lines.append(line)
-    if not residual_lines:
-        return True
-    normalized = re.sub(r"\s+", "", "".join(residual_lines))
-    virtual_prompts = {
-        re.sub(r"\s+", "", prompt)
-        for prompt in CLAUDE_VIRTUAL_COMPOSE_PROMPTS
-    }
-    if normalized in virtual_prompts:
-        return True
-    # Near its automatic compaction threshold, Claude Code renders `/compact`
-    # as a dim product suggestion even though the editable compose buffer is
-    # empty. Plain `cmux read-screen` loses that styling. Bind this exception to
-    # the product's adjacent percentage banner so a real `/compact` command in
-    # any other screen state remains occupied.
-    if normalized == "/compact" and re.search(
-        r"\b\d+%\s+until\s+auto-compact\b", screen, re.I
-    ):
-        return True
-    # Claude's automatic retry UI may put its queue-control hint directly
-    # after a confirmed virtual suggestion. The hint by itself still means an
-    # unknown queued message and must remain occupied; only this exact pair is
-    # a product-owned empty compose rendering.
-    queue_hint = re.sub(r"\s+", "", "Press up to edit queued messages")
-    return bool(
-        normalized.endswith(queue_hint)
-        and normalized[:-len(queue_hint)] in virtual_prompts)
+    lines = body.splitlines()
+    # Never discard a typed first line, even when it resembles footer chrome.
+    while len(lines) > 1 and (not lines[-1].strip() or _COMPOSE_CHROME_RE.fullmatch(lines[-1].strip())):
+        lines.pop()
+    rendered = "\n".join(lines).strip(" \t\r\n│─╭╮╰╯")
+    # Plain screen text cannot distinguish a dim suggestion from a user who
+    # typed continue, /context, /compact, or a prior virtual-prompt allowlist.
+    return rendered in ("", "Ask Codex to do anything", "Ask Claude to do anything")
 
 
 def pending_queue_holds(screen, marker):
@@ -620,7 +697,7 @@ def pending_queue_holds(screen, marker):
     lines = screen.splitlines()
     for index, line in enumerate(lines):
         if _PENDING_QUEUE_RE.search(line):
-            if marker in "\n".join(lines[index:]):
+            if "".join(marker.split()) in "".join("\n".join(lines[index:]).split()):
                 return True
     return False
 
@@ -693,17 +770,17 @@ def _prompt_block_pending(screen, marker):
             continue
         if in_prompt:
             block.append(line)
-    return in_prompt and marker in "\n".join(block)
+    return in_prompt and "".join(marker.split()) in "".join("\n".join(block).split())
 
 
 def _submission_confirmed(screen, marker):
-    """Require marker followed by a fresh assistant/spinner output block."""
-    found = False
+    """Require marker followed by activity; terminal wrapping may split marker."""
+    preceding = ""
+    token = "".join(marker.split())
     for line in screen.splitlines():
-        if found and _ACTIVITY_LINE_RE.match(line):
+        if token in preceding and _ACTIVITY_LINE_RE.match(line):
             return True
-        if marker in line:
-            found = True
+        preceding += "".join(line.split())
     return False
 
 
@@ -711,6 +788,210 @@ _ACTIVITY_LINE_RE = re.compile(
     r"^\s*(?:⏺|✻|✢|✳|✶|✽|◐|◑|◒|◓)(?:\s|$)|"
     r"^\s*•\s+(?:Edited|Ran|Read|Updated|Created|Deleted|Applied|Searched|Checked|Viewed|Wrote)(?:\s|$)"
 )
+
+
+def require_exact_composer(screen, surface, text):
+    """Match the complete payload under measured terminal rendering only.
+
+    Claude can render one extra ASCII cell after the last character. This
+    cannot be distinguished from a typed trailing space using read-screen;
+    it is display equivalence, not byte-exact access to the native editor.
+    No body whitespace, unknown footer, or extra content is normalized.
+    """
+    try:
+        return _require_exact_composer_without_cursor_cell(screen, surface, text)
+    except DispatchUnconfirmed:
+        rows = screen.splitlines()
+        start = next((i for i in range(len(rows)-1, -1, -1)
+                      if _PROMPT_GLYPH_RE.match(rows[i])), None)
+        if (not text or text[-1].isspace() or start is None or start == 0
+                or not rows[start].startswith("❯\u00a0")
+                or not re.fullmatch(r"─{8,}", rows[start-1])):
+            raise
+        end = next((i for i in range(start+1, len(rows))
+                    if rows[i] == rows[start-1]), None)
+        if (end is None or end+1 >= len(rows)
+                or not re.fullmatch(r"\s*\[(?:claude|opus|sonnet)[^\]]*\](?:\])?\s*",
+                                    rows[end+1], re.I)
+                or not rows[end-1].endswith(" ")
+                or len(rows[end-1]) < 2 or rows[end-1][-2].isspace()):
+            raise
+        # Exactly one terminal cell on the final content row, never strip().
+        rows[end-1] = rows[end-1][:-1]
+        return _require_exact_composer_without_cursor_cell("\n".join(rows), surface, text)
+
+
+def _require_exact_composer_without_cursor_cell(screen, surface, text):
+    """Require the expected visible draft, allowing known bordered hard wrapping.
+
+    Only the renderer's two-column continuation gutter and measured wrap width
+    may be added. Do not collapse whitespace or accept truncated/paste summaries.
+    Screen evidence cannot distinguish buffers with identical visual rendering.
+    """
+    require_agent_input(screen, surface)
+    rows = screen.splitlines()
+    start = next((i for i in range(len(rows)-1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    if start is None:
+        raise DispatchUnconfirmed("COMPOSE_UNVERIFIED: no Enter", state=COMPOSE_OCCUPIED)
+    # Remove the renderer's single prompt separator, never user whitespace.
+    first = re.sub(r"^\s*[›❯][ \u00a0]?", "", rows[start], count=1)
+    bordered = start > 0 and re.fullmatch(r"─{8,}", rows[start-1])
+    if bordered:
+        end = next((i for i in range(start+1, len(rows))
+                    if rows[i] == rows[start-1]), None)
+        if end is None:
+            raise DispatchUnconfirmed("COMPOSE_TRUNCATED: no Enter", state=COMPOSE_OCCUPIED)
+        body = "\n".join([first] + rows[start+1:end])
+    else:
+        lines = [first] + rows[start+1:]
+        # Remove only terminal chrome, never similar lines inside the draft.
+        if len(lines) > 2 and _PROVIDER_HINT_ROW_RE.fullmatch(lines[-1]):
+            lines.pop()
+        has_model_footer = len(lines) > 1 and re.fullmatch(
+                r"\s*(?:\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\](?: context \d+%)?|"
+                r"(?:GPT|claude)-[\w.-]+(?: (?:low|medium|high|xhigh|max|ultra))?"
+                r"(?: · [^\n]+)?)\s*",
+                lines[-1], re.I)
+        if has_model_footer:
+            lines.pop()
+        body = "\n".join(lines)
+        bodies = [body]
+        # Measured Codex footer gaps: one or two blank UI rows immediately
+        # before verified model chrome. Keep all payload whitespace; each
+        # candidate must still match the entire expected message. Never trim
+        # an arbitrary blank suffix or infer chrome from unknown trailing text.
+        if has_model_footer:
+            for gap in (1, 2):
+                if len(lines) > gap and all(
+                        row == "" or (row == " " and rows[start].startswith("› "))
+                        for row in lines[-gap:]):
+                    bodies.append("\n".join(lines[:-gap]))
+        for candidate in bodies:
+            if candidate == text:
+                return
+            parts = candidate.split("\n")
+            if not all(row.startswith("  ") for row in parts[1:]):
+                continue
+            # Preserve every content character. Only the two-column gutter
+            # and hard/soft visual row boundaries are renderer-dependent.
+            positions = {0}
+            for number, part in enumerate(parts):
+                part = part if number == 0 else part[2:]
+                next_positions = set()
+                for pos in positions:
+                    # Empty continuation rows are explicit blank content,
+                    # never a soft wrap that can silently disappear.
+                    separators = (("",) if number == 0 else
+                                  (("", "\n") if part else ("\n",)))
+                    for sep in separators:
+                        chunk = sep + part
+                        if text.startswith(chunk, pos):
+                            next_positions.add(pos + len(chunk))
+                positions = next_positions
+            if len(text) in positions:
+                return
+    if body == text:
+        return
+    if bordered:
+        # Claude's editor reserves two additional cursor cells in some builds.
+        # Word wrapping can consume exactly one separator at a visual boundary.
+        # Match complete content against measured geometry; never strip user
+        # whitespace or treat a paste summary as the original draft.
+        parts = body.split("\n")
+        if all(row.startswith("  ") for row in parts[1:]):
+            content = [parts[0]] + [row[2:] for row in parts[1:]]
+            def cells(value):
+                return sum(0 if unicodedata.combining(c) else
+                           (2 if unicodedata.east_asian_width(c) in "WF" else 1)
+                           for c in value)
+            if not any(unicodedata.category(c).startswith("C")
+                       for row in content for c in row):
+                for width in (len(rows[start-1]) - 4, len(rows[start-1]) - 2):
+                    positions = {0}
+                    previous = ""
+                    for number, part in enumerate(content):
+                        if cells(part) > width:
+                            positions = set()
+                            break
+                        separators = ("",) if number == 0 else ("\n",)
+                        if number and previous and part:
+                            if cells(previous) + cells(part[0]) > width:
+                                separators += ("",)
+                            word = re.match(r"[^\s]+", part)
+                            if (word and not previous[-1].isspace()
+                                    and cells(previous) + 1 + cells(word.group()) > width):
+                                separators += (" ",)
+                        positions = {pos + len(sep) + len(part)
+                                     for pos in positions for sep in separators
+                                     if text.startswith(sep + part, pos)}
+                        previous = part
+                    if len(text) in positions:
+                        return
+    # Claude's bordered editor uses a two-column prompt/continuation gutter.
+    # Preserve explicit newlines, spaces and Unicode; generate expected rows
+    # rather than deleting arbitrary whitespace from the observed draft.
+    if bordered:
+        width = len(rows[start-1]) - 2
+        expected = []
+        for line in text.split("\n"):
+            chunk, cells = "", 0
+            for char in line:
+                if unicodedata.category(char).startswith("C"):
+                    raise DispatchUnconfirmed("COMPOSE_CONTROL_CHARACTER: no Enter", state=COMPOSE_OCCUPIED)
+                size = 0 if unicodedata.combining(char) else (2 if unicodedata.east_asian_width(char) in "WF" else 1)
+                if cells + size > width:
+                    expected.append(chunk); chunk, cells = "", 0
+                chunk += char; cells += size
+            expected.append(chunk)
+        rendered = expected[0] + "".join("\n  " + row for row in expected[1:])
+        if body == rendered:
+            return
+    if body != text:
+        raise DispatchUnconfirmed("COMPOSE_CHANGED_OR_UNVERIFIED: preserve draft; no Enter",
+                                  state=COMPOSE_OCCUPIED)
+
+
+
+def _exact_pending_text(screen, text):
+    """Require full visible payload; only a final explicit queue hint is chrome."""
+    rows = screen.splitlines()
+    if rows and re.fullmatch(r"\s*tab to queue message\s*", rows[-1]):
+        rows.pop()
+    try:
+        require_exact_composer("\n".join(rows), "receiver", text)
+    except DispatchUnconfirmed:
+        return False
+    return True
+
+
+def _codex_tab_queue_allowed(screen, text):
+    """Only the measured Codex busy composer with its explicit queue key."""
+    return bool(
+        receiver_input_kind(screen) == "AGENT_TUI"
+        and re.search(r"(?m)^\s*tab to queue message\s*$", screen)
+        and re.search(r"(?m)^\s*›(?:\s|$)", screen)
+        and _exact_pending_text(screen, text)
+        and not re.search(r"Compacting context|Reconnecting", screen, re.I)
+        and not pending_queue_holds(screen, text)
+    )
+
+
+def _delivery_confirmed(before, after, marker, text=None):
+    # A reused/stale marker followed by unrelated new activity is not proof
+    # of this submission. Nonces must be fresh relative to the pre-paste view.
+    from cmux_delivery_evidence import confirmed
+    return bool(
+        marker and text and not compose_contains(before, marker)
+        and "".join(marker.split()) not in "".join(before.split())
+        and receiver_input_kind(after) == "AGENT_TUI"
+        and compose_block_is_empty(after)
+        and not compose_contains(after, marker)
+        and not pending_queue_holds(after, marker)
+        and _submission_confirmed(after, marker)
+        and _new_activity_after_submit(before, after)
+        and confirmed(sys.modules[__name__], before, after, marker, text)
+    )
 
 
 def _new_activity_after_submit(before, after):
@@ -768,6 +1049,7 @@ def send_key(surface, key):
 
 def focus_surface(surface):
     """Focus the pane owning ``surface`` before sending terminal editing keys."""
+    pin_workspace(surface)
     identity = identify_surface(surface)
     pane = identity.get("pane_ref")
     if pane:
@@ -813,8 +1095,32 @@ def receiver_input_kind(screen):
     chrome = re.compile(r"^\s*(?:GPT-[\w.-]+|claude-[\w.-]+|(?:Opus|Sonnet)\s+[\d.]+|\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\])(?:\s|$)", re.I)
     if prompts:
         tail = lines[prompts[-1]:]
+        # Claude's current idle UI has a bordered editor followed by several
+        # status rows. Bind this case to both borders and the complete known
+        # footer; an old model banner or unknown trailing row is insufficient.
+        border = re.compile(r"^\s*─{8,}\s*$")
+        model = re.compile(r"^\s*(?:\[claude-[\w.-]+(?:\[\d+m\])?\]|\[(?:Opus|Sonnet|Claude)\s+[^\]]+\])(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
+        footer = re.compile(
+            r"^\s*(?:[^\n]+\bgit:\([^)]*\)[^\n]*|"
+            r"上下文\s+[^\n]+|\d+\s+CLAUDE\.md\s*\|[^\n]+|"
+            r"✓\s+[^\n]+|▸\s+.+\(\d+/\d+\)|"
+            r"⏱\ufe0f?\s+\d+h\s+\d+m|◐\s+Bash:\s+[^\n]+|"
+            r"⏵⏵\s+bypass permissions on[^\n]*)\s*$")
+        if (prompts[-1] > 0 and border.fullmatch(lines[prompts[-1] - 1])
+                and len(tail) >= 4 and border.fullmatch(tail[1])
+                and model.fullmatch(tail[2])
+                and all(footer.fullmatch(row) for row in tail[3:])):
+            return "AGENT_TUI"
         # A historical footer cannot override unknown current input below it.
-        if len(tail) > 1 and chrome.search(tail[-1]):
+        # Exactly one measured exception: the provider hint row renders BELOW
+        # the model row, so skip that single known row (and nothing else)
+        # before looking for model chrome. Any other trailing content still
+        # wins, keeping the fail-closed direction intact.
+        footer_tail = tail
+        if (len(footer_tail) > 2
+                and _PROVIDER_HINT_ROW_RE.fullmatch(footer_tail[-1])):
+            footer_tail = footer_tail[:-1]
+        if len(footer_tail) > 1 and chrome.search(footer_tail[-1]):
             return "AGENT_TUI"
         if len(tail) == 1 and re.fullmatch(r"\s*[›❯]\s*Ask (?:Codex|Claude) to do anything\s*", tail[0]):
             return "AGENT_TUI"
@@ -844,17 +1150,34 @@ def require_clearable_agent_input(screen, surface):
 
 
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
-                force_compose=False):
+                force_compose=False, delivery_observer=None, *, reconcile_only=False):
+    """Journal ordinary messages; task/callback controllers retain their journals."""
+    if delivery_observer is not None:
+        if reconcile_only:
+            raise TaskPackContractError('RECONCILE_WITH_ORIGINAL_CONTROLLER')
+        return _submit_text_once(surface, text, marker, confirm_lines, task_pack_path,
+                                 force_compose, delivery_observer)
+    if task_pack_path is not None:
+        return submit_task_pack(surface, text, task_pack_path, marker, confirm_lines,
+                                force_compose, reconcile_only=reconcile_only)
+    if force_compose:
+        raise TaskPackContractError('MESSAGE_PRESERVE_COMPOSE: no forced replacement')
+    from cmux_message_journal import deliver
+    return deliver(sys.modules[__name__], surface, text, marker, confirm_lines,
+                   reconcile_only=reconcile_only)
+
+
+def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
+                      force_compose=False, delivery_observer=None):
     """Submit text with lowercase Enter and prove the TUI consumed it.
 
     ``cmux send`` only pastes text.  Submission is deliberately separate so a
     caller cannot mistake a successful paste for an executed prompt.  When a
     marker is supplied it must disappear from the active compose block -- the
     LAST prompt-glyph block on screen, either UI's glyph (see
-    ``_PROMPT_GLYPH_RE``); an earlier such block is transcript echo and proves
-    delivery rather than a stuck paste.  Marker-linked output or a new
-    structural activity line relative to the
-    pre-submit snapshot proves consumption when the marker has scrolled away.
+    ``_PROMPT_GLYPH_RE``). An earlier block alone is insufficient.
+    Marker-linked new activity AND an empty composer are required. Unrelated
+    tool output or a marker that scrolled away cannot certify consumption.
     One bounded retry handles a known paste-without-submit event, but queued or
     active input is never double-submitted.
     """
@@ -928,15 +1251,25 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
                         # protected by the branch above.
             before = cleared
             require_agent_input(before, surface)
+    if delivery_observer:
+        delivery_observer("PASTE_INTENT", before)
     send_text(surface, text)
+    if delivery_observer:
+        delivery_observer("PASTED")
     time.sleep(float(os.environ.get("CMUX_AGENT_SUBMIT_DELAY", "0.25")))
+    if delivery_observer:
+        delivery_observer("ENTER_INTENT")
     send_key(surface, "enter")
+    if delivery_observer:
+        delivery_observer("ENTER_SENT")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     if not marker:
         return {"confirmed": False, "submitted": True, "retries": 0,
                 "state": DELIVERY_UNVERIFIED_BY_DETECTOR}
 
     screen = read_screen(surface, lines=confirm_lines)
+    if delivery_observer:
+        delivery_observer("POST_ENTER_OBSERVATION", screen)
     # A slow first render is not a failed delivery. Observe the same submission
     # once more; never paste or press Enter while its outcome is unknown.
     if (not _submission_confirmed(screen, marker)
@@ -951,8 +1284,9 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             late_delay = 3.0
         time.sleep(max(0.0, min(5.0, late_delay)))
         screen = read_screen(surface, lines=confirm_lines)
-        if (not _prompt_block_pending(screen, marker) and not pending_queue_holds(screen, marker)
-                and (_submission_confirmed(screen, marker) or _new_activity_after_submit(before, screen))):
+        if delivery_observer:
+            delivery_observer("POST_ENTER_OBSERVATION", screen)
+        if _delivery_confirmed(before, screen, marker, text):
             return {"confirmed": True, "retries": 0, "late_confirmation": True}
     # This marker's explicit queue entry overrides activity from earlier work.
     # Check it before inferred consumption as well as before any retry path.
@@ -962,13 +1296,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
             state=DELIVERY_QUEUED_AT_RECEIVER,
         )
-    if (
-        not _prompt_block_pending(screen, marker)
-        and (
-            _submission_confirmed(screen, marker)
-            or _new_activity_after_submit(before, screen)
-        )
-    ):
+    if _delivery_confirmed(before, screen, marker, text):
         return {"confirmed": True, "retries": 0}
     if not _prompt_block_pending(screen, marker):
         raise DispatchUnconfirmed(
@@ -976,6 +1304,24 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             "(marker not visible after submit)",
             state=DELIVERY_UNVERIFIED_BY_DETECTOR,
         )
+    # Enter does not queue a message in the measured busy Codex UI. Only
+    # its exact, displayed Tab action and our unchanged full payload authorize
+    # one queue key. Never paste again, press on compaction, or call it consumed.
+    if _codex_tab_queue_allowed(screen, text):
+        if delivery_observer:
+            delivery_observer("QUEUE_TAB_INTENT", screen)
+        send_key(surface, "tab")
+        time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
+        screen = read_screen(surface, lines=confirm_lines)
+        if delivery_observer:
+            delivery_observer("POST_QUEUE_TAB_OBSERVATION", screen)
+        if _delivery_confirmed(before, screen, marker, text):
+            return {"confirmed": True, "retries": 0, "queue_key": "tab"}
+        raise DispatchUnconfirmed(
+            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+            "(one explicit Tab queue action observed; inspect original, never repaste)",
+            state=classify_submission_failure(screen, marker, submitted=True))
+
     if _queued_or_active_input(screen):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
@@ -983,21 +1329,25 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             state=COMPOSE_OCCUPIED,
         )
 
-    retry_before = screen
+    if not _exact_pending_text(screen, text):
+        raise DispatchUnconfirmed(
+            f"COMPOSE_CHANGED surface={surface}; full payload ownership unconfirmed; no extra key",
+            state=COMPOSE_OCCUPIED)
     require_agent_input(screen, surface)
+    if delivery_observer:
+        delivery_observer("EXTRA_ENTER_INTENT", screen)
     send_key(surface, "enter")
     time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
     screen = read_screen(surface, lines=confirm_lines)
+    if delivery_observer:
+        delivery_observer("POST_ENTER_OBSERVATION", screen)
     if pending_queue_holds(screen, marker):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(delivery queued at receiver after one retry — wait, do not resend)",
             state=DELIVERY_QUEUED_AT_RECEIVER,
         )
-    if _prompt_block_pending(screen, marker) or (
-        not _submission_confirmed(screen, marker)
-        and not _new_activity_after_submit(retry_before, screen)
-    ):
+    if not _delivery_confirmed(before, screen, marker, text):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(compose still pending or marker missing after one retry)",
@@ -1007,19 +1357,11 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
 
 
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
-                     force_compose=False):
-    """Only dispatch entry point for executor tasks."""
-    from availability_contract import require_action
-    pack = validate_task_pack_contract(task_pack_path)
-    require_action(pack["task_id"], "dispatch", pack)
-    return submit_text(
-        surface,
-        text,
-        marker=marker,
-        confirm_lines=confirm_lines,
-        task_pack_path=task_pack_path,
-        force_compose=force_compose,
-    )
+                     force_compose=False, *, reconcile_only=False):
+    """Durable task dispatch; ambiguous attempts are observed, never repasted."""
+    from cmux_task_journal import deliver
+    return deliver(sys.modules[__name__], surface, text, task_pack_path, marker,
+                   confirm_lines, force_compose, reconcile_only=reconcile_only)
 
 
 def _sha256_file(path):
@@ -1030,55 +1372,11 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def submit_completion_callback(task_pack_path, confirm_lines=200):
-    """Deliver the exact terminal callback and persist confirmation evidence."""
-    pack = validate_task_pack_contract(task_pack_path)
-    from availability_contract import require_action
-    require_action(pack["task_id"], "callback", pack)
-    report = Path(pack["report"])
-    if not report.is_file():
-        raise TaskPackContractError(
-            "COMPLETION_CALLBACK_REFUSED: report must exist before callback"
-        )
-    receipt_path = Path(pack["completion_receipt"])
-    if receipt_path.exists():
-        raise TaskPackContractError(
-            f"COMPLETION_RECEIPT_EXISTS: refusing duplicate callback for {receipt_path}"
-        )
-    result = submit_text(
-        pack["callback_target"],
-        pack["completion_callback"],
-        marker=pack["completion_nonce"],
-        confirm_lines=confirm_lines,
-    )
-    if result.get("confirmed") is not True:
-        raise DispatchUnconfirmed("completion callback delivery was not confirmed")
-
-    receipt = {
-        "task_id": pack["task_id"],
-        "completion_nonce": pack["completion_nonce"],
-        "completion_callback": pack["completion_callback"],
-        "callback_target": pack["callback_target"],
-        "report": str(report),
-        "report_sha256": _sha256_file(report),
-        "report_bytes": report.stat().st_size,
-        "confirmed": True,
-        "bridge_retries": result.get("retries", 0),
-        "recorded_at_epoch": time.time(),
-    }
-    encoded = (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    try:
-        fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as exc:
-        raise TaskPackContractError(
-            f"COMPLETION_RECEIPT_EXISTS: refusing to replace {receipt_path}"
-        ) from exc
-    try:
-        os.write(fd, encoded)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    return receipt
+def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False, resume_queue_only=False):
+    """Report-bound delivery with durable attempts and zero-input reconciliation."""
+    from cmux_callback_journal import deliver
+    return deliver(sys.modules[__name__], task_pack_path, confirm_lines,
+                   reconcile_only=reconcile_only, resume_queue_only=resume_queue_only)
 
 
 def read_screen(surface, lines=200):
@@ -1086,7 +1384,17 @@ def read_screen(surface, lines=200):
     Read last N lines of a surface via `cmux read-screen`.
     Returns plain text string.
     """
-    return _run("read-screen", "--surface", surface, "--lines", str(lines))
+    if surface in _workspace_pins:
+        proof = pin_workspace(surface)
+        target, workspace = proof["target_surface_uuid"], proof["workspace_uuid"]
+    else:
+        rows = [row for ref, row in surface_uuid_map().items()
+                if surface in (ref, row["surface_id"])]
+        if len(rows) != 1:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: read target missing or ambiguous")
+        target, workspace = rows[0]["surface_id"], rows[0]["workspace_id"]
+    return _run("read-screen", "--workspace", workspace, "--surface", target,
+                "--lines", str(lines))
 
 
 def wait_for_ack(surface, ack_prefix="PREFLIGHT_ACK", timeout=120, poll=3, lines=200, task_id=None, provider=None, nonce=None):
@@ -1223,9 +1531,18 @@ def capture_round_evidence(surface, nonce, provider=None, lines=200, expected_ac
 # Labelling
 # ---------------------------------------------------------------------------
 
-def rename_tab(surface, title):
+def rename_tab(surface, title, *, workspace_uuid, surface_uuid, caller_uuid):
     """Set the visible tab title of a surface."""
-    _run("rename-tab", "--surface", surface, "--", title)
+    if surface_uuid == caller_uuid:
+        me = whoami()
+        if (me["surface_ref"] != surface or
+                uuid_value(me["surface_id"]) != uuid_value(caller_uuid) or
+                uuid_value(me["workspace_id"]) != uuid_value(workspace_uuid)):
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: rename caller changed")
+    else:
+        pin_workspace(surface, workspace_uuid=workspace_uuid,
+                      target_uuid=surface_uuid, caller_uuid=caller_uuid)
+    _run("rename-tab", "--workspace", workspace_uuid, "--surface", surface_uuid, "--", title)
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1587,8 @@ def _cli_main(argv=None):
     submit.add_argument("--surface", required=True)
     submit.add_argument("--text", required=True)
     submit.add_argument("--marker")
+    submit.add_argument("--reconcile-only", action="store_true",
+                        help="observe the original ordinary message without terminal input")
     submit.add_argument("--confirm-lines", type=int, default=200)
     submit.add_argument(
         "--force-compose",
@@ -1284,6 +1603,8 @@ def _cli_main(argv=None):
     pack.add_argument("--task-pack", required=True)
     pack.add_argument("--marker")
     pack.add_argument("--confirm-lines", type=int, default=200)
+    pack.add_argument("--reconcile-only", action="store_true",
+                      help="observe the original task dispatch without terminal input")
     pack.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
@@ -1296,6 +1617,8 @@ def _cli_main(argv=None):
     )
     completion.add_argument("--task-pack", required=True)
     completion.add_argument("--confirm-lines", type=int, default=200)
+    completion.add_argument("--reconcile-only", action="store_true",
+                            help="verify an existing callback attempt without sending input")
 
     args = parser.parse_args(argv)
     try:
@@ -1317,6 +1640,7 @@ def _cli_main(argv=None):
                 marker=args.marker,
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
+                reconcile_only=args.reconcile_only,
             )
             result = {"command": "submit_text", "surface": args.surface, **result}
         elif args.command in {"submit-task-pack", "submit_task_pack"}:
@@ -1327,6 +1651,7 @@ def _cli_main(argv=None):
                 marker=args.marker,
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
+                reconcile_only=args.reconcile_only,
             )
             result = {
                 "command": "submit_task_pack",
@@ -1339,7 +1664,8 @@ def _cli_main(argv=None):
             "submit_completion_callback",
         }:
             result = submit_completion_callback(
-                args.task_pack, confirm_lines=args.confirm_lines
+                args.task_pack, confirm_lines=args.confirm_lines,
+                reconcile_only=args.reconcile_only
             )
             result = {"command": "submit_completion_callback", **result}
         else:  # pragma: no cover - argparse makes this unreachable
