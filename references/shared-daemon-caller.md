@@ -65,3 +65,20 @@ not proof of an unreachable executor. Preserve its artifacts, disarm only that
 failed task and use a new task/nonce after repair. Cover the assembled path as
 well as identity helpers. Once an executor accepts useful work, continue the
 main product task instead of adding coordination-only reviews.
+
+
+## Compaction and delayed observation are separate from idle capacity
+
+An executor compacting after a submitted challenge is not idle or unreachable.
+Record its actual progress and the original handshake handle; do not stack another
+challenge or generic continuation message behind it. A pending failure-shaped
+receipt is not final while its original process is still observing a late ACK.
+Follow that handle to its terminal result, then reuse the exact nonce for supported
+read-only recovery. If the handshake ends without proof, record the outcome and
+continue independent work under existing authority; do not claim it succeeded.
+
+A null submission timestamp proves only an absent recorded timestamp. The input
+journal can show paste and Enter even when a short screen detector saw nothing.
+Determine zero input from the attempt, not from that null alone. Keep report
+acceptance independent from missing transport receipts and give the executor no
+polling assignment merely to make the supervisor's detector catch up.

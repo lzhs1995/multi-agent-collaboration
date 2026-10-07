@@ -139,12 +139,24 @@ If any command fails, do not dispatch. `bridge-test` is intentionally non-submit
 Treat prompt delivery as a protocol, not a single successful CLI call:
 
 1. Persist a unique delivery id (or the handshake/round nonce) before sending. Put it in the first line of the envelope so it is easy to locate without changing the task semantics.
-2. Paste with `cmux send --surface <surface> -- <text>`, wait for a render tick, then submit with the exact lowercase key `cmux send-key --surface <surface> -- enter`. The spelling `Enter` is not portable and has previously left Claude's compose buffer unchanged while the wrapper returned success.
-3. Wait for the post-submit render and read the same surface. A prompt is consumed when the marker has left the current `❯` compose block and either a marker-linked assistant/spinner/tool line follows it, or the marker has scrolled out of view while the screen changed from the pre-submit snapshot and contains a genuinely new structural activity line. For Codex, only recognized tool lines such as `• Edited`, `• Ran`, `• Read`, or `• Updated` count; a generic project bullet does not. Marker absence alone, a changed prompt, or an old activity line is not proof of the current send.
-4. If the marker is still in the current compose block at an idle boundary, send one and only one additional lowercase `enter`, wait, and read again. If it remains, fail with `DISPATCH_UNCONFIRMED`; do not send a third key, start a duplicate task, or claim a retry.
-5. If the executor owns an active tool or queued-message editor, do not press Enter behind it. Wait for a safe boundary and re-read. If the supervisor has explicit user authorization to replace stale compose content, use `--force-compose`: record the pre-clear SHA/preview, then try `Esc`, focused `Ctrl+U`, one `Ctrl+C` at a verified idle compose boundary, and finally a length-derived capped Home+Delete clear of that same fingerprinted buffer. Re-read after every step and submit once only after the compose block is empty. If clearing fails, stop. The helper must distinguish `DISPATCH_UNCONFIRMED` from API retry accounting.
+2. Submit the finalized task or callback only through its guarded bridge entrypoint.
+   The bridge owns paste, lowercase `enter`, and post-submit observation. Do not
+   reconstruct this sequence with raw cmux commands or helper fallbacks.
+3. Confirm the exact current marker outside compose, plus related receiver
+   activity, using the original bridge's classifier. A prompt echo, queued text,
+   unrelated tool line or successful key call does not prove consumption.
+4. If the result is unknown or queued, retain the original attempt and use its
+   read-only reconciliation entrypoint. Do not manually add Enter, clear compose,
+   resend the payload, or run a second dispatch process. Any supported in-attempt
+   key recovery remains the bridge's responsibility under its exact guards.
+5. Read and accept a completed, identity-bound report independently of transport
+   closeout. Keep the missing receipt visible; do not make the executor poll for
+   it or redo accepted work. Continue other authorized work while observing the
+   original callback at bounded checkpoints.
 
-`cmux_bridge.submit_text(surface, text, marker=...)` implements this contract for the Python harness. `cmux-agent ask` is usable for task and callback messages **only after `mac_harness.py helper-parity` passes**: it is a separate bash implementation (`~/.local/bin/cmux-agent`) carrying its own copy of `prompt_block_pending`, so agreement with this contract is a measured fact, not something it inherits by being the documented tool. When parity reports `DIVERGENT`, send through `cmux_bridge.submit_text` instead and treat the helper's own verdict — `DISPATCH_UNCONFIRMED` *and* `DISPATCH_CONFIRMED` alike — as unclassified: read the receiver's screen and call `cmux_bridge.classify_submission_failure` before deciding anything, and never blind-resend. `cmux-agent send` uses the same submit sequence without a marker for explicit raw terminal controls, and inherits the same caveat. The lower-level `send_text`/`cmux send` primitive is paste-only. Use it only for bridge-test-compatible input or as an implementation detail of `submit_text`; do not use it as evidence that a task or callback was delivered.
+The external helper is a separate implementation; a helper exit code does not
+replace the task-bound bridge receipt. The canonical SKILL and receiver-input
+rules take precedence over historical raw-send or force-compose examples.
 
 ## Role Map Schema
 
@@ -193,15 +205,19 @@ recorded as executor silence. Classify before you attribute.
 |---|---|---|---|
 | `SUPERVISOR_DID_NOT_SUBMIT` | `null` | nothing pasted | fix the supervisor path |
 | `SUBMISSION_ABORTED_BUSY` / `COMPOSE_OCCUPIED` | `null` | foreign input in compose | normal path stops; explicitly authorized `--force-compose` may record, Esc-discard, verify empty, then retry once |
-| `DELIVERY_UNVERIFIED_BY_DETECTOR` | set | marker on screen, activity shape unrecognized | widen the detector; **do not resend** |
-| `DELIVERY_QUEUED_AT_RECEIVER` | set | marker in the receiver's pending-queue region | **wait**; it drains at the next tool boundary |
+| `DELIVERY_UNVERIFIED_BY_DETECTOR` | recorded or unknown | marker on screen, activity shape unrecognized | widen the detector; **do not resend** |
+| `DELIVERY_QUEUED_AT_RECEIVER` | recorded or unknown | marker in the receiver's pending-queue region | **wait**; it drains at the next tool boundary |
 
-Only `DELIVERY_QUEUED_AT_RECEIVER` means wait. No state means resend blindly. A
+Queued delivery and detector-unverified delivery may both need bounded, read-only
+observation of the original attempt. No state means resend blindly. A
 resend against a queued delivery duplicates a message the receiver already holds.
 
-`dispatch_submitted_at` is the single most diagnostic field: `null` means the
-supervisor never pasted, so the executor cannot be at fault regardless of what the
-screen shows.
+A null `dispatch_submitted_at` means that this receipt did not record a
+submission time. It does **not** prove zero input: a short detector can return
+before visible activity and leave the field null after actual paste and Enter.
+Use the original attempt's input journal and exact receiver message to determine
+what happened. Claim `SUPERVISOR_DID_NOT_SUBMIT` only with affirmative zero-input
+evidence; otherwise preserve unverified delivery and reconcile without input.
 
 **Budget provenance before blame.** A timeout under a budget that was never large
 enough is a supervisor problem. The receipt records `budget_source`,
