@@ -150,6 +150,12 @@ remain separate. Missing/in-flight/changed evidence cannot use this exception.
   Supervisors continue independent work while callbacks are pending. Persistent
   executor failures use the authorized solo takeover boundary below.
 
+Follow [bounded handshakes, delivery and closeout](references/bounded-collaboration.md)
+for each dispatch. Keep business acceptance, callback confirmation and resource
+release separate. Once the original callback is verified and its task marker is
+disarmed, stop that task's callback probes; transport maintenance is a separate
+scope. Use a second executor only for an independent unresolved deliverable.
+
 Read [receiver input and delivery](references/receiver-input-and-delivery.md)
 when a surface may have returned to a shell or a send is unconfirmed. Current
 input type, submission, consumption, agreement and accepted output are separate

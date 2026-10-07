@@ -32,6 +32,13 @@ do not turn a zero-hit mutation or an exception into a product defect or a PASS.
 See [efficiency and task closeout](efficiency-and-closeout.md) for phase budgets,
 bounded callback settlement, authorized SOLO continuation and acceptance records.
 
+Apply [bounded collaboration](bounded-collaboration.md): freeze the business
+report, reconcile the original send without replay, and stop task-specific
+callback diagnostics after verified receipt and marker disarm. That protocol is
+an operator rule, not a claim that a new runtime hook has been installed. Track
+accepted findings and coordination overhead separately; two occupied panels do
+not establish a speedup.
+
 Scope each phase to a concrete outcome. Keep operational cleanup, product fixes,
 historical evidence and final admission separate. Do not reopen settled findings
 without new evidence. A repeated unproductive review is not progress. Use the
