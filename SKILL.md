@@ -256,3 +256,8 @@ rows cannot veto it. The selected UUID row must still match its actual TTY and
 workspace. Report caller-resolution failures as such, never as Claude identity
 failures. Keep the bridge test bounded to the test token and verify compose is
 clear; keep prompt/callback Enter checks and original-attempt recovery intact.
+
+For an ordinary-terminal Hook stopped by a root login permission denial, use the
+[narrow login boundary](references/root-login-permission-boundary.md). Preserve
+the original session and task; a source fix or process probe is not proof that
+the original executor has resumed.
