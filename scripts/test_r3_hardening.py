@@ -2207,6 +2207,9 @@ class CompletionCallbackStopGateTests(unittest.TestCase):
             _, report, receipt, callback, nonce = self._fixture(Path(tmp))
             receipt.write_text(json.dumps({
                 "task_id": "completion-stop",
+                "task_pack_sha256": __import__("hashlib").sha256(
+                    (report.parent / "task-pack.json").read_bytes()
+                ).hexdigest(),
                 "completion_nonce": nonce,
                 "completion_callback": callback,
                 "callback_target": "surface:1",

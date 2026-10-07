@@ -31,6 +31,7 @@ import math
 import os
 import re
 import sys
+from executor_closeout import terminal_report, handoff_line
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -257,11 +258,16 @@ def _protocol_callback_evidence(
         created = datetime.fromisoformat(receipt["created_at"])
         age = (_now() - created).total_seconds()
         budget = receipt["budget_seconds"]
+        # Handshake receipts carry the harness's configured observation budget.
+        # Its 600-second default is not an upper limit: rejecting a 900-second
+        # receipt here blocks even an immediate, otherwise valid ACK.
         if (type(budget) not in (int, float) or not math.isfinite(budget)
-                or not 0 < budget <= 600 or not 0 <= age <= budget):
+                or budget <= 0 or not 0 <= age <= budget):
             return False
         if handshake:
             return True
+        if budget > 600:
+            return False  # Preserve the separate review-round freshness limit.
         review = receipt["requested_review"]
         artifact = Path(review["artifact"])
         return (
@@ -396,6 +402,7 @@ def _completion_callback_evidence(
     digest = hashlib.sha256(report.read_bytes()).hexdigest()
     expected = {
         "task_id": pack.get("task_id"),
+        "task_pack_sha256": hashlib.sha256((root / "task-pack.json").read_bytes()).hexdigest(),
         "completion_nonce": pack.get("completion_nonce"),
         "completion_callback": pack.get("completion_callback"),
         "callback_target": pack.get("callback_target"),
@@ -444,8 +451,17 @@ def _evaluate_with_marker(
     if protocol_ack:
         return True, "fresh bound protocol ACK; this does not complete the task", None
     for marker in markers:
+        surface = (os.environ.get("CMUX_SURFACE_ID") or payload.get("surface_id")
+                   or payload.get("surface_uuid"))
+        terminal = terminal_report(marker, _workspace_key(payload), surface)
+        if terminal and final.strip() == handoff_line(terminal):
+            # Honest report handoff is turn-end, never callback confirmation.
+            continue
         callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
         if not callback_ok:
+            if terminal:
+                callback_msg += ("; original attempt returned. End without more tools "
+                                 "using exactly:\n" + handoff_line(terminal))
             return False, callback_msg, marker
 
     claims = _positive_evidence_claims(final)

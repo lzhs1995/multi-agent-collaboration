@@ -80,7 +80,8 @@ class StopReentryTests(unittest.TestCase):
 
     def test_valid_callback_passes_but_report_drift_blocks(self):
         receipt = {k: self.pack[k] for k in ('task_id', 'completion_nonce', 'completion_callback', 'callback_target', 'report')}
-        receipt.update(confirmed=True, report_sha256=hashlib.sha256(self.report.read_bytes()).hexdigest(), report_bytes=self.report.stat().st_size)
+        receipt.update(confirmed=True, report_sha256=hashlib.sha256(self.report.read_bytes()).hexdigest(), report_bytes=self.report.stat().st_size,
+                       task_pack_sha256=hashlib.sha256((self.root / 'task-pack.json').read_bytes()).hexdigest())
         Path(self.pack['completion_receipt']).write_text(json.dumps(receipt))
         self.assertEqual(self.call(dict(stop_hook_active=False)).returncode, 0)
         self.report.write_text('Changed report\n')

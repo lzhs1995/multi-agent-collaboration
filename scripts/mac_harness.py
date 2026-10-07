@@ -2072,6 +2072,7 @@ HOOK_CONFIGS = {
 # A PreToolUse guard cannot see a turn ending, and a Stop guard cannot see a
 # command being run, so the event is part of the requirement, not a detail.
 REQUIRED_GUARD_WIRING = {
+    "cmux_executor_closeout_guard": "PreToolUse",
     "cmux_submit_confirmation_guard": "PostToolUse",
     "cmux_agent_panel_guard": "PreToolUse",
     "cmux_handshake_receipt_guard": "PreToolUse",

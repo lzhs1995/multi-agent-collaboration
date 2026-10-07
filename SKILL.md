@@ -93,7 +93,9 @@ not an OS sandbox against arbitrary self-written socket clients.
 5. Completion is report-first, callback-second. The executor must actively call
    `cmux_bridge.submit_completion_callback` to send the pack-bound task id,
    nonce and report hash. A written report, screen DONE, prompt echo, or helper
-   exit code is not completion. The Stop hook rejects missing/mismatched receipts.
+   exit code is not completion. Missing/mismatched receipts remain unconfirmed.
+   After the original callback returns, use the bounded closeout path below;
+   do not turn receipt reconciliation into unlimited executor work.
 6. Independently read raw artifacts before accepting a result. Check current
    pins, actual counts, negative controls, incomplete work, and postconditions.
    Keep failures immutable; publish corrections separately. Update handoff and
@@ -104,6 +106,12 @@ not an OS sandbox against arbitrary self-written socket clients.
 Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
 choose zero, one or two executors, apply phase-specific handshake budgets,
 attribute delivery failures, and close accepted work without repeated reviews.
+
+Use [executor closeout enforcement](references/executor-closeout-enforcement.md):
+the PreToolUse guard blocks additional tools after a bound report's callback
+attempt has returned. Stop permits its exact honest REPORT_READY handoff without
+manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
+remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
 ### Fast handshake and verified delivery in both directions
 
@@ -119,15 +127,15 @@ attribute delivery failures, and close accepted work without repeated reviews.
   A marker still in compose is not delivered. A queued marker is pending, not
   failed and not confirmed. Only real receiver activity after the marker can
   confirm delivery; a prompt echo or unrelated activity cannot.
-- `submit_completion_callback` writes an exclusive `.pending.json` intent before
+- `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
-  Calling it again with that intent performs **observation only**, never another
-  paste/key. `observe_completion_callback` is the explicit no-input recovery
-  entrypoint. Changed report/pack/peer bindings fail closed. Keep an uncertain
+  A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
+  no-input recovery entrypoint. Changed report/pack/peer bindings fail closed. Keep an uncertain
   attempt; do not delete its journal to retry. Older attempts without a journal
   require their original delivery evidence and receiver history; do not create a
   retroactive send intent or manufacture a confirmed receipt.
-- A pending intent is not a completion receipt and cannot satisfy the Stop hook.
+- A pending intent is not a completion receipt. A returned, bound original attempt
+  may satisfy only the honest handoff exception, never a delivery/consensus claim.
   If zero-input refusal is proven, preserve that evidence and fix the input
   classifier before authorizing a successor attempt. Do not treat a classifier
   error as executor unavailability or bypass workspace/compose guards.
