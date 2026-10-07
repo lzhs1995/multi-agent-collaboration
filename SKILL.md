@@ -5,6 +5,10 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+For the measured Codex `Queued follow-up inputs` display, see
+[queue classification and bounded recovery](references/queued-followup-inputs.md).
+Queued is pending consumption, never compose failure or confirmed completion.
+
 For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.

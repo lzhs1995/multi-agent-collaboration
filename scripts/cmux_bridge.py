@@ -741,9 +741,29 @@ def pending_queue_holds(screen, marker):
     on screen is a different state entirely.
     """
     lines = screen.splitlines()
+    # Measured Codex UI: the queue header precedes the payload, while
+    # "edit last queued message" follows it. Searching only below that footer
+    # misses a successfully queued callback. Never include the next composer.
+    compact_marker = "".join(marker.split())
+    if not compact_marker:
+        return False
+    for index, line in enumerate(lines):
+        if re.fullmatch(r"\s*• Queued follow-up inputs\s*", line):
+            region = []
+            for queued_line in lines[index + 1:]:
+                if _PROMPT_GLYPH_RE.match(queued_line):
+                    break
+                region.append(queued_line)
+            if compact_marker in "".join("\n".join(region).split()):
+                return True
     for index, line in enumerate(lines):
         if _PENDING_QUEUE_RE.search(line):
-            if "".join(marker.split()) in "".join("\n".join(lines[index:]).split()):
+            region = []
+            for queued_line in lines[index:]:
+                if _PROMPT_GLYPH_RE.match(queued_line):
+                    break
+                region.append(queued_line)
+            if compact_marker in "".join("\n".join(region).split()):
                 return True
     return False
 
