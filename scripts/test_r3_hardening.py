@@ -38,6 +38,16 @@ import cmux_handshake_receipt_guard as HANDSHAKE_GUARD  # noqa: E402
 import cmux_lease_guard as LEASE_GUARD  # noqa: E402
 
 
+def setUpModule():
+    # These fixtures use synthetic workspace identities. Never mix them with
+    # the test runner's real managed-daemon ancestry. Native authentication has
+    # its own dedicated positive/negative suite and live guard verification.
+    import cmux_daemon_identity
+    patcher = mock.patch.object(cmux_daemon_identity, "collect", return_value=None)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
 def gate(root: Path, task_id="r3-test", executor="surface:2", supervisor="surface:1"):
     (root / "identity-gate.json").write_text(json.dumps({
         "task_id": task_id,

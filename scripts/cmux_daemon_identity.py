@@ -97,6 +97,28 @@ def process(pid, *, arguments=True):
     return result
 
 
+def client_candidates():
+    """Enumerate kernel executable paths; pgrep -x can omit live Darwin clients.
+
+    ps is discovery only: process() still verifies executable, owner, birth and
+    argv before any candidate can become an authenticated caller.
+    """
+    listing = subprocess.run(['/bin/ps', '-U', str(os.getuid()), '-o', 'pid=,comm='],
+                             capture_output=True, text=True, timeout=5)
+    if listing.returncode != 0:
+        raise IdentityError('client inventory unavailable')
+    candidates = []
+    for line in listing.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or not fields[0].isdigit():
+            raise IdentityError('malformed client inventory')
+        if Path(fields[1]).name == 'codex':
+            candidates.append(fields[0])
+    if len(set(candidates)) != len(candidates):
+        raise IdentityError('duplicate client inventory')
+    return candidates
+
+
 def collect(env):
     """Return None outside a managed daemon. Errors never fall back to focus."""
     if sys.platform != 'darwin' or not env.get('CODEX_THREAD_ID'):
@@ -123,12 +145,9 @@ def collect(env):
     if any(env.get(k) != daemon['env'].get(k) for k in
            ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID')):
         raise IdentityError('tool environment differs from managed daemon')
-    listing = subprocess.run(['/usr/bin/pgrep', '-u', str(os.getuid()), '-x', 'codex'], capture_output=True,
-                             text=True, timeout=5)
-    if listing.returncode not in (0, 1):
-        raise IdentityError('client inventory unavailable')
+    candidates = client_candidates()
     clients = []
-    for candidate in listing.stdout.split():
+    for candidate in candidates:
         p = process(int(candidate))
         argv = p['argv']
         if len(argv) >= 3 and argv[1:3] == ['resume', session]:
