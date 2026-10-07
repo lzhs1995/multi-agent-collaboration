@@ -85,7 +85,7 @@ class DaemonTests(unittest.TestCase):
     def collect(self, pids='10\n30\n', process_fn=None):
         with patch.object(d.sys, 'platform', 'darwin'), patch.object(d.os, 'getppid', return_value=20), \
              patch.object(d, 'process', side_effect=process_fn or (lambda pid: copy.deepcopy(self.processes[pid]))), \
-             patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout=pids), SimpleNamespace(stdout='ttys1')]):
+             patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout=''.join(f'{pid} /bin/codex\n' for pid in pids.split())), SimpleNamespace(stdout='ttys1')]):
             return d.collect(self.env)
 
     def test_live_collection(self): self.assertEqual(self.collect(), self.proof)
@@ -105,14 +105,14 @@ class DaemonTests(unittest.TestCase):
     def test_no_terminal(self):
         with patch.object(d.sys, 'platform', 'darwin'), patch.object(d.os, 'getppid', return_value=20), \
              patch.object(d, 'process', side_effect=lambda pid: copy.deepcopy(self.processes[pid])), \
-             patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout='30'), SimpleNamespace(stdout='??')]):
+             patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout='30 /bin/codex'), SimpleNamespace(stdout='??')]):
             with self.assertRaisesRegex(d.IdentityError, 'terminal'): d.collect(self.env)
 
     def test_duplicate_session(self):
         self.processes[31] = dict(self.processes[30], pid=31)
         with patch.object(d.sys, 'platform', 'darwin'), patch.object(d.os, 'getppid', return_value=20), \
              patch.object(d, 'process', side_effect=lambda pid: copy.deepcopy(self.processes[pid])), \
-             patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout='30\n31'), SimpleNamespace(stdout='ttys1'), SimpleNamespace(stdout='ttys2')]):
+             patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout='30 /bin/codex\n31 /bin/codex'), SimpleNamespace(stdout='ttys1'), SimpleNamespace(stdout='ttys2')]):
             with self.assertRaisesRegex(d.IdentityError, 'unique'): d.collect(self.env)
 
     def test_process_replaced_during_inventory(self):
@@ -143,3 +143,23 @@ class DaemonTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class InventoryTests(unittest.TestCase):
+    def test_discovery_uses_executable_paths_not_pgrep_name(self):
+        with patch.object(d.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout='47564 /a directory/package/bin/codex\n42 /bin/zsh\n')) as run:
+            self.assertEqual(d.client_candidates(), ['47564'])
+            self.assertEqual(run.call_args.args[0][0], '/bin/ps')
+
+    def test_inventory_failure_denies(self):
+        for code, output in [(1, ''), (0, 'invalid'),
+                             (0, '1 /bin/codex\n1 /bin/codex')]:
+            with self.subTest(output=output), patch.object(d.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=code, stdout=output)):
+                with self.assertRaises(d.IdentityError): d.client_candidates()
+
+    def test_no_basename_substring_match(self):
+        with patch.object(d.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout='1 /bin/codex-other\n2 /bin/notcodex\n')):
+            self.assertEqual(d.client_candidates(), [])

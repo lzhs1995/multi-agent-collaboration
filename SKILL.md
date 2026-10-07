@@ -5,6 +5,10 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
+Repair discovery before retrying a handshake; retain kernel/UUID authentication
+and distinguish local bridge failure from executor availability.
+
 Use this skill for an explicitly requested supervisor/executor workflow. Do not
 start agents merely because this skill is being installed, edited, or reviewed.
 Requires Python 3.10+ and macOS cmux for live coordination. Offline tests also run
