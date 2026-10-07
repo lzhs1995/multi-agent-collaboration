@@ -114,7 +114,7 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
             gate(root)
             with (
                 mock.patch.object(HARNESS.cmux, "send_text"),
-                mock.patch.object(HARNESS.cmux, "send_key"),
+                mock.patch.object(HARNESS.cmux, "send_key") as send_key,
                 mock.patch.object(HARNESS.cmux, "read_screen",
                                   # 1st read is the ownership pre-read: the box
                                   # must be provably empty before anything is
@@ -132,6 +132,9 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
             self.assertTrue(ev["pre_read_performed"])
             self.assertTrue(ev["compose_was_empty_before_send"])
             self.assertTrue(ev["token_sent"])
+            backspaces = [c for c in send_key.call_args_list if c.args[1] == "backspace"]
+            self.assertEqual(len(backspaces), len("BRIDGE_TEST_r3-test"))
+            self.assertLess(len(backspaces), HARNESS.BRIDGE_TEST_CLEAR_DELETE_COUNT)
 
     def test_persistent_token_fails_closed_and_records_it(self):
         """POISON: the token never leaves compose."""

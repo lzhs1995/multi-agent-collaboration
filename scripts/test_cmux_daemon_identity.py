@@ -70,8 +70,30 @@ class DaemonTests(unittest.TestCase):
         self.tree['windows'][0]['workspaces'][0]['panes'][0]['surfaces'][0]['tty'] = 'ttys9'
         with self.assertRaises(d.IdentityError): self.resolve()
 
-    def test_ambiguous_tty(self):
+    def test_unrelated_stale_tty_does_not_override_live_uuid(self):
         self.tree['windows'][0]['workspaces'][0]['panes'][1]['surfaces'][0]['tty'] = 'ttys1'
+        identity, env = self.resolve()
+        self.assertEqual(identity['caller']['surface_id'], C)
+        self.assertEqual(env['CMUX_SURFACE_ID'], C)
+
+    def test_foreign_stale_tty_cannot_permit_cross_workspace(self):
+        self.tree['windows'][0]['workspaces'][1]['panes'][0]['surfaces'][0]['tty'] = 'ttys1'
+        identity, env = self.resolve()
+        with self.assertRaises(g.WorkspaceScopeError):
+            g.resolve_snapshot(identity, self.tree, 'surface:46', env=env)
+
+    def test_duplicate_caller_uuid_still_denied_with_same_tty(self):
+        duplicate = self.tree['windows'][0]['workspaces'][0]['panes'][1]['surfaces'][0]
+        duplicate.update(id=C, tty='ttys1')
+        with self.assertRaisesRegex(d.IdentityError, 'UUIDs'): self.resolve()
+
+    def test_other_tty_match_cannot_replace_wrong_caller_tty(self):
+        self.tree['windows'][0]['workspaces'][0]['panes'][0]['surfaces'][0]['tty'] = 'ttys9'
+        self.tree['windows'][0]['workspaces'][0]['panes'][1]['surfaces'][0]['tty'] = 'ttys1'
+        with self.assertRaisesRegex(d.IdentityError, 'TTY'): self.resolve()
+
+    def test_nonterminal_caller_still_denied(self):
+        self.tree['windows'][0]['workspaces'][0]['panes'][0]['surfaces'][0]['type'] = 'browser'
         with self.assertRaises(d.IdentityError): self.resolve()
 
     def test_stale_workspace(self):

@@ -221,3 +221,9 @@ Use [read-only confirmation and native receipts](references/read-only-delivery-c
 ## Shared managed-daemon callers
 
 Read [caller identity and bounded callback closeout](references/shared-daemon-caller.md). The live guard resolves the original native client when a managed daemon inherits another terminal environment; it never changes process environment or relaxes UUID checks. Harness marker ownership uses the same resolution.
+
+The unique live native client's UUID selects the caller; unrelated recycled TTY
+rows cannot veto it. The selected UUID row must still match its actual TTY and
+workspace. Report caller-resolution failures as such, never as Claude identity
+failures. Keep the bridge test bounded to the test token and verify compose is
+clear; keep prompt/callback Enter checks and original-attempt recovery intact.
