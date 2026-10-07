@@ -5,6 +5,7 @@ a unique same-user `codex resume <id>` client, executable, birth, TTY and cmux U
 must agree. Ordinary clients retain the original identify/environment checks.
 """
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -16,6 +17,10 @@ import uuid
 
 class IdentityError(RuntimeError):
     pass
+
+
+class ProcessExited(IdentityError):
+    """The initial kernel read proved absence, before any identity was read."""
 
 
 class BsdInfo(ctypes.Structure):
@@ -55,19 +60,33 @@ def _args(data):
                   ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'CODEX_THREAD_ID') if k.encode() in env}
 
 
-def process(pid, *, arguments=True):
+def process(pid, *, arguments=True, validate_argv=True):
+    """Read a same-user process; raw inventory reads are not caller proof.
+
+    Only candidate discovery may defer the argv-path rule. The selected caller
+    is reread with the strict default before using its terminal identity.
+    """
     if sys.platform != 'darwin' or type(pid) is not int or pid <= 1:
         raise IdentityError('live Darwin process required')
-    lib = ctypes.CDLL('/usr/lib/libproc.dylib')
+    lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
     lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
                                 ctypes.c_void_p, ctypes.c_int]
-    def info():
+    def info(*, initial=False):
         b = BsdInfo()
-        if (lib.proc_pidinfo(pid, 3, 0, ctypes.byref(b), ctypes.sizeof(b)) != ctypes.sizeof(b)
-                or b.pid != pid or b.status == 5 or not b.start_sec or b.uid != os.getuid()):
-            raise IdentityError('process exited, foreign, or inaccessible')
+        ctypes.set_errno(0)
+        count = lib.proc_pidinfo(pid, 3, 0, ctypes.byref(b), ctypes.sizeof(b))
+        if count != ctypes.sizeof(b):
+            if initial and count <= 0 and ctypes.get_errno() == errno.ESRCH:
+                raise ProcessExited('process absent at initial kernel read')
+            raise IdentityError('process identity inaccessible or changed')
+        if b.pid != pid or not b.start_sec or b.uid != os.getuid():
+            raise IdentityError('process identity changed, foreign, or invalid')
+        if b.status == 5:
+            if initial:
+                raise ProcessExited('process zombie at initial kernel read')
+            raise IdentityError('process exited during read')
         return {'pid': pid, 'ppid': b.ppid, 'birth': [b.start_sec, b.start_usec]}
-    result = info()
+    result = info(initial=True)
     if arguments:
         size = os.sysconf('SC_ARG_MAX')
         if not 0 < size <= 2 * 1024 * 1024:
@@ -86,8 +105,8 @@ def process(pid, *, arguments=True):
         path = Path(executable.value.decode()).resolve(strict=True)
         if not argv:
             raise IdentityError('process has no argv')
-        if path.name == 'codex' and (not Path(argv[0]).is_absolute()
-                                     or Path(argv[0]).resolve(strict=True) != path):
+        if validate_argv and path.name == 'codex' and (not Path(argv[0]).is_absolute()
+                                                      or Path(argv[0]).resolve(strict=True) != path):
             raise IdentityError('argv executable differs from kernel executable')
         st = path.stat()
         result.update(argv=argv, env=env, executable=str(path),
@@ -148,9 +167,18 @@ def collect(env):
     candidates = client_candidates()
     clients = []
     for candidate in candidates:
-        p = process(int(candidate))
+        try:
+            # A discovery row is not yet this session's caller. Read its kernel
+            # identity before enforcing the selected caller's argv-path rule.
+            p = process(int(candidate), validate_argv=False)
+        except ProcessExited:
+            # Only an initial ESRCH/zombie is harmless. Unknown identity and
+            # a disappearance after a partial read must not hide a second match.
+            continue
         argv = p['argv']
         if len(argv) >= 3 and argv[1:3] == ['resume', session]:
+            if process(p['pid']) != p:
+                raise IdentityError('selected client identity drift')
             if Path(p['executable']).name != 'codex':
                 raise IdentityError('client executable mismatch')
             tty = subprocess.run(['/bin/ps', '-p', candidate, '-o', 'tty='],
@@ -158,6 +186,10 @@ def collect(env):
             if not tty or tty in ('?', '??', '-'):
                 raise IdentityError('client has no terminal')
             clients.append(dict(p, tty=tty))
+        elif process(p['pid'], validate_argv=False) != p:
+            # A stable, readable nonmatch can be excluded, including a relative
+            # argv[0]. Never exclude an unreadable or changing session selector.
+            raise IdentityError('unrelated candidate identity drift')
     if len(clients) != 1:
         raise IdentityError('native session has no unique live resumed client')
     # Verify every ancestor as well as the selected client after the inventory.
@@ -180,6 +212,7 @@ def resolve(identity, tree, env, proof):
                                      workspace_ref=ws.get('ref'), workspace_id=ws.get('id'),
                                      pane_ref=pane.get('ref'), pane_id=pane.get('id'),
                                      window_ref=window.get('ref'), surface_type=surface.get('type'),
+                                     dock_scope=surface.get('dock_scope'),
                                      tty=surface.get('tty')))
     def by_env(process_env):
         matches = [r for r in rows if str(r['surface_id']).upper() ==
@@ -187,6 +220,8 @@ def resolve(identity, tree, env, proof):
         if len(matches) != 1 or str(matches[0]['workspace_id']).upper() != str(
                 process_env.get('CMUX_WORKSPACE_ID', '')).upper():
             raise IdentityError('process UUIDs disagree with live tree')
+        if matches[0]['dock_scope'] == 'global':
+            raise IdentityError('global dock is not a workspace member')
         return matches[0]
     source, caller = by_env(daemon['env']), by_env(client['env'])
     raw = identity.get('caller') or {}

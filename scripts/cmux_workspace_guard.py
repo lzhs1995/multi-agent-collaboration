@@ -56,6 +56,7 @@ def resolve_snapshot(identity, tree, target, *, env=None, expected=None):
                         "pane_uuid": pane.get("id"),
                         "pane_ref": pane.get("ref"),
                         "surface_type": surface.get("type"),
+                        "dock_scope": surface.get("dock_scope"),
                     })
     def one(selector):
         matches = [r for r in rows if selector in (r["surface_ref"], r["surface_uuid"])
@@ -64,6 +65,8 @@ def resolve_snapshot(identity, tree, target, *, env=None, expected=None):
         if len(matches) != 1:
             deny("surface missing or ambiguous: " + str(selector))
         r = dict(matches[0])
+        if r["dock_scope"] == "global":
+            deny("global dock is not a workspace member: " + str(selector))
         for k in ("workspace_uuid", "surface_uuid", "pane_uuid"):
             r[k] = uuid_value(r[k])
         return r

@@ -14,6 +14,19 @@ kernel executable, UID, birth, argv, terminal and cmux UUID checks. Discovery is
 not authentication. Duplicate matching clients, changed process identity and
 cross-workspace peers still deny input.
 
+An unrelated discovery row may disappear between `ps` and the kernel read.
+Only an initial ESRCH or a verified owned zombie is safely excluded; an unknown
+read, denied permission, or exit during a partial read still refuses. Read a
+nonmatching candidate twice with unchanged kernel identity and argv before
+excluding it. Relative argv paths on these stable nonmatches do not authenticate
+a caller. Matching session candidates retain strict executable-path validation
+and the final identity recheck; a second match remains ambiguous.
+
+Global dock surfaces can appear nested under a workspace in the cmux tree.
+Their `dock_scope=global` flag excludes them from local peer discovery and from
+both caller and target bindings. Duplicate UUID rows still refuse; filtering
+must not erase an ambiguous local/global identity.
+
 Do not infer the caller from focus, titles, remembered surface numbers or stale
 observation files. Options before resume and thread switching require separate
 supported identity proof; this narrow fix does not claim those cases are solved.
@@ -35,3 +48,5 @@ Regression mapping: `test_cmux_daemon_identity.py` covers executable-path
 inventory including spaces, failed/malformed/duplicate inventories, exact
 basename selection, missing/duplicate sessions and identity drift;
 `test_cmux_workspace_guard.py` preserves workspace and UUID boundaries.
+`test_caller_inventory_boundaries.py` covers typed exit evidence, stable excluded
+candidates, changed/unknown/duplicate caller candidates, and nested global docks.
