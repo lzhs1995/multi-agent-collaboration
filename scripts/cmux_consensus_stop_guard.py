@@ -119,6 +119,23 @@ def _marker_fresh(marker: dict[str, Any]) -> bool:
     return True
 
 
+def _has_active_markers() -> bool:
+    """Check jurisdiction before discovering a caller, across all workspaces.
+
+    A managed caller can inherit a different workspace, so inherited env is
+    not sufficient for this precheck. Use the same v1/v2 and TTL rules as the
+    resolved-workspace scan; hidden v2 staging files are not armed markers.
+    """
+    for pattern in ("*.json", "*/*.json"):
+        for path in ACTIVE_DIR.glob(pattern):
+            if path.name.startswith("."):
+                continue
+            marker = _read_json(path)
+            if isinstance(marker, dict) and _marker_fresh(marker):
+                return True
+    return False
+
+
 def _active_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Every fresh marker for this workspace: v2 directory files, then v1 file.
 
@@ -489,6 +506,8 @@ def _evaluate_with_marker(payload):
             and payload.get("stop_hook_active") is True):
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
+        if not _has_active_markers():
+            return True, "no armed multi-agent task — pass through", None
         with hook_identity.evaluation(payload):
             return _evaluate_resolved(payload)
     except hook_identity.ERRORS as exc:
@@ -502,6 +521,17 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _block(message: str, marker_hint: str) -> int:
+    if message.startswith("HOOK_CALLER_UNRESOLVED:"):
+        sys.stderr.write(
+            "cmux Stop guard could not verify the hook caller.\n"
+            f"{message}\n\n"
+            "An applicable task marker exists, but its caller workspace and "
+            "surface could not be authenticated. Preserve the task markers, "
+            "report, and callback evidence. The supervisor must diagnose caller "
+            "identity resolution before retrying this gate. This result does "
+            "not judge the final message or confirm callback delivery.\n"
+        )
+        return 2
     # Callback transport failures are not failed plan-consensus rounds.
     # Keep evaluate() and its evidence requirements unchanged; give the
     # executor the recovery action for the actual failing gate.

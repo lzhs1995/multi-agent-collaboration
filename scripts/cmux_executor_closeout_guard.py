@@ -3,7 +3,9 @@
 import json
 import cmux_hook_identity as hook_identity
 import sys
-from cmux_consensus_stop_guard import _active_markers, _workspace_key, _surface_key
+from cmux_consensus_stop_guard import (
+    _active_markers, _has_active_markers, _workspace_key, _surface_key,
+)
 from executor_closeout import terminal_report, handoff_line
 
 
@@ -28,6 +30,8 @@ def evaluate(payload):
     if payload.get('hook_event_name') != 'PreToolUse':
         return True, ''
     try:
+        if not _has_active_markers():
+            return True, ''
         with hook_identity.evaluation(payload):
             return _evaluate_resolved(payload)
     except hook_identity.ERRORS as exc:
