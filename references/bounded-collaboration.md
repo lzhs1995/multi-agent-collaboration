@@ -118,3 +118,20 @@ terminal boundary above, not a larger retry limit. A document change, offline
 test, installation, active-client loading and actual delivery are five distinct
 claims. Public lessons contain generic rules; private transcripts, research data,
 accounts and machine-specific paths stay in the task evidence.
+
+## Verify the operation at the real boundary
+
+A shared tool daemon can report a different terminal from the requesting agent.
+Before calling a surface mismatch a migration, reconcile the current thread's
+unique live client, process birth, TTY and live cmux UUIDs. Forward only that
+verified client's identity to its child operation. Do not select a client from
+the desired surface number or rewrite shared daemon state. Ambiguous evidence
+still stops the send; this check prevents asking the user to move an unchanged
+terminal after a false mismatch.
+
+Use a captured real response to test the narrow failure before dispatching more
+review. A fixture derived from intended values can miss differences in the live
+application. On a pre-write failure, preserve the original operation and its
+zero-write evidence, release its resources through the existing coordinator,
+and prepare a successor only for the observed difference. This is not permission
+to replay the old operation or weaken unknown-value checks.
