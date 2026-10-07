@@ -110,6 +110,10 @@ not an OS sandbox against arbitrary self-written socket clients.
 Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
 choose zero, one or two executors, apply phase-specific handshake budgets,
 attribute delivery failures, and close accepted work without repeated reviews.
+Keep report-ready, callback-confirmed and supervisor-accepted separate. Follow
+the same guide's continuation contract: a bound closeout declaration should end
+old-task prompting, while a new human task can open a new bounded scope. This
+guidance does not establish runtime support, installation or live verification.
 
 Use [executor closeout enforcement](references/executor-closeout-enforcement.md):
 the PreToolUse guard blocks additional tools after a bound report's callback
