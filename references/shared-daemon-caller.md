@@ -15,6 +15,34 @@ ownership. A correct send check alone does not repair a registry using inherited
 workspace values. Test both positive routing and foreign-workspace/identity-drift
 rejection. Test the assembled runtime, preserving existing delivery guards.
 
+## Recycled TTY names are not caller identity
+
+Resolve the unique live resumed native client first, then join its kernel-read
+surface/workspace UUIDs to the current tree. Require that exact surface row to
+be terminal and to match the client's TTY. An unrelated tree row retaining the
+same recycled TTY name must neither select nor veto the caller. Duplicate caller
+UUIDs, multiple native clients, a mismatch on the selected row, process drift
+and cross-workspace targets still deny input. Never set CMUX identity variables
+to a user-supplied value to work around a rejected proof.
+
+Attribute errors to their failing layer: unresolved supervisor native client,
+wrong target, missing ACK, provider failure and uncertain delivery are distinct.
+A caller-resolution error is not evidence that Claude's identity is invalid.
+Once a current-task ACK is validated, reuse it and dispatch the scoped work;
+do not reopen a healthy handshake for status checks.
+
+The non-submitting bridge test starts only with proven empty compose. Clear at
+most the actual test token length, bounded by the existing cap, rather than
+always issuing 256 backspaces. Every key retains the UUID check and the final
+compose-clear postcondition remains mandatory. This reduces work without
+turning token disappearance or a key return into delivery confirmation.
+
+Ship resolver and harness changes as a new fixed release. Update assembled
+launchers and hook paths with compare-before-write backups, preserve inline
+post-submit checks and existing task journals, then verify the installed caller
+and negative guard cases. Source tests alone do not fix installed entrypoints;
+configuration updates do not prove that long-lived clients hot-reloaded.
+
 Completed reports need a bounded callback, not an open-ended polling job. Separate
 compose, submitted, queued, native consumption and report acceptance. For a
 queued callback preserve the attempt and continue independent work. A native

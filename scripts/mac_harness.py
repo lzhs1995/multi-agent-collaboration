@@ -1230,7 +1230,8 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
     # The screen postcondition below remains the authority on whether the clear
     # actually worked.
     cmux.send_key(executor_ref, "end")
-    for _ in range(BRIDGE_TEST_CLEAR_DELETE_COUNT):
+    clear_key_count = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(token))
+    for _ in range(clear_key_count):
         cmux.send_key(executor_ref, "backspace")
         time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
     _info("Cleared input with end + bounded backspace; verifying the clear")
@@ -1248,7 +1249,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         if attempt < BRIDGE_TEST_CLEAR_MAX_ATTEMPTS:
             _info(f"Token still in compose (attempt {attempt}); clearing again")
             cmux.send_key(executor_ref, "end")
-            for _ in range(BRIDGE_TEST_CLEAR_DELETE_COUNT):
+            for _ in range(clear_key_count):
                 cmux.send_key(executor_ref, "backspace")
                 time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
 

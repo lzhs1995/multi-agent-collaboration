@@ -192,9 +192,13 @@ def resolve(identity, tree, env, proof):
     raw = identity.get('caller') or {}
     if any(raw.get(k) != source[k] for k in ('surface_ref', 'workspace_ref', 'pane_ref')):
         raise IdentityError('identify differs from daemon origin')
-    tty_matches = [r for r in rows if r['tty'] == client['tty']]
-    if len(tty_matches) != 1 or tty_matches[0] != caller or caller['surface_type'] != 'terminal':
-        raise IdentityError('native client TTY missing, reused, or ambiguous')
+    # cmux can retain the name of a recycled PTY on an unrelated surface.
+    # The unique live resumed process and its kernel-read UUID environment
+    # select the caller; a global TTY-name search must not select or veto it.
+    # Still require that exact UUID row to agree with the live client's TTY.
+    if (not client.get('tty') or caller['tty'] != client['tty']
+            or caller['surface_type'] != 'terminal'):
+        raise IdentityError('native client TTY missing or differs from UUID-bound surface')
     resolved_env = dict(env, **{k: client['env'][k] for k in
                                ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID')})
     return dict(identity, caller=caller), resolved_env
