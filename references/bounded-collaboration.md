@@ -106,9 +106,15 @@ that failure and make it a separate maintenance scope; do not claim a prose rule
 fixed runtime enforcement. Safely finish an active command; do not raw Ctrl-C it.
 Before reusing the executor, verify its actual safe boundary.
 
-Persistent provider failures follow SKILL.md: finite retries only for retryable
-errors, zero blind billing/auth retries, original session preserved, authorized
-SOLO takeover after concurrent writes are stopped. The research task continues.
+Persistent provider failures follow SKILL.md and the
+[failure-window evidence rule](availability-and-resources.md#retryable-claude-api-failures-evidence-before-takeover):
+finite same-session retries for retryable Claude API failures, at least 300
+consecutive seconds from a real failure to a fresh failure, and reset on any
+actual API success. Counts, queued input and unknown outcomes do not prove this
+interval. Billing/auth/quota failures permit no blind retries; an explicit user
+stop is separately classified. Continue independent research during the wait.
+Authorized SOLO takeover still requires frozen executor writes and a verified
+safe boundary; this rule does not lengthen callback probes or release resources.
 
 ## Measure benefit and state the limits
 

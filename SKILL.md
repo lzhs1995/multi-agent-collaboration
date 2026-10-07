@@ -78,14 +78,19 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   samples; explicit thrashing is immediate failure. Freshly read the same surface,
   interrupt the failed compact once with Esc, preserve/disarm work, then permit
   one narrow same-session compact only within operator authority. Never clear.
-- Retryable 5xx: 60 seconds, at most three outer retries after the prior attempt
-  ends. Billing/authentication failures: zero retries. Stop the sentinel and
-  record unavailability. Use `executor_availability.py` for authorized SOLO
-  takeover and phase-boundary handback; never allow concurrent writers.
-  When the user has authorized automatic takeover, continue the task locally
-  after freezing the unavailable executor; do not stop the whole task. Read
-  [availability and shared resources](references/availability-and-resources.md)
-  for v2 initialization, v1 migration, exact-session recovery and resource leases.
+- Retryable Claude API failures: use bounded same-session retries, at least
+  60 seconds after the prior attempt ends. Temporary unavailability requires
+  at least 300 consecutive seconds of evidenced API failures, starting at the
+  first actual failure, plus a fresh failed attempt at or beyond that threshold.
+  Any actual API success resets the failure clock; a static screen, queued or
+  unknown delivery, and retry counts do not establish that failure interval.
+  Billing/authentication/quota failures permit no blind retries and are classified
+  separately, as is a user's explicit stop or withdrawal of authorization.
+  Continue independent work while waiting. Freeze the executor, stop its sentinel
+  and verify no concurrent writers before an already-authorized SOLO takeover;
+  recover only in the original session at a safe handoff and fresh handshake.
+  Read [availability and shared resources](references/availability-and-resources.md)
+  for the evidence rule, v2 initialization, v1 migration and resource leases.
 - Pasting is not submission. Confirm lowercase `enter` and new receiver activity
   using the bridge's delivery classifier. Prompt echo, stale callbacks and marker
   absence are not proof. On ambiguous delivery inspect before any resend.
