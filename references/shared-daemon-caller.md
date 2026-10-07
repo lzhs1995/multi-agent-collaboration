@@ -60,6 +60,23 @@ These tests do not establish active native-hook execution. Record observed
 runtime argv and payload provenance separately: changing hooks.json does not
 prove that an existing daemon or thread loaded the new release.
 
+Codex Hook trust is another installation boundary. Its key includes the source
+file, event and group/handler indices; its hash covers the normalized handler
+configuration, not the script's bytes. A new release path or reordered group can
+therefore require review even when the script passed its tests. Compare the exact
+discovered identities with `hooks.state`, verify the reviewed scripts separately,
+and, within existing installation authority, back up and update only the reviewed
+`trusted_hash` leaves. Preserve unrelated settings and previous trust entries.
+Verify the semantic diff before starting a new fixture with its original config.
+Do not disable hooks or replace the user's config to bypass startup review.
+
+Check refresh semantics for the installed Codex version before trusting from its
+TUI: the inspected implementation sets `reloadUserConfig=true` even for one item,
+which can affect all loaded threads and MCP connections. Persisting exact trust
+leaves without requesting reload and observing a new fixture is distinct from
+proving adoption by existing threads. Per-slot generated hook commands need their
+own freshly computed identities; a copied trust hash is not sufficient.
+
 ## Recycled TTY names are not caller identity
 
 Resolve the unique live resumed native client first, then join its kernel-read
