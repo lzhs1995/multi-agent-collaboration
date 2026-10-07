@@ -648,7 +648,22 @@ def cmd_surface_inventory(args):
 # identity-gate
 # ---------------------------------------------------------------------------
 
+def _require_executor_provider(args):
+    """Reject an omitted provider before discovery, naming or terminal input."""
+    provider = str(getattr(args, "executor", None) or "").strip()
+    refs = getattr(args, "executor_surface", None) or []
+    if provider:
+        return
+    if refs and all(str(ref).partition("=")[2].strip() for ref in refs):
+        return
+    _fail("EXECUTOR_PROVIDER_REQUIRED — pass --executor claude (or the actual "
+          "provider), or bind every surface as surface:24=claude; no provider "
+          "is inferred from a surface number or title")
+    sys.exit(2)
+
+
 def cmd_identity_gate(args):
+    _require_executor_provider(args)
     root = _artifact_root(args)
     _ensure_root(root, args.task_id)
     me = cmux.whoami()
@@ -672,8 +687,8 @@ def cmd_identity_gate(args):
     # A ref may carry its own provider as `surface:24=claude`. Without that,
     # --executor is one provider for the whole panel, so a Codex+Claude+Grok
     # panel could not be described at all and would be armed as three of
-    # whatever --executor said. A ref with no `=` keeps the --executor default,
-    # so the single-executor command line is unchanged.
+    # whatever --executor said. A ref with no `=` requires explicit --executor;
+    # omission must not silently mislabel a context-bearing Claude as Codex.
     executor_refs = []
     provider_overrides = {}
     for raw_ref in (args.executor_surface or []):
@@ -707,7 +722,7 @@ def cmd_identity_gate(args):
         })
         sys.exit(1)
     executor_ref = executor_refs[0] if executor_refs else ""
-    executor_provider = args.executor or "codex"
+    executor_provider = args.executor or provider_overrides.get(executor_ref)
     spawned = None
 
     if args.spawn_authorized and not args.spawn:
@@ -3305,6 +3320,7 @@ def cmd_disarm(args):
 # ---------------------------------------------------------------------------
 
 def cmd_preflight(args):
+    _require_executor_provider(args)
     print("=== PREFLIGHT (full acceptance sequence) ===")
     cmd_setup_check(args)
     # Runs first because it is cheap, read-only, and gates the thing every later
@@ -3359,7 +3375,8 @@ def main():
     p.add_argument("--reason",        default="")
     p.add_argument("--task-id",          default=DEFAULT_TASK_ID)
     p.add_argument("--supervisor",       default="auto")
-    p.add_argument("--executor",         default="codex")
+    p.add_argument("--executor",         default=None,
+                   help="explicit executor provider; required for discovery unless every surface has =provider")
     p.add_argument("--executor-surface", action="append", default=[],
                    help="repeatable; first is EXECUTOR_1, second EXECUTOR_2, …; "
                         "optional per-ref provider as surface:24=claude")

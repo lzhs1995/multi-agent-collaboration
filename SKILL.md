@@ -5,6 +5,16 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+Specify the executor provider on every new preflight: `--executor claude` for
+Claude Code, or a provider on every surface such as `--executor-surface surface:24=claude`.
+The harness rejects omitted providers before discovery or input; it no longer
+silently defaults to Codex. This declaration does not replace live UUID checks
+or the executor's truthful ACK. A wrong-provider challenge is a supervisor
+configuration failure, not executor unavailability: preserve the failed attempt,
+close its marker at the verified terminal boundary, then use a fresh task/nonce
+with the correct provider. Never edit an old receipt or ask the peer to claim a
+false identity. Existing healthy, correctly bound handshakes remain reusable.
+
 For the measured Codex `Queued follow-up inputs` display, see
 [queue classification and bounded recovery](references/queued-followup-inputs.md).
 Queued is pending consumption, never compose failure or confirmed completion.
