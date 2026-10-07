@@ -24,6 +24,21 @@ class ProcessExited(IdentityError):
     """The initial kernel read proved absence, before any identity was read."""
 
 
+class LoginInfoDenied(IdentityError):
+    """Only an initial full-BSD permission refusal, not an absent process."""
+
+
+class ShortBsdInfo(ctypes.Structure):
+    # Public Darwin sys/proc_info.h, PROC_PIDT_SHORTBSDINFO (13).
+    _fields_ = [('pid', ctypes.c_uint32), ('ppid', ctypes.c_uint32),
+                ('pgid', ctypes.c_uint32), ('status', ctypes.c_uint32),
+                ('comm', ctypes.c_char * 16), ('flags', ctypes.c_uint32),
+                ('uid', ctypes.c_uint32), ('gid', ctypes.c_uint32),
+                ('ruid', ctypes.c_uint32), ('rgid', ctypes.c_uint32),
+                ('svuid', ctypes.c_uint32), ('svgid', ctypes.c_uint32),
+                ('reserved', ctypes.c_uint32)]
+
+
 class BsdInfo(ctypes.Structure):
     _fields_ = [('flags', ctypes.c_uint32), ('status', ctypes.c_uint32),
                 ('xstatus', ctypes.c_uint32), ('pid', ctypes.c_uint32),
@@ -80,6 +95,8 @@ def process(pid, *, arguments=True, validate_argv=True, allow_system_login=False
         if count != ctypes.sizeof(b):
             if initial and count <= 0 and ctypes.get_errno() == errno.ESRCH:
                 raise ProcessExited('process absent at initial kernel read')
+            if initial and count <= 0 and allow_system_login and ctypes.get_errno() in (errno.EPERM, errno.EACCES):
+                raise LoginInfoDenied('full process identity permission denied')
             raise IdentityError('process identity inaccessible or changed')
         system_login = allow_system_login and b.uid == 0 and os.getuid() != 0
         if b.pid != pid or not b.start_sec or (b.uid != os.getuid() and not system_login):
@@ -166,6 +183,64 @@ def client_candidates():
     return candidates
 
 
+
+def _login_boundary(pid, child):
+    """Permission-limited root login, pinned by its still-live original child.
+
+    Short BSD info has no birth time, so it is NOT generic process identity.
+    Require the already kernel-read child's complete identity (including birth
+    and ppid) before and after. If login exits/reuses its PID, the original child
+    is reparented and fails this check. No argv/env from root is read or trusted.
+    """
+    if (not isinstance(child, dict) or child.get('ppid') != pid
+            or not child.get('birth') or not child.get('argv')
+            or child.get('system_login')):
+        raise IdentityError('system login requires a verified live child')
+    if process(child['pid']) != child:
+        raise IdentityError('system login child changed before read')
+    lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                ctypes.c_void_p, ctypes.c_int]
+    lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    def short_info():
+        budget.check()
+        b = ShortBsdInfo()
+        if lib.proc_pidinfo(pid, 13, 0, ctypes.byref(b), ctypes.sizeof(b)) != ctypes.sizeof(b):
+            raise IdentityError('system login short identity inaccessible')
+        if (b.pid != pid or b.uid != 0 or b.ruid != os.getuid()
+                or os.getuid() == 0 or b.status == 5 or b.ppid <= 0):
+            raise IdentityError('system login short identity foreign or invalid')
+        return dict(pid=b.pid, ppid=b.ppid, pgid=b.pgid, uid=b.uid,
+                    ruid=b.ruid, svuid=b.svuid)
+    def login_path():
+        executable = ctypes.create_string_buffer(4096)
+        if (lib.proc_pidpath(pid, executable, len(executable)) <= 0
+                or executable.value != b'/usr/bin/login'):
+            raise IdentityError('foreign ancestor is not system login')
+        st = Path('/usr/bin/login').stat()
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            raise IdentityError('system login executable is not protected')
+    first = short_info()
+    login_path()
+    if short_info() != first:
+        raise IdentityError('system login short identity drift')
+    login_path()
+    if process(child['pid']) != child:
+        raise IdentityError('system login child changed or reparented')
+    budget.check()
+    return dict(pid=pid, ppid=first['ppid'], system_login=True,
+                identity_source='short_bsd_stable_child', short_identity=first,
+                child_pid=child['pid'], child_birth=list(child['birth']))
+
+
+def _ancestor_process(pid, child):
+    try:
+        return process(pid, allow_system_login=True)
+    except LoginInfoDenied:
+        # No fallback for missing/unknown identity, argv failure, or later drift.
+        return _login_boundary(pid, child)
+
+
 def _ancestry():
     chain, pid, daemon = [], os.getppid(), None
     for _ in range(64):
@@ -174,7 +249,7 @@ def _ancestry():
             break
         if any(p['pid'] == pid for p in chain):
             raise IdentityError('cyclic process ancestry')
-        item = process(pid, allow_system_login=True)
+        item = _ancestor_process(pid, chain[-1] if chain else None)
         chain.append(item)
         if item.get('system_login'):
             break
@@ -187,8 +262,9 @@ def _ancestry():
     else:
         raise IdentityError('process ancestry exceeded limit')
     if daemon is None:
-        for item in chain:
-            if process(item['pid'], allow_system_login=True) != item:
+        for index, item in enumerate(chain):
+            child = chain[index - 1] if index else None
+            if _ancestor_process(item['pid'], child) != item:
                 raise IdentityError('ordinary process ancestry drift')
     return chain, daemon
 
