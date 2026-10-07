@@ -68,6 +68,7 @@ class ReceiptOrderingTests(unittest.TestCase):
 
             evidence = {"executor_nonce_found": True, "screen_hash": "abc123"}
             with (
+                mock.patch.object(HARNESS.cmux, "pin_workspace"),
                 mock.patch.object(HARNESS.cmux, "submit_text", side_effect=assert_receipt_before_send),
                 mock.patch.object(HARNESS.cmux, "capture_round_evidence", return_value=evidence),
             ):
@@ -91,6 +92,9 @@ class ReceiptOrderingTests(unittest.TestCase):
                 "status": "PASS",
                 "executor": "surface:2",
                 "supervisor": "surface:1",
+                "workspace_uuid": "ws-uuid",
+                "supervisor_surface_uuid": "sup-uuid",
+                "executor_surface_uuid": "uuid-2",
                 "executor_provider": "claude",
             }))
             # handshake now requires proof that bridge-test cleared its own token
@@ -114,6 +118,7 @@ class ReceiptOrderingTests(unittest.TestCase):
                 self.assertNotIn(receipt["ack_line_expected"], prompt)
 
             with (
+                mock.patch.object(HARNESS.cmux, "pin_workspace"),
                 mock.patch.object(HARNESS.cmux, "submit_text", side_effect=assert_receipt_before_send),
                 mock.patch.object(
                     HARNESS.cmux,
@@ -129,6 +134,53 @@ class ReceiptOrderingTests(unittest.TestCase):
             self.assertIsNotNone(receipt["dispatch_submitted_at"])
             self.assertIsNotNone(receipt["ack_observed_at"])
             self.assertIsNotNone(receipt["parser_confirmed_at"])
+
+    def test_handshake_uncertain_dispatch_polls_same_nonce_without_resend(self):
+        for state in (BRIDGE.DELIVERY_UNVERIFIED_BY_DETECTOR,
+                      BRIDGE.DELIVERY_QUEUED_AT_RECEIVER,
+                      BRIDGE.SUPERVISOR_DID_NOT_SUBMIT):
+            for acknowledge in (True, False):
+                with self.subTest(state=state, acknowledge=acknowledge), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "identity-gate.json").write_text(json.dumps({
+                        "status": "PASS", "executor": "surface:2",
+                        "supervisor": "surface:1", "workspace_uuid": "ws-uuid",
+                        "supervisor_surface_uuid": "sup-uuid",
+                        "executor_surface_uuid": "uuid-2", "executor_provider": "claude",
+                    }))
+                    (root / "bridge-test-evidence.json").write_text(json.dumps({
+                        "task_id": "receipt-test", "executor": "surface:2",
+                        "clear_confirmed": True,
+                    }))
+                    expected = "PREFLIGHT_ACK|receipt-test|claude:identity|READY|INLINE|nonce"
+                    with (
+                        mock.patch.object(BRIDGE, "pin_workspace"),
+                        mock.patch.object(HARNESS.secrets, "token_hex", return_value="nonce"),
+                        mock.patch.object(BRIDGE, "submit_text", side_effect=BRIDGE.DispatchUnconfirmed("original detector failure", state=state)) as send,
+                        mock.patch.object(BRIDGE, "wait_for_ack", return_value=expected,
+                                          side_effect=None if acknowledge else TimeoutError("no matching ACK")) as wait,
+                    ):
+                        try:
+                            HARNESS.cmd_handshake(self.args(root))
+                        except SystemExit as exc:
+                            self.assertEqual(exc.code, 1)
+                    send.assert_called_once()
+                    r = json.loads((root / "handshake-receipt.json").read_text())["executors"][0]
+                    self.assertEqual(r["submission_state"], state)
+                    self.assertEqual(r["dispatch_error"], "original detector failure")
+                    self.assertIsNone(r["dispatch_submitted_at"])
+                    if state == BRIDGE.SUPERVISOR_DID_NOT_SUBMIT:
+                        wait.assert_not_called()
+                        self.assertEqual(r["status"], "FAIL")
+                    else:
+                        wait.assert_called_once()
+                        self.assertEqual(wait.call_args.kwargs["nonce"], "nonce")
+                        self.assertEqual(wait.call_args.kwargs["task_id"], "receipt-test")
+                        self.assertEqual(wait.call_args.kwargs["provider"], "claude")
+                        self.assertEqual(wait.call_args.kwargs["timeout"], 1)
+                        self.assertEqual(r["status"], "PASS" if acknowledge else "FAIL")
+                        self.assertEqual(r["late_ack_recovered"], acknowledge)
+                        self.assertFalse(r["attributable_to_executor"])
 
     def test_later_round_can_explicitly_resolve_prior_blocker(self):
         rounds = [
@@ -190,7 +242,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]"]),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            result = BRIDGE._submit_text_once("surface:2", "delivery:x", marker="delivery:x")
         self.assertEqual(result, {"confirmed": True, "retries": 0})
         send_key.assert_called_once_with("surface:2", "enter")
 
@@ -198,7 +250,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         screens = [
             "❯ Ask Claude to do anything\n[Opus 5]",
             "❯ delivery:x\nTASK: work\n[Opus 5]",
-            "❯ delivery:x\n⏺ response",
+            "❯ delivery:x\nTASK: work\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]",
         ]
         with (
             mock.patch.object(BRIDGE, "send_text"),
@@ -206,7 +258,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            result = BRIDGE._submit_text_once("surface:2", "delivery:x\nTASK: work", marker="delivery:x")
         self.assertEqual(result, {"confirmed": True, "retries": 1})
         self.assertEqual([call.args for call in send_key.call_args_list], [
             ("surface:2", "enter"),
@@ -222,7 +274,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_fails_closed_when_marker_disappears(self):
@@ -234,9 +286,9 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
 
-    def test_submit_text_accepts_new_activity_when_marker_scrolled_off(self):
+    def test_submit_text_rejects_new_activity_when_marker_scrolled_off(self):
         screens = [
             "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
             "⏺ previous response\n⏺ new tool running",
@@ -247,11 +299,11 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
-        self.assertEqual(result, {"confirmed": True, "retries": 0})
+            with self.assertRaises(BRIDGE.DispatchUnconfirmed):
+                BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
-    def test_submit_text_accepts_codex_tool_activity_when_marker_scrolled_off(self):
+    def test_submit_text_rejects_codex_tool_activity_when_marker_scrolled_off(self):
         screens = [
             "• previous tool\n› Ask Codex to do anything\nGPT-6 high",
             "• previous tool\n• Edited file",
@@ -262,8 +314,8 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
-        self.assertEqual(result, {"confirmed": True, "retries": 0})
+            with self.assertRaises(BRIDGE.DispatchUnconfirmed):
+                BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_does_not_accept_non_activity_screen_change(self):
@@ -279,18 +331,18 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
 
     def test_late_confirmation_observes_without_resubmitting(self):
         screens = ["⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
-                   "⏺ previous response\n⏺ new tool running"]
+                   "❯ delivery:x\n⏺ new tool running\n❯ Ask Claude to do anything\n[Opus 5]"]
         with (mock.patch.object(BRIDGE, "send_text") as paste,
               mock.patch.object(BRIDGE, "send_key") as key,
               mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
               mock.patch.object(BRIDGE.time, "sleep")):
-            result = BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            result = BRIDGE._submit_text_once("surface:2", "delivery:x", marker="delivery:x")
         self.assertTrue(result["late_confirmation"])
-        paste.assert_called_once_with("surface:2", "prompt")
+        paste.assert_called_once_with("surface:2", "delivery:x")
         key.assert_called_once_with("surface:2", "enter")
 
     def test_late_queued_message_is_not_reported_as_confirmed(self):
@@ -301,7 +353,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
               mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
               mock.patch.object(BRIDGE.time, "sleep"),
               self.assertRaises(BRIDGE.DispatchUnconfirmed) as error):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
         self.assertEqual(error.exception.state, BRIDGE.DELIVERY_QUEUED_AT_RECEIVER)
         key.assert_called_once_with("surface:2", "enter")
 
@@ -313,7 +365,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE.submit_text("surface:2", "prompt", marker="delivery:x")
+            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
 
 
 class ExecutorReuseTests(unittest.TestCase):

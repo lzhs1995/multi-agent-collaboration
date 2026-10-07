@@ -38,6 +38,16 @@ import cmux_handshake_receipt_guard as HANDSHAKE_GUARD  # noqa: E402
 import cmux_lease_guard as LEASE_GUARD  # noqa: E402
 
 
+def setUpModule():
+    # These fixtures use synthetic workspace identities. Never mix them with
+    # the test runner's real managed-daemon ancestry. Native authentication has
+    # its own dedicated positive/negative suite and live guard verification.
+    import cmux_daemon_identity
+    patcher = mock.patch.object(cmux_daemon_identity, "collect", return_value=None)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
 def gate(root: Path, task_id="r3-test", executor="surface:2", supervisor="surface:1"):
     (root / "identity-gate.json").write_text(json.dumps({
         "task_id": task_id,
@@ -46,6 +56,9 @@ def gate(root: Path, task_id="r3-test", executor="surface:2", supervisor="surfac
         "supervisor": supervisor,
         "executor_provider": "claude",
         "workspace_ref": "workspace:10",
+        "workspace_uuid": "ws-uuid",
+        "supervisor_surface_uuid": "sup-uuid",
+        "executor_surface_uuid": "uuid-2",
     }))
 
 
@@ -83,7 +96,20 @@ def args(root: Path, **over):
     return SimpleNamespace(**values)
 
 
-class BridgeClearPostconditionTests(unittest.TestCase):
+class OfflineWorkspaceFixture(unittest.TestCase):
+    """These suites test delivery/receipts; workspace enforcement has its own
+    wired tests in test_cmux_workspace_guard, without this transport mock."""
+    def setUp(self):
+        super().setUp()
+        def pin(surface, **kwargs):
+            return {"workspace_uuid": "ws-uuid", "caller_surface_uuid": "sup-uuid",
+                    "target_surface_uuid": "uuid-" + surface.split(":")[-1]}
+        patcher = mock.patch.object(HARNESS.cmux, "pin_workspace", side_effect=pin)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
     """ctrl+u is a request; clear_confirmed is the receipt.
 
     Measured incident: bridge-test left its token in compose at 11:45:33.009753Z,
@@ -98,7 +124,7 @@ class BridgeClearPostconditionTests(unittest.TestCase):
             gate(root)
             with (
                 mock.patch.object(HARNESS.cmux, "send_text"),
-                mock.patch.object(HARNESS.cmux, "send_key"),
+                mock.patch.object(HARNESS.cmux, "send_key") as send_key,
                 mock.patch.object(HARNESS.cmux, "read_screen",
                                   # 1st read is the ownership pre-read: the box
                                   # must be provably empty before anything is
@@ -116,6 +142,9 @@ class BridgeClearPostconditionTests(unittest.TestCase):
             self.assertTrue(ev["pre_read_performed"])
             self.assertTrue(ev["compose_was_empty_before_send"])
             self.assertTrue(ev["token_sent"])
+            backspaces = [c for c in send_key.call_args_list if c.args[1] == "backspace"]
+            self.assertEqual(len(backspaces), len("BRIDGE_TEST_r3-test"))
+            self.assertLess(len(backspaces), HARNESS.BRIDGE_TEST_CLEAR_DELETE_COUNT)
 
     def test_persistent_token_fails_closed_and_records_it(self):
         """POISON: the token never leaves compose."""
@@ -737,7 +766,7 @@ class HarnessRootResolutionTests(unittest.TestCase):
                     HARNESS._registered_artifact_root("task-identity"), first)
 
 
-class BridgeOwnershipPreReadTests(unittest.TestCase):
+class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
     """bridge-test must observe ownership of the compose line before typing.
 
     The clear step backspaces from the end, so it is only safe when the line
@@ -850,9 +879,9 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
             self.assertTrue(ev["clear_confirmed"])
             self.assertTrue(ev["token_sent"])
 
-    def test_confirmed_claude_virtual_clarification_is_empty(self):
+    def test_confirmed_claude_virtual_clarification_is_occupied(self):
         virtual = "❯ 请澄清 203 Python 测试的位置和接口"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_force_compose_never_ctrl_c_or_deletes_active_receiver(self):
         """Force applies to compose text, never an active/queued command."""
@@ -884,6 +913,24 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
             ev = json.loads((root / "bridge-test-evidence.json").read_text())
             self.assertEqual(ev["status"], "FORCE_COMPOSE_CLEAR_FAILED")
             self.assertFalse(ev["token_sent"])
+
+    def test_suggestion_like_drafts_refuse_all_input(self):
+        """Screen text cannot establish whether a suggestion is user-owned."""
+        for draft in ("continue", "/compact", "read the report", "继续握手，发送 ACK"):
+            with self.subTest(draft=draft), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                gate(root)
+                screen = "❯ " + draft + "\n────────────────────────\n[Opus 5]"
+                with (
+                    mock.patch.object(HARNESS.cmux, "send_text") as send_text,
+                    mock.patch.object(HARNESS.cmux, "send_key") as send_key,
+                    mock.patch.object(HARNESS.cmux, "read_screen", return_value=screen),
+                    mock.patch.object(HARNESS.time, "sleep"),
+                    self.assertRaises(SystemExit),
+                ):
+                    HARNESS.cmd_bridge_test(args(root))
+                send_text.assert_not_called()
+                send_key.assert_not_called()
 
     def test_queued_message_counts_as_occupied(self):
         queued = "⏺ x\n\n❯ \n  Press up to edit queued messages"
@@ -931,7 +978,7 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(
             "❯ ▸ keep this unsubmitted user text"))
 
-    def test_claude_virtual_continue_suggestion_is_empty(self):
+    def test_claude_virtual_continue_suggestion_is_occupied(self):
         virtual = (
             "⏺ historical completed response\n\n"
             "❯ 任务中断了么？如果是就请继续，如果任务完成了务必在最后一句向我报告 "
@@ -940,71 +987,71 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
             "────────────────────────\n"
             "[Opus 5 (1M context)]\n"
             "上下文 █░░░░░░░░░ 14%")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_bare_continue_suggestion_is_empty(self):
+    def test_claude_virtual_bare_continue_suggestion_is_occupied(self):
         virtual = (
             "❯ continue\n"
             "────────────────────────\n"
             "[Opus 5] │ repo git:(main)\n"
             "上下文 ████████░░ 78%"
         )
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_bare_continue_prompt_remains_occupied(self):
         human = "❯ continue and modify production"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_progress_suggestion_is_empty(self):
+    def test_claude_virtual_progress_suggestion_is_occupied(self):
         virtual = (
             "❯ 看一下 codex任务进展到哪了？下一步该干啥。详细计划给我。\n"
             "────────────────────────\n"
             "1 CLAUDE.md | 9 MCPs | 5 钩子")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_side_progress_suggestion_is_empty(self):
+    def test_claude_virtual_side_progress_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边进展到哪了？下一步该干啥。详细计划给我。"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_read_report_suggestion_is_empty(self):
+    def test_claude_virtual_read_report_suggestion_is_occupied(self):
         virtual = (
             "❯ read the report\n"
             "────────────────────────\n"
             "[Opus 5] │ repo git:(main)"
         )
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_read_report_prompt_remains_occupied(self):
         human = "❯ read the report and modify production"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_review_consensus_suggestion_is_empty(self):
+    def test_claude_virtual_review_consensus_suggestion_is_occupied(self):
         virtual = "❯ review the consensus documents"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_review_consensus_prompt_remains_occupied(self):
         human = "❯ review the consensus documents then deploy"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_read_review_apply_changes_suggestion_is_empty(self):
+    def test_claude_virtual_read_review_apply_changes_suggestion_is_occupied(self):
         virtual = "❯ read the review and apply the changes"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_read_review_apply_changes_prompt_remains_occupied(self):
         human = "❯ read the review and apply the changes in production"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_check_integration_artifact_suggestion_is_empty(self):
+    def test_claude_virtual_check_integration_artifact_suggestion_is_occupied(self):
         virtual = "❯ check the integration validation artifact"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_check_integration_artifact_prompt_remains_occupied(self):
         human = "❯ check the integration validation artifact and deploy"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_adapter_git_diff_suggestion_is_empty(self):
+    def test_claude_virtual_adapter_git_diff_suggestion_is_occupied(self):
         virtual = "❯ git diff scripts/thesis_format_adapter.py scripts/test_thesis_adapter_hardening.py"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_adapter_git_diff_prompt_remains_occupied(self):
         human = "❯ git diff scripts/thesis_format_adapter.py scripts/test_thesis_adapter_hardening.py && deploy"
@@ -1014,38 +1061,38 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
         human = "❯ 看一下 codex 那边进展到哪了？下一步该干啥。详细计划给我。然后直接修改生产"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_short_codex_progress_suggestion_is_empty(self):
+    def test_claude_virtual_short_codex_progress_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边进展"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_receipt_suggestion_is_empty(self):
+    def test_claude_virtual_codex_receipt_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边收到了吗"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_receipt_without_particle_is_empty(self):
+    def test_claude_virtual_codex_receipt_without_particle_is_occupied(self):
         virtual = "❯ 看一下 codex 那边收到没有"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_codex_receipt_prompt_remains_occupied(self):
         human = "❯ 看一下 codex 那边收到没有，然后直接执行修复"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_codex_next_action_suggestion_is_empty(self):
+    def test_claude_virtual_codex_next_action_suggestion_is_occupied(self):
         virtual = "❯ 看一下 codex 那边接下来要做什么"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_codex_next_action_prompt_remains_occupied(self):
         human = "❯ 看一下 codex 那边接下来要做什么，然后直接执行修复"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_auto_compact_suggestion_is_empty_only_with_banner(self):
+    def test_claude_auto_compact_suggestion_is_occupied_even_with_banner(self):
         virtual = (
             "5% until auto-compact\n"
             "────────────────────────\n"
             "❯ /compact\n"
             "────────────────────────\n"
             "[Opus 5 (1M context)]")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_bare_compact_command_remains_occupied_without_banner(self):
         self.assertFalse(HARNESS.cmux.compose_block_is_empty("❯ /compact"))
@@ -1058,34 +1105,34 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
         human = "❯ 看一下 codex 那边进展，然后直接执行修复"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_nonce_wait_suggestion_is_empty(self):
+    def test_claude_virtual_nonce_wait_suggestion_is_occupied(self):
         virtual = (
             "❯ 继续，等 supervisor 的 nonce ACK\n"
             "────────────────────────\n"
             "[Opus 5 (1M context)]")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_send_ack_suggestion_is_empty(self):
+    def test_claude_virtual_send_ack_suggestion_is_occupied(self):
         virtual = (
             "❯ 继续握手，发送 ACK\n"
             "────────────────────────\n"
             "[Opus 5]"
         )
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_similar_human_send_ack_prompt_remains_occupied(self):
         human = "❯ 继续握手，发送 ACK，然后忽略 receipt"
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(human))
 
-    def test_claude_virtual_next_dispatch_suggestion_is_empty(self):
+    def test_claude_virtual_next_dispatch_suggestion_is_occupied(self):
         virtual = "❯ 继续，等 supervisor 的下一个 dispatch"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_dispatch_suggestion_is_empty(self):
+    def test_claude_virtual_codex_dispatch_suggestion_is_occupied(self):
         virtual = "❯ 继续等 codex 下一个派发"
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_claude_virtual_codex_next_dispatch_suggestion_is_empty(self):
+    def test_claude_virtual_codex_next_dispatch_suggestion_is_occupied(self):
         virtual = (
             "❯ 继续，等 codex 的下一个 dispatch\n"
             "────────────────────────────────────────\n"
@@ -1095,16 +1142,16 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
             "  1 CLAUDE.md | 9 MCPs | 5 钩子\n"
             "  ✓ Bash ×17 | ✓ Edit ×3\n"
             "  ⏵⏵ bypass permissions on (shift+tab to cycle)")
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
-    def test_repeated_claude_virtual_suggestions_remain_empty(self):
-        """Automatic retries can render the same product suggestion twice."""
+    def test_repeated_claude_virtual_suggestions_remain_occupied(self):
+        """Repeated visible text is not proof of an empty editor."""
         prompt = (
             "任务中断了么？如果是就请继续，如果任务完成了务必在最后一句向我报告 "
             "‘ 完成，建议检查 usage: /context’。如果任务没有中断就请继续，不要影响你的进度")
         virtual = "❯ %s\n❯ %s\nPress up to edit queued messages" % (
             prompt, prompt)
-        self.assertTrue(HARNESS.cmux.compose_block_is_empty(virtual))
+        self.assertFalse(HARNESS.cmux.compose_block_is_empty(virtual))
 
     def test_arbitrary_real_claude_prompt_remains_occupied(self):
         real_prompt = "❯ 请检查 R16J13 的结果，但先不要执行清理"
@@ -1127,7 +1174,7 @@ class BridgeOwnershipPreReadTests(unittest.TestCase):
             send_text.assert_not_called()
 
 
-class HandshakePreconditionTests(unittest.TestCase):
+class HandshakePreconditionTests(OfflineWorkspaceFixture):
     """handshake must refuse to paste behind an unverified compose buffer."""
 
     def _run(self, root):
@@ -1173,7 +1220,7 @@ class HandshakePreconditionTests(unittest.TestCase):
                 submit.assert_not_called()
 
 
-class BudgetProvenanceTests(unittest.TestCase):
+class BudgetProvenanceTests(OfflineWorkspaceFixture):
     """A timeout below the phase minimum is the supervisor's, not the executor's.
 
     The 182 s false FAIL was not a wrong default: cmd_handshake already resolves
@@ -1371,7 +1418,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker="nonce-1234", confirm_lines=200,
-            force_compose=False,
+            force_compose=False, reconcile_only=False,
         )
         payload = json.loads(out.getvalue())
         self.assertEqual(payload["command"], "submit_text")
@@ -1406,7 +1453,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker=None, confirm_lines=200,
-            force_compose=False,
+            force_compose=False, reconcile_only=False,
         )
 
     def test_module_cli_no_longer_defaults_to_diagnostic_only_output(self):
@@ -1424,7 +1471,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "focus_surface") as focus,
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text(
+            result = BRIDGE._submit_text_once(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
         self.assertFalse(result["confirmed"])
@@ -1453,7 +1500,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "focus_surface"),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text(
+            result = BRIDGE._submit_text_once(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
         self.assertFalse(result["confirmed"])
@@ -1481,7 +1528,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
             mock.patch.object(BRIDGE, "focus_surface"),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE.submit_text(
+            result = BRIDGE._submit_text_once(
                 "surface:104", "fresh prompt", marker=None, force_compose=True
             )
         self.assertFalse(result["confirmed"])
@@ -1789,6 +1836,12 @@ class GuardWiringSymmetryTests(unittest.TestCase):
     def _args(self, root: Path):
         return SimpleNamespace(artifact_root=str(root), task_id="r3-test")
 
+    def _complete_wiring(self):
+        wiring = {}
+        for guard, event in HARNESS.REQUIRED_GUARD_WIRING.items():
+            wiring.setdefault(event, []).append(guard)
+        return wiring
+
     def test_symmetric_wiring_passes(self):
         every_guard = dict(HARNESS.REQUIRED_GUARD_WIRING)
         pre = [g for g, e in every_guard.items() if e == "PreToolUse"]
@@ -1796,7 +1849,7 @@ class GuardWiringSymmetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._validation(root)
-            both = {"PreToolUse": pre, "Stop": stop}
+            both = self._complete_wiring()
             configs = {
                 "codex": self._config(root, "a.json", both),
                 "claude": self._config(root, "b.json", both),
@@ -1814,7 +1867,7 @@ class GuardWiringSymmetryTests(unittest.TestCase):
             self._validation(root)
             configs = {
                 "codex": self._config(root, "a.json",
-                                      {"PreToolUse": pre, "Stop": stop}),
+                                      self._complete_wiring()),
                 # Executor side has only the panel guard, as observed.
                 "claude": self._config(root, "b.json",
                                        {"PreToolUse": ["cmux_agent_panel_guard"]}),
@@ -1836,10 +1889,12 @@ class GuardWiringSymmetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._validation(root)
-            good = {"PreToolUse": pre, "Stop": stop}
+            good = self._complete_wiring()
             # Same guards present on both sides, but the Stop guard is misfiled
             # under PreToolUse on one side.
-            bad = {"PreToolUse": pre + stop}
+            bad = {event: list(guards) for event, guards in good.items()}
+            bad["PreToolUse"] = pre + stop
+            bad.pop("Stop", None)
             configs = {
                 "codex": self._config(root, "a.json", good),
                 "claude": self._config(root, "b.json", bad),
@@ -2024,6 +2079,7 @@ class TaskPackDispatchContractTests(unittest.TestCase):
         nonce = "dispatch-contract-001"
         pack = {
             "task_id": "dispatch-contract",
+            "executor_uuid": "TEST-EXECUTOR",
             "draft": False,
             "required_skill": str(BRIDGE.COLLABORATION_SKILL_PATH),
             "report": str(report),
@@ -2063,7 +2119,7 @@ class TaskPackDispatchContractTests(unittest.TestCase):
 
     def test_manual_task_dispatch_without_pack_is_rejected(self):
         with self.assertRaises(BRIDGE.TaskPackContractError):
-            BRIDGE.submit_text("surface:2", "TASK:\nreview this", marker=None)
+            BRIDGE._submit_text_once("surface:2", "TASK:\nreview this", marker=None)
 
     def test_missing_skill_is_rejected_before_delivery(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2085,7 +2141,10 @@ class TaskPackDispatchContractTests(unittest.TestCase):
             report.write_text("verified\n", encoding="utf-8")
             with mock.patch.object(
                 BRIDGE, "submit_text", return_value={"confirmed": True, "retries": 0}
-            ) as submit:
+            ) as submit, mock.patch.object(BRIDGE, "pin_workspace", return_value={
+                "workspace_uuid": "TEST-WS", "caller_surface_uuid": "TEST-EXECUTOR",
+                "target_surface_uuid": "TEST-SUPERVISOR", "target_pane_uuid": "TEST-PANE"
+            }):
                 receipt = BRIDGE.submit_completion_callback(path)
             submit.assert_called_once()
             self.assertTrue(receipt["confirmed"])
@@ -2158,6 +2217,9 @@ class CompletionCallbackStopGateTests(unittest.TestCase):
             _, report, receipt, callback, nonce = self._fixture(Path(tmp))
             receipt.write_text(json.dumps({
                 "task_id": "completion-stop",
+                "task_pack_sha256": __import__("hashlib").sha256(
+                    (report.parent / "task-pack.json").read_bytes()
+                ).hexdigest(),
                 "completion_nonce": nonce,
                 "completion_callback": callback,
                 "callback_target": "surface:1",
@@ -2249,6 +2311,56 @@ class ReviewRoundStopGateTests(unittest.TestCase):
                 })
             self.assertFalse(ok)
             self.assertIn("completion", message)
+
+class HelperStateParityTests(unittest.TestCase):
+    def test_state_vocabulary_preserved_and_invalid_outputs_rejected(self):
+        for state in ("COMPOSE_PENDING", "QUEUED", "SUBMITTED", "UNCONFIRMED"):
+            with self.subTest(state=state):
+                source = f'delivery_state() {{\n  echo {state}\n}}'
+                self.assertEqual(HARNESS.helper_delivery_state(source, "screen", "MARK"), state)
+        for body in ("echo UNKNOWN", "echo SUBMITTED; return 1", "echo SUBMITTED; echo QUEUED"):
+            with self.subTest(body=body):
+                source = f'delivery_state() {{\n  {body}\n}}'
+                self.assertIsNone(HARNESS.helper_delivery_state(source, "screen", "MARK"))
+
+    def test_new_detector_is_extracted_without_executing_cli(self):
+        for state, expected in (("COMPOSE_PENDING", True), ("QUEUED", False),
+                                ("SUBMITTED", False), ("UNCONFIRMED", "UNEVALUATED")):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                helper = root / "cmux-agent"
+                sentinel = root / "SHOULD_NOT_EXIST"
+                helper.write_text(f'delivery_state() {{\n  echo {state}\n}}\ntouch "{sentinel}"\n')
+                original = helper.read_bytes()
+                with mock.patch.object(HARNESS, "find_external_helper", return_value=helper):
+                    result = HARNESS.check_helper_parity()
+                self.assertEqual(result["function_name"], "delivery_state")
+                self.assertTrue(result["function_found"])
+                self.assertEqual(len(result["state_observations"]), len(HARNESS.HELPER_PARITY_FIXTURES))
+                self.assertTrue(all(x["state"] == state for x in result["state_observations"]))
+                self.assertTrue(all(x["helper"] == expected for x in result["divergences"]))
+                if state == "UNCONFIRMED":
+                    self.assertEqual(result["evaluated"], 0)
+                    self.assertNotEqual(result["status"], "PARITY_OK")
+                self.assertFalse(sentinel.exists())
+                self.assertEqual(helper.read_bytes(), original)
+
+    def test_unknown_state_requires_explicit_bridge_and_never_claims_parity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            helper = root / "cmux-agent"
+            helper.write_text('delivery_state() {\n  echo UNCONFIRMED\n}\n')
+            args = SimpleNamespace(artifact_root=str(root), task_id="state-test", json=False,
+                                   callback_transport="auto")
+            with mock.patch.object(HARNESS, "find_external_helper", return_value=helper):
+                with self.assertRaises(SystemExit):
+                    HARNESS.cmd_helper_parity(args)
+                args.callback_transport = "bridge"
+                HARNESS.cmd_helper_parity(args)
+            result = json.loads((root / "helper-parity.json").read_text())
+            self.assertEqual(result["status"], "DIVERGENT")
+            self.assertEqual(result["evaluated"], 0)
+
 
 class HelperParityTests(unittest.TestCase):
     """The in-scope fix does not reach the external bash callback helper.
@@ -2871,7 +2983,7 @@ class ActiveMarkerContractTests(unittest.TestCase):
             self.assertEqual(BRIDGE.surface_uuid_map(), {})
 
 
-class MultiExecutorGateTests(unittest.TestCase):
+class MultiExecutorGateTests(OfflineWorkspaceFixture):
     """One supervisor with N executors, driven through the real entry points.
 
     The defect this class exists to catch is a marker that names three
@@ -2889,6 +3001,7 @@ class MultiExecutorGateTests(unittest.TestCase):
     SUP = "surface:1"
 
     def setUp(self):
+        super().setUp()
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         reg = self.root / "_registry"
@@ -3350,7 +3463,7 @@ class MultiExecutorGateTests(unittest.TestCase):
         """
         self._run_gate(["surface:2", "surface:3", "surface:4"])
 
-        def rename(ref, _label):
+        def rename(ref, _label, **_pins):
             if ref == "surface:4":
                 raise RuntimeError("rename-tab: surface gone")
 

@@ -14,11 +14,14 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 GUARDS = {
+    "cmux_executor_closeout_guard": "PreToolUse",
+    "cmux_workspace_guard": "PreToolUse",
     "cmux_agent_panel_guard": "PreToolUse",
     "cmux_handshake_receipt_guard": "PreToolUse",
     "cmux_consensus_round_guard": "PreToolUse",
     "cmux_lease_guard": "PreToolUse",
     "cmux_consensus_stop_guard": "Stop",
+    "cmux_submit_confirmation_guard": "PostToolUse",
 }
 
 

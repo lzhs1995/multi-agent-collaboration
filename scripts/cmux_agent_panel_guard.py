@@ -25,6 +25,7 @@ import re
 import shlex
 import sys
 from typing import Any
+from cmux_workspace_guard import validate_command as validate_workspace_command
 
 
 AGENT_NAMES = ("claude", "codex", "opencode", "omo", "omx", "omc")
@@ -424,6 +425,10 @@ def validate_command(command: str) -> tuple[bool, str]:
     command = command.strip()
     if not command:
         return True, "no command"
+
+    ok, message = validate_workspace_command(command)
+    if not ok:
+        return False, message
 
     # Help queries never create a panel; always allow.
     if _has_help_flag(command):
