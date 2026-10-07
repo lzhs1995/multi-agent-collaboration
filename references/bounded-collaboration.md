@@ -20,6 +20,22 @@ access remains serial; a second agent does not create a second application lease
 An idle executor is appropriate when no valuable independent task remains or its
 previous task has not safely closed. Do not fill the panel with busywork.
 
+While a useful task is running, prepare the next unresolved question and its
+stable inputs locally. At verified closeout, actively check whether that work is
+still needed and dispatch it through the normal lifecycle; do not wait for the
+user to notice an idle executor. Keep one active task per executor. A healthy
+ACK should lead promptly to finalization and dispatch of the prepared pack, not
+a second discovery or research phase. Never paste the next task during callback
+recovery or another active command.
+
+State the independence of a review precisely. Grouping or recounting a table
+derived by the supervisor verifies that summary, not its derivation. If the
+unresolved claim concerns classification, reconstruct it from the original
+commands, samples or other primary inputs. Controls must exercise a nonempty
+case; an empty set that makes an aggregate predicate true is not a passing
+control. Compare the actual classified members when equal totals can hide
+different membership.
+
 ## A handshake proves identity, not scientific agreement
 
 The initial challenge includes the absolute pending receipt and required skill.
@@ -90,6 +106,11 @@ what was independently checked, what was only reused, and coordination overhead
 (handshake, callback, recovery, resource wait). Do not add unlike counts or use
 agent uptime as productivity. A cached receipt check is not a new model run or a
 new scientific review; mixed content/liveness checks need separate denominators.
+
+Give the main deliverable priority over lesson maintenance. Capture a short
+reusable lesson after accepting the relevant evidence, then return to the task.
+Do not expand communication tooling or repeat completed research merely to
+produce a richer retrospective.
 
 An observed failure pattern is accepted work followed by prolonged callback
 diagnostics despite a confirmed original receipt. The remedy is the explicit
