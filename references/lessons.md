@@ -29,6 +29,9 @@ do not turn a zero-hit mutation or an exception into a product defect or a PASS.
 
 ## Avoid Process Inflation
 
+See [efficiency and task closeout](efficiency-and-closeout.md) for phase budgets,
+bounded callback settlement, authorized SOLO continuation and acceptance records.
+
 Scope each phase to a concrete outcome. Keep operational cleanup, product fixes,
 historical evidence and final admission separate. Do not reopen settled findings
 without new evidence. A repeated unproductive review is not progress. Use the

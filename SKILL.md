@@ -101,6 +101,10 @@ not an OS sandbox against arbitrary self-written socket clients.
 
 ## Delivery And Monitoring
 
+Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
+choose zero, one or two executors, apply phase-specific handshake budgets,
+attribute delivery failures, and close accepted work without repeated reviews.
+
 ### Fast handshake and verified delivery in both directions
 
 - Give the executor the absolute pending handshake receipt path in the initial
