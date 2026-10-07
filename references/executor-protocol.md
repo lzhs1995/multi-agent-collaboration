@@ -82,27 +82,25 @@ The executor report must include:
 - whether production was touched
 - next recommended action
 
-For cmux work, the executor must actively return each milestone and terminal
-state to the task pack's bound supervisor surface, rather than only printing it
-locally. Use:
+For cmux work, return meaningful milestones through the task's permitted guarded
+status path to its bound supervisor. For terminal completion, always use
+`submit_completion_callback` as shown above, with the finalized pack's exact
+payload. Record a blocked outcome truthfully in the report; do not invent a
+different terminal message or nonce to evade the pack contract.
 
-```bash
-cmux-agent ask <supervisor-surface> "STATUS: TASK_ID=<id> MILESTONE=<name> EVIDENCE=<path>"
-cmux-agent ask <supervisor-surface> "DONE: EXECUTOR REPORT | TASK_ID=<id> | STATUS=DONE | EVIDENCE=<path>"
-cmux-agent ask <supervisor-surface> "BLOCKED: EXECUTOR REPORT | TASK_ID=<id> | STATUS=BLOCKED | EVIDENCE=<path>"
-```
+`helper-parity` is a diagnostic for the external helper, not permission to replace
+terminal completion with `cmux-agent ask` or `submit_text`. Those paths do not
+produce the required report-bound completion receipt. A divergent helper or an
+unconfirmed send requires inspection of the original attempt, not a second send
+through a different path. A detector false-negative can occur after the receiver
+already consumed the message.
 
-`cmux-agent ask` is usable for these callbacks **only while `mac_harness.py
-helper-parity` passes.** That helper (`~/.local/bin/cmux-agent`) is a bash script
-outside this skill; it carries its own copy of `prompt_block_pending`, and when the
-gate reports `DIVERGENT` that copy does not implement the submission contract the
-rest of this protocol assumes. In that state do not trust its verdict either way:
-send through `cmux_bridge.submit_text(surface, text, marker=...)`, which is in scope
-and correct for both receiver UIs, and treat any helper `DISPATCH_UNCONFIRMED` as
-*unclassified* — read the receiver's screen and call
-`cmux_bridge.classify_submission_failure` before deciding anything. Never
-blind-resend a callback on an unconfirmed verdict; a false negative there means the
-supervisor already has your message.
+Follow [bounded collaboration](bounded-collaboration.md) for post-Enter evidence,
+supported read-only recovery and the stop condition. If the pinned runtime lacks
+that recovery capability, preserve the evidence for the supervisor; do not call
+the sender again and describe it as observation. Report acceptance, original
+callback confirmation and task-marker disarm remain separate facts. After the
+callback is verified and its marker disarmed, stop task-specific callback probes.
 
 Write the evidence artifact before sending `DONE` or `BLOCKED`. Do not send
 heartbeat messages more often than meaningful milestones; the supervisor's
