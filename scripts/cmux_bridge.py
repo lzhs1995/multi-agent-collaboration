@@ -186,8 +186,8 @@ def whoami():
     Keys: workspace_ref, surface_ref, surface_type, pane_ref, window_ref,
           workspace_id (from env).
     """
-    raw = _run("identify", "--json")
-    data = json.loads(raw)
+    from cmux_workspace_guard import caller_snapshot
+    data, _tree, caller_env, _proof = caller_snapshot()
     caller = data.get("caller", {})
     return {
         "workspace_ref":  caller.get("workspace_ref", ""),
@@ -195,8 +195,9 @@ def whoami():
         "surface_type":   caller.get("surface_type", ""),
         "pane_ref":       caller.get("pane_ref", ""),
         "window_ref":     caller.get("window_ref", ""),
-        "workspace_id":   os.environ.get("CMUX_WORKSPACE_ID", ""),
-        "surface_id":     os.environ.get("CMUX_SURFACE_ID", ""),
+        "workspace_id":   caller_env.get("CMUX_WORKSPACE_ID", ""),
+        "surface_id":     caller_env.get("CMUX_SURFACE_ID", ""),
+        "provider":       "codex" if _proof is not None else "unknown",
     }
 
 
@@ -269,14 +270,33 @@ def surface_uuid_map():
 
 def list_surfaces(workspace=None):
     """
-    Return list of surface dicts using `cmux list-panels` (preferred, workspace-wide).
+    Return live tree members of the resolved caller's workspace by default.
 
-    list-panels output: "* surface:17  terminal  [focused]  \"title\""
-                        "  surface:25  agentSession  \"title\""
-
-    Fallback: cmux list-pane-surfaces (pane-scope only).
-    Each dict: {ref, title, selected, surface_type}.
+    Every row carries workspace/surface UUIDs. ``selected`` denotes the
+    verified caller, not the focused tab or a globally docked surface.
     """
+    # A managed daemon's default workspace is its origin, not this caller.
+    # Tree membership also excludes global dock panels from the local inventory.
+    from cmux_workspace_guard import caller_snapshot
+    identity, tree, env, _proof = caller_snapshot()
+    caller = identity["caller"]
+    selector = workspace or env.get("CMUX_WORKSPACE_ID") or caller["workspace_ref"]
+    matches = [ws for win in tree.get("windows", []) for ws in win.get("workspaces", [])
+               if selector in (ws.get("id"), ws.get("ref"))]
+    if len(matches) != 1:
+        raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: inventory workspace missing or ambiguous")
+    ws = matches[0]
+    return [{"ref": s["ref"], "surface_id": s["id"],
+             "workspace_id": ws["id"], "workspace_ref": ws["ref"],
+             "pane_ref": pane.get("ref", ""), "title": s.get("title", ""),
+             "selected": s["ref"] == caller["surface_ref"],
+             "surface_type": s.get("type", "unknown"),
+             "is_terminal": s.get("type") == "terminal"}
+            for pane in ws.get("panes", []) for s in pane.get("surfaces", [])]
+
+
+def _legacy_list_surfaces(workspace):
+    """Legacy text parser adapter; not used for identity or task discovery."""
     # Try list-panels first (workspace-wide, shows type)
     args = ["list-panels"]
     if workspace:
@@ -1364,7 +1384,17 @@ def read_screen(surface, lines=200):
     Read last N lines of a surface via `cmux read-screen`.
     Returns plain text string.
     """
-    return _run("read-screen", "--surface", surface, "--lines", str(lines))
+    if surface in _workspace_pins:
+        proof = pin_workspace(surface)
+        target, workspace = proof["target_surface_uuid"], proof["workspace_uuid"]
+    else:
+        rows = [row for ref, row in surface_uuid_map().items()
+                if surface in (ref, row["surface_id"])]
+        if len(rows) != 1:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: read target missing or ambiguous")
+        target, workspace = rows[0]["surface_id"], rows[0]["workspace_id"]
+    return _run("read-screen", "--workspace", workspace, "--surface", target,
+                "--lines", str(lines))
 
 
 def wait_for_ack(surface, ack_prefix="PREFLIGHT_ACK", timeout=120, poll=3, lines=200, task_id=None, provider=None, nonce=None):
@@ -1501,9 +1531,18 @@ def capture_round_evidence(surface, nonce, provider=None, lines=200, expected_ac
 # Labelling
 # ---------------------------------------------------------------------------
 
-def rename_tab(surface, title):
+def rename_tab(surface, title, *, workspace_uuid, surface_uuid, caller_uuid):
     """Set the visible tab title of a surface."""
-    _run("rename-tab", "--surface", surface, "--", title)
+    if surface_uuid == caller_uuid:
+        me = whoami()
+        if (me["surface_ref"] != surface or
+                uuid_value(me["surface_id"]) != uuid_value(caller_uuid) or
+                uuid_value(me["workspace_id"]) != uuid_value(workspace_uuid)):
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: rename caller changed")
+    else:
+        pin_workspace(surface, workspace_uuid=workspace_uuid,
+                      target_uuid=surface_uuid, caller_uuid=caller_uuid)
+    _run("rename-tab", "--workspace", workspace_uuid, "--surface", surface_uuid, "--", title)
 
 
 # ---------------------------------------------------------------------------

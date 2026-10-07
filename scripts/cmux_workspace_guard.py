@@ -16,6 +16,7 @@ import shlex
 import subprocess
 import sys
 import uuid
+import cmux_daemon_identity as daemon_identity
 
 CMUX = "/Applications/cmux.app/Contents/Resources/bin/cmux"
 SCOPE_DIR = Path.home() / ".local/state/multi-agent-collaboration/workspace-scope"
@@ -80,6 +81,7 @@ def resolve_snapshot(identity, tree, target, *, env=None, expected=None):
     if me["surface_type"] != "terminal" or peer["surface_type"] != "terminal":
         deny("caller and executor must be terminal surfaces")
     binding = {"caller_surface_uuid": me["surface_uuid"],
+               "caller_pane_uuid": me["pane_uuid"],
                "workspace_uuid": me["workspace_uuid"],
                "target_surface_uuid": peer["surface_uuid"],
                "target_pane_uuid": peer["pane_uuid"],
@@ -104,10 +106,32 @@ def _read_json_command(*args):
         deny("live identity unavailable: " + type(exc).__name__)
 
 
+def caller_snapshot():
+    """Resolve caller once and recheck the process proof around live cmux reads."""
+    try:
+        proof = daemon_identity.collect(os.environ)
+        identity = _read_json_command("identify", "--json")
+        tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
+        resolved, env = daemon_identity.resolve(identity, tree, os.environ, proof)
+        if proof is not None:
+            again = daemon_identity.collect(os.environ)
+            final_identity = _read_json_command("identify", "--json")
+            final_tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
+            final, final_env = daemon_identity.resolve(final_identity, final_tree, os.environ, again)
+            if again != proof or final['caller'] != resolved['caller'] or final_env != env:
+                deny("native caller changed during resolution")
+            # Last process read follows the last cmux observation.
+            if daemon_identity.collect(os.environ) != proof:
+                deny("native caller changed at final check")
+            return final, final_tree, final_env, daemon_identity.public_proof(proof)
+        return resolved, tree, env, None
+    except (daemon_identity.IdentityError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        deny("native caller unavailable: " + str(exc))
+
+
 def require_same_workspace(target, *, expected=None):
-    identity = _read_json_command("identify", "--json")
-    tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
-    binding = resolve_snapshot(identity, tree, target, env=os.environ, expected=expected)
+    identity, tree, env, _proof = caller_snapshot()
+    binding = resolve_snapshot(identity, tree, target, env=env, expected=expected)
     scope_path = SCOPE_DIR / (binding["caller_surface_uuid"] + ".json")
     if scope_path.exists():
         try:

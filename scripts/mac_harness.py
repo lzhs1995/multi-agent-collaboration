@@ -333,6 +333,9 @@ DEFAULT_TASK_ID = "multi-agent-task"
 
 
 def _workspace_key():
+    from cmux_workspace_guard import daemon_identity, caller_snapshot
+    if daemon_identity.collect(os.environ) is not None:
+        return caller_snapshot()[2]["CMUX_WORKSPACE_ID"]
     return os.environ.get("CMUX_WORKSPACE_ID", "") or "default"
 
 
@@ -616,12 +619,12 @@ def cmd_surface_inventory(args):
     _ensure_root(root, args.task_id)
     me = cmux.whoami()
     my_ws = me["workspace_ref"]
-    surfs = cmux.list_surfaces()
+    surfs = cmux.list_surfaces(workspace=me.get("workspace_id") or my_ws)
     same, other = [], []
     for s in surfs:
         provider = cmux.detect_provider(s)
         entry = {**s, "provider": provider, "workspace_ref": my_ws}
-        if s["selected"]:
+        if s["ref"] == me["surface_ref"]:
             entry["role"] = "supervisor_candidate"
         same.append(entry)
 
@@ -653,10 +656,12 @@ def cmd_identity_gate(args):
     # Supervisor = caller
     supervisor_provider = args.supervisor or "auto"
     if supervisor_provider == "auto":
-        # Heuristic from CMUX_SURFACE_ID env or list
-        surfs = cmux.list_surfaces()
-        sel = next((s for s in surfs if s["selected"]), None)
-        supervisor_provider = cmux.detect_provider(sel) if sel else "unknown"
+        # A focused executor or an old title is not the managed native caller.
+        surfs = cmux.list_surfaces(workspace=me.get("workspace_id") or me["workspace_ref"])
+        sel = next((s for s in surfs if s["ref"] == me["surface_ref"]), None)
+        supervisor_provider = me.get("provider", "unknown")
+        if supervisor_provider == "unknown":
+            supervisor_provider = cmux.detect_provider(sel) if sel else "unknown"
 
     supervisor_ref = me["surface_ref"]
 
@@ -723,15 +728,15 @@ def cmd_identity_gate(args):
 
     if not executor_ref:
         # Look in current surfaces for a non-selected surface matching provider
-        surfs = cmux.list_surfaces()
+        surfs = cmux.list_surfaces(workspace=me.get("workspace_id") or me["workspace_ref"])
         candidates = [
             s for s in surfs
-            if not s["selected"] and cmux.detect_provider(s) == executor_provider
+            if s["ref"] != supervisor_ref and cmux.detect_provider(s) == executor_provider
         ]
         # Also accept terminal surfaces (executor running agent CLI inside a shell)
         terminal_candidates = [
             s for s in surfs
-            if not s["selected"] and s.get("is_terminal") and cmux.detect_provider(s) == "unknown"
+            if s["ref"] != supervisor_ref and s.get("is_terminal") and cmux.detect_provider(s) == "unknown"
         ]
         if len(candidates) == 1:
             executor_ref = candidates[0]["ref"]
@@ -971,9 +976,13 @@ def cmd_name_surfaces(args):
         ))
 
     entries = []
+    target_uuids = {supervisor_ref: gate["supervisor_surface_uuid"],
+                    **{item["surface_ref"]: item["surface_uuid"] for item in _gate_executors(gate)}}
     for ref, label, role in targets:
         try:
-            cmux.rename_tab(ref, label)
+            _recheck_workspace_gate(gate)
+            cmux.rename_tab(ref, label, workspace_uuid=gate["workspace_uuid"],
+                            surface_uuid=target_uuids[ref], caller_uuid=gate["supervisor_surface_uuid"])
             entries.append({"surface_ref": ref, "role": role, "label": label, "status": "PASS"})
             _ok(f"renamed {ref} → '{label}'")
         except Exception as e:

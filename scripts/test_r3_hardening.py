@@ -3447,7 +3447,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         """
         self._run_gate(["surface:2", "surface:3", "surface:4"])
 
-        def rename(ref, _label):
+        def rename(ref, _label, **_pins):
             if ref == "surface:4":
                 raise RuntimeError("rename-tab: surface gone")
 

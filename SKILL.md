@@ -216,3 +216,8 @@ Use [read-only confirmation and native receipts](references/read-only-delivery-c
 ## 归档双执行者现场经验（2026-10-05）
 
 见[归档回调与独立收尾](references/archive-callback-boundaries-20261005.md)。区分原生入站、正式回执与候选补丁实效；仅文档增量，不替换在途控制器。
+
+
+## Shared managed-daemon callers
+
+Read [caller identity and bounded callback closeout](references/shared-daemon-caller.md). The live guard resolves the original native client when a managed daemon inherits another terminal environment; it never changes process environment or relaxes UUID checks. Harness marker ownership uses the same resolution.
