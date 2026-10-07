@@ -22,12 +22,43 @@ process environment. Discovery failure denies the check, and a managed caller
 cannot downgrade to inherited identity mid-resolution. Boolean Stop reentry
 still exits before discovery without confirming or releasing a task.
 
-CLI subprocess fixtures must not inherit the invoking live thread selector.
-The offline runner removes it only from its test environment; managed identity
-tests install explicit ancestry fixtures. Production guards remain unchanged.
+CLI subprocess fixtures must isolate kernel ancestry and marker directories.
+The test-only driver executes the real hook main with those private inputs and
+preserves the invoking environment; managed identity tests install explicit
+ancestry fixtures. Production guards remain unchanged.
 `test_hook_identity.py` covers native/foreign markers, leases, returned callback
 journals, discovery failure and successive caller changes. Preserve explicit
 relative-root rejection even when no shell write target was extracted.
+
+### Native hooks and tool shells have different ancestry
+
+A managed daemon can spawn a hook directly after the intermediate shell execs
+away, without CODEX_THREAD_ID. Authenticate the managed ancestor first, then use
+the supported hook payload's session_id to select the unique live resumed client.
+Any thread selector present in the hook or intermediate ancestry must agree.
+The payload cannot supply terminal identity: retain kernel PID/birth/executable,
+TTY and live cmux UUID checks, including the process reread after the last tree.
+Tool-shell callers keep their separate matching-thread ancestry requirement.
+
+For ordinary macOS terminals, a root-owned /usr/bin/login can terminate ancestry
+discovery only after exact kernel path, protected file owner/mode and repeated
+PID/birth/path checks. It is a boundary, never a caller; arbitrary foreign
+processes remain errors. Hook resolution shares one 2.5-second monotonic budget
+under the registered five-second Stop timeout. Nested reads cannot extend it,
+and results returned after the deadline are rejected.
+
+Before discovery, Stop/closeout check for eligible active markers, and lease
+checks for parseable markers or an explicit absolute artifact root. No marker
+means no workspace-owned task gate. An explicit root cannot hide another marker
+or invalid root. With applicable markers, unresolved identity still refuses;
+report HOOK_CALLER_UNRESOLVED rather than a consensus violation or a disarm hint.
+
+`test_hook_native_caller.py` covers direct and intermediate daemon children,
+missing/conflicting selectors, ordinary login boundaries, drift and bounded
+commands. Offline entrypoint tests retain real main/verdicts and private inputs.
+These tests do not establish active native-hook execution. Record observed
+runtime argv and payload provenance separately: changing hooks.json does not
+prove that an existing daemon or thread loaded the new release.
 
 ## Recycled TTY names are not caller identity
 

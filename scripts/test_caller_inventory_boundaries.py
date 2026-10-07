@@ -29,7 +29,7 @@ class CandidateExclusionTests(unittest.TestCase):
         self.reads = []
 
     def collect(self, mutate=None):
-        def read(pid, *, validate_argv=True):
+        def read(pid, *, validate_argv=True, allow_system_login=False):
             self.reads.append((pid, validate_argv))
             item = copy.deepcopy(self.processes[pid])
             if mutate:

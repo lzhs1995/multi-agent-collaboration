@@ -31,7 +31,7 @@ class HookIdentityTests(unittest.TestCase):
             'CMUX_WORKSPACE_ID': 'daemon', 'CMUX_SURFACE_ID': 'daemon-surface',
             'CMUX_AGENT_ROLE': 'supervisor'}))
         self.collect = self.stack.enter_context(patch.object(
-            identity.workspace.daemon_identity, 'collect', return_value={'client': {}}))
+            identity.workspace.daemon_identity, 'collect_hook', return_value={'client': {}}))
         self.snapshot = self.stack.enter_context(patch.object(
             identity.workspace, 'caller_snapshot', return_value=({}, {}, {
                 'CMUX_WORKSPACE_ID': 'native', 'CMUX_SURFACE_ID': 'native-surface'}, {})))

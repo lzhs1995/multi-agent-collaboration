@@ -17,6 +17,7 @@ import subprocess
 import sys
 import uuid
 import cmux_daemon_identity as daemon_identity
+import cmux_identity_budget as identity_budget
 
 CMUX = "/Applications/cmux.app/Contents/Resources/bin/cmux"
 SCOPE_DIR = Path.home() / ".local/state/multi-agent-collaboration/workspace-scope"
@@ -100,7 +101,8 @@ def resolve_snapshot(identity, tree, target, *, env=None, expected=None):
 def _read_json_command(*args):
     try:
         result = subprocess.run([CMUX, *args], capture_output=True, text=True,
-                                timeout=5, check=True)
+                                timeout=identity_budget.timeout(), check=True)
+        identity_budget.check()
         value = json.loads(result.stdout)
         if not isinstance(value, dict):
             deny("identity response is not an object")
@@ -109,22 +111,26 @@ def _read_json_command(*args):
         deny("live identity unavailable: " + type(exc).__name__)
 
 
-def caller_snapshot():
+_UNCOLLECTED = object()
+
+
+def caller_snapshot(*, collector=None, initial_proof=_UNCOLLECTED):
     """Resolve caller once and recheck the process proof around live cmux reads."""
     try:
-        proof = daemon_identity.collect(os.environ)
+        collect = collector or (lambda: daemon_identity.collect(os.environ))
+        proof = collect() if initial_proof is _UNCOLLECTED else initial_proof
         identity = _read_json_command("identify", "--json")
         tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
         resolved, env = daemon_identity.resolve(identity, tree, os.environ, proof)
         if proof is not None:
-            again = daemon_identity.collect(os.environ)
+            again = collect()
             final_identity = _read_json_command("identify", "--json")
             final_tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
             final, final_env = daemon_identity.resolve(final_identity, final_tree, os.environ, again)
             if again != proof or final['caller'] != resolved['caller'] or final_env != env:
                 deny("native caller changed during resolution")
             # Last process read follows the last cmux observation.
-            if daemon_identity.collect(os.environ) != proof:
+            if collect() != proof:
                 deny("native caller changed at final check")
             return final, final_tree, final_env, daemon_identity.public_proof(proof)
         return resolved, tree, env, None

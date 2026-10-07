@@ -5,14 +5,25 @@ import os
 import subprocess
 
 import cmux_workspace_guard as workspace
+import cmux_identity_budget as budget
 
 _current = ContextVar('cmux_hook_identity', default=None)
 
 
 def resolve(payload):
-    if workspace.daemon_identity.collect(os.environ) is not None:
+    # Reserve headroom under the registered 5-second Stop hook timeout. All ps,
+    # cmux and process checks share this deadline; a later command cannot reset it.
+    with budget.limit(2.5):
+        return _resolve(payload)
+
+
+def _resolve(payload):
+    collector = lambda: workspace.daemon_identity.collect_hook(os.environ, payload)
+    proof = collector()
+    if proof is not None:
         # Use the same authenticated native caller as transport and marker writes.
-        _identity, _tree, env, proof = workspace.caller_snapshot()
+        _identity, _tree, env, proof = workspace.caller_snapshot(
+            collector=collector, initial_proof=proof)
         if proof is None:
             workspace.deny('managed hook caller disappeared during resolution')
         ws, surface = env.get('CMUX_WORKSPACE_ID'), env.get('CMUX_SURFACE_ID')
