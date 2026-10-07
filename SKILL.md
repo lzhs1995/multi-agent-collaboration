@@ -110,6 +110,8 @@ not an OS sandbox against arbitrary self-written socket clients.
 Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
 choose zero, one or two executors, apply phase-specific handshake budgets,
 attribute delivery failures, and close accepted work without repeated reviews.
+For ACK-only waiting, original-attempt REPORT_READY reconciliation and continued
+work after authorized takeover, read [waiting and closeout boundaries](references/efficiency-and-closeout.md#ack-后等待正式任务包).
 
 Use [executor closeout enforcement](references/executor-closeout-enforcement.md):
 the PreToolUse guard blocks additional tools after a bound report's callback
