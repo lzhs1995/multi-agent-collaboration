@@ -673,15 +673,20 @@ def delivery_compose_text(screen):
     return "\n".join([_PROMPT_GLYPH_RE.sub("", lines[i], count=1), *lines[i+1:]])
 
 
-def compose_block_is_empty(screen):
+def compose_rendered_text(screen):
+    """Conservative editor text, stripping footer chrome; None is unobserved."""
     body = delivery_compose_text(screen)
     if body is None:
-        return False
+        return None
     lines = body.splitlines()
     # Never discard a typed first line, even when it resembles footer chrome.
     while len(lines) > 1 and (not lines[-1].strip() or _COMPOSE_CHROME_RE.fullmatch(lines[-1].strip())):
         lines.pop()
-    rendered = "\n".join(lines).strip(" \t\r\n│─╭╮╰╯")
+    return "\n".join(lines).strip(" \t\r\n│─╭╮╰╯")
+
+
+def compose_block_is_empty(screen):
+    rendered = compose_rendered_text(screen)
     # Plain screen text cannot distinguish a dim suggestion from a user who
     # typed continue, /context, /compact, or a prior virtual-prompt allowlist.
     return rendered in ("", "Ask Codex to do anything", "Ask Claude to do anything")

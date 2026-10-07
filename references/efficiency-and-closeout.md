@@ -63,6 +63,28 @@ focused 面板、`EXECUTOR` 标题或同目录不能证明它属于本任务。
 
 ## 双向发送与回调收尾
 
+### 探针清理与ACK等待的可执行后置条件
+
+bridge-test为每个executor生成独立短探针（如`B1_<8位随机十六进制>`），
+实际token与task/ordinal/UUID一起记录，不从task id猜token。短探针减少逐键
+删除次数；每次按键仍过实时身份门禁，600秒ACK预算不缩短。离线通过只能
+证明回归场景，不得把少按几次键称为现场握手耗时或成功率测量。
+
+完整token消失不等于输入区已空：它可能只删掉了一部分，也可能读屏暂时没有
+prompt glyph。清理只删除保守解析后明确属于本token的非空前缀；其他文字、
+排队/运行状态或缺glyph仅做有限重读。最终必须观察到空compose；已有显式
+force授权的虚拟建议场景，只能恢复到实际粘贴前的文本，不能拿更早的输入
+区作证。未确认就保留失败，不自动扩展force授权、不盲删或提交下一条消息。
+每轮记录读屏SHA、是否读到compose、归属判断、删除数量和确认依据。
+
+已发送并等ACK、以及检测器未确认后观察原nonce时，顶层receipt须为
+`AWAITING_EXECUTOR_ACK/PENDING`，不得提前写FAIL或终态error；原传输异常
+仍保留在dispatch_error。多executor部分ACK不能PASS。实际拒绝、期限耗尽
+或无效状态才记录对应FAIL；原`validate`仍要求所有executor精确ACK。
+
+这些约束在harness及其回归测试中执行，不另建第二个发送器或轮询器。固定
+在途任务继续用原控制器；新安装入口、进程已加载版本与真实握手分别验证。
+
 prompt 和 callback 都须经原受保护 bridge，在每次写入前核 live UUID，
 Enter 后核同一接收端的完整消息及原 marker。证据分开记：
 

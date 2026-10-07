@@ -1004,8 +1004,14 @@ def cmd_name_surfaces(args):
 
 
 # ---------------------------------------------------------------------------
-# bridge-test (non-submitting: type token, clear with ctrl+u)
+# bridge-test (non-submitting: type token, bounded owned-token cleanup)
 # ---------------------------------------------------------------------------
+
+def _bridge_test_token(task_id, ordinal):
+    # Identity lives in the evidence, not in dozens of characters requiring
+    # guarded deletion. Keep each executor's probe short and independently fresh.
+    return f"B{ordinal}_{secrets.token_hex(4)}"
+
 
 def cmd_bridge_test(args):
     root = _artifact_root(args)
@@ -1019,13 +1025,10 @@ def cmd_bridge_test(args):
     executors = _gate_executors(gate)
     # Every executor gets its own token. A shared token would let one
     # executor's echo satisfy another executor's evidence — exactly the
-    # "declared three, proved one" state these gates exist to prevent. A lone
-    # executor keeps the unsuffixed token so existing readers see no change.
+    # "declared three, proved one" state these gates exist to prevent.
     per_executor = []
     for item in executors:
-        token = f"BRIDGE_TEST_{args.task_id}"
-        if len(executors) > 1:
-            token = f"{token}_E{item['ordinal']}"
+        token = _bridge_test_token(args.task_id, item["ordinal"])
         evidence, ok = _bridge_test_one(args, item["surface_ref"], token, item["ordinal"])
         per_executor.append(evidence)
         if not ok:
@@ -1200,58 +1203,70 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         override["clear_confirmed"] = cmux.compose_block_is_empty(pre_screen)
         override["clear_verified_at"] = _now() if override["clear_confirmed"] else None
 
-    _info(f"Compose block verified empty; sending bridge token to {executor_ref}: {token!r}")
-    cmux.send_text(executor_ref, token)  # no \n — non-submitting
+    # Only the actual pre-paste screen can prove restoration of an explicitly
+    # authorized virtual suggestion. The earlier occupied buffer is not enough:
+    # force cleanup may already have changed it.
+    restore_text = (
+        cmux.compose_rendered_text(pre_screen)
+        if override.get("direct_replace_after_clear_attempts") else None
+    )
+    _info(f"Sending non-submitting bridge token to {executor_ref}: {token!r}")
+    cmux.send_text(executor_ref, token)  # no newline
     time.sleep(1)
     screen = cmux.read_screen(executor_ref, lines=args.lines)
     observed = token in screen
 
-    # bridge-test owns its cleanup.
-    #
-    # Measured incident (this task's own receipts): bridge-test finished at
-    # 11:45:33.009753Z leaving its token in the compose buffer, handshake started
-    # 1.003 ms later, read that token as "queued/active input", and aborted with
-    # dispatch_submitted_at=None — never pasting anything. The supervisor then
-    # attributed the abort to executor silence. SKILL.md already required this
-    # clear-and-verify step in prose; nothing enforced it, so preflight ran the
-    # two phases back-to-back and tripped its own guard.
-    #
-    # The postcondition is therefore a fact on disk, not a hope: after ctrl+u,
-    # re-read the same surface until the token is absent from the active compose
-    # block. Bounded retries, then a distinct BRIDGE_TEST_UNCONFIRMED. Note that
-    # `observed` may be False on TUIs that hide unsubmitted input, so absence is
-    # only meaningful as a *post*-clear reading, never as proof the paste failed.
-    # The Claude prompt editor on the bound terminal does not consistently
-    # consume ctrl+u. Move to the start and delete a bounded number of input
-    # cells instead. This is safe because the pre-read above *proved* the compose
-    # block was empty before the token was sent, so the only content on this line
-    # is bridge-test's own token. That proof replaces the earlier version's
-    # assertion that the line was "otherwise empty", which nothing established.
-    # The screen postcondition below remains the authority on whether the clear
-    # actually worked.
-    cmux.send_key(executor_ref, "end")
-    clear_key_count = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(token))
-    for _ in range(clear_key_count):
-        cmux.send_key(executor_ref, "backspace")
-        time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
-    _info("Cleared input with end + bounded backspace; verifying the clear")
+    def cleared(screen):
+        if cmux._queued_or_active_input(screen):
+            return None
+        if cmux.compose_block_is_empty(screen):
+            return "EMPTY_COMPOSE"
+        if (
+            restore_text is not None
+            and cmux.compose_rendered_text(screen) == restore_text
+            and not cmux._queued_or_active_input(screen)
+        ):
+            return "AUTHORIZED_PRE_PASTE_RESTORED"
+        return None
 
+    # A missing full token does not prove an empty editor. Delete only a
+    # positively observed prefix of our own token (backspace leaves prefixes).
+    # Missing glyphs, queued work, and foreign text get bounded re-reads only.
+    # Every key still goes through the live workspace/UUID guard.
     clear_confirmed = False
     clear_attempts = 0
-    post_clear_screen = ""
+    clear_key_count = 0
+    clear_confirmed_by = None
+    clear_observations = []
+    post_clear_screen = screen
     for attempt in range(1, BRIDGE_TEST_CLEAR_MAX_ATTEMPTS + 1):
         clear_attempts = attempt
-        time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
-        post_clear_screen = cmux.read_screen(executor_ref, lines=args.lines)
-        if not cmux.compose_contains(post_clear_screen, token):
-            clear_confirmed = True
-            break
-        if attempt < BRIDGE_TEST_CLEAR_MAX_ATTEMPTS:
-            _info(f"Token still in compose (attempt {attempt}); clearing again")
+        body = cmux.compose_rendered_text(post_clear_screen)
+        owned = (
+            bool(body) and token.startswith(body)
+            and not cmux._queued_or_active_input(post_clear_screen)
+        )
+        delete_count = 0
+        if not cleared(post_clear_screen) and owned:
+            delete_count = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(body))
             cmux.send_key(executor_ref, "end")
-            for _ in range(clear_key_count):
+            for _ in range(delete_count):
                 cmux.send_key(executor_ref, "backspace")
                 time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
+            clear_key_count += delete_count
+        clear_observations.append({
+            "attempt": attempt,
+            "compose_observed": body is not None,
+            "owned_token_prefix": bool(owned),
+            "delete_count": delete_count,
+            "screen_sha256": hashlib.sha256(post_clear_screen.encode("utf-8")).hexdigest(),
+        })
+        time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
+        post_clear_screen = cmux.read_screen(executor_ref, lines=args.lines)
+        clear_confirmed_by = cleared(post_clear_screen)
+        if clear_confirmed_by:
+            clear_confirmed = True
+            break
 
     evidence = {
         "task_id": args.task_id,
@@ -1261,6 +1276,9 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         "observed_in_screen": observed,
         "clear_confirmed": clear_confirmed,
         "clear_attempts": clear_attempts,
+        "clear_key_count": clear_key_count,
+        "clear_confirmed_by": clear_confirmed_by,
+        "clear_observations": clear_observations,
         "clear_verified_at": _now() if clear_confirmed else None,
         "pre_read_performed": True,
         "compose_was_empty_before_send": not compose_was_occupied,
@@ -1278,9 +1296,9 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
 
     if not clear_confirmed:
         _fail(
-            f"BRIDGE_TEST_UNCONFIRMED — token still in the compose block after "
-            f"{clear_attempts} clear attempts on {executor_ref}. Handshake would "
-            f"read our own token as executor input. Clear it manually, then rerun."
+            f"BRIDGE_TEST_UNCONFIRMED — compose cleanup was not verified after "
+            f"{clear_attempts} bounded observations on {executor_ref}. "
+            "Preserve the evidence; do not submit a handshake behind unknown input."
         )
         return evidence, False
 
@@ -1342,14 +1360,29 @@ def _write_handshake_receipt(root, per_executor):
             if r.get("executor_ack") is not True
         ]
         receipt["executor_ack"] = False
-        receipt["status"] = "FAIL"
         receipt["unproven_executors"] = unproven
-        # Point at the panel-level reason; the per-executor entries keep their
-        # own specific ack_state / lifecycle / attribution untouched.
-        receipt["error"] = (
-            f"handshake incomplete — {len(unproven)} of {len(per_executor)} "
-            f"executor(s) did not ACK: {', '.join(str(u) for u in unproven)}"
+        pending = all(
+            r.get("lifecycle") == "PENDING" and r.get("status") != "FAIL"
+            for r in per_executor if r.get("executor_ack") is not True
         )
+        if pending:
+            receipt["status"] = "AWAITING_EXECUTOR_ACK"
+            receipt["lifecycle"] = "PENDING"
+            receipt["terminal_error_at"] = None
+            receipt.pop("error", None)
+        else:
+            receipt["status"] = "FAIL"
+            failed = next(r for r in per_executor
+                          if r.get("executor_ack") is not True
+                          and (r.get("lifecycle") != "PENDING" or r.get("status") == "FAIL"))
+            receipt["lifecycle"] = failed.get("lifecycle", "UNKNOWN")
+            receipt["terminal_error_at"] = failed.get("terminal_error_at")
+            # Preserve per-executor attribution; an input rejection is not
+            # proof that the executor was silent.
+            receipt["error"] = (
+                f"handshake incomplete — terminal or invalid state for "
+                f"{failed.get('executor')}: {failed.get('error', 'see executor record')}"
+            )
     _write(root / "handshake-receipt.json", receipt)
 
 

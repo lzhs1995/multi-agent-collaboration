@@ -119,6 +119,12 @@ remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
 ### Fast handshake and verified delivery in both directions
 
+- Bridge cleanup must observe an empty compose, not merely the absence of the
+  full probe. Short per-executor tokens reduce guarded key count; unknown input
+  is reread, never blindly deleted. ACK waits remain `AWAITING_EXECUTOR_ACK`,
+  not terminal failures. See the executable postconditions in
+  [efficiency and closeout](references/efficiency-and-closeout.md).
+
 - Give the executor the absolute pending handshake receipt path in the initial
   challenge. It reads that file and the bound skill, then returns the exact ACK;
   no registry search, task audit or formal consensus is part of a handshake.
