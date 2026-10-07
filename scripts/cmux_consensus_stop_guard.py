@@ -29,6 +29,7 @@ import json
 import hashlib
 import math
 import os
+import cmux_hook_identity as hook_identity
 import re
 import sys
 from executor_closeout import terminal_report, handoff_line
@@ -97,11 +98,11 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _workspace_key(payload: dict[str, Any]) -> str:
-    return (
-        os.environ.get("CMUX_WORKSPACE_ID")
-        or payload.get("workspace_id")
-        or "default"
-    )
+    return hook_identity.identity(payload)[0]
+
+
+def _surface_key(payload: dict[str, Any]) -> str | None:
+    return hook_identity.identity(payload)[1]
 
 
 def _marker_fresh(marker: dict[str, Any]) -> bool:
@@ -116,6 +117,23 @@ def _marker_fresh(marker: dict[str, Any]) -> bool:
         except Exception:
             pass
     return True
+
+
+def _has_active_markers() -> bool:
+    """Check jurisdiction before discovering a caller, across all workspaces.
+
+    A managed caller can inherit a different workspace, so inherited env is
+    not sufficient for this precheck. Use the same v1/v2 and TTL rules as the
+    resolved-workspace scan; hidden v2 staging files are not armed markers.
+    """
+    for pattern in ("*.json", "*/*.json"):
+        for path in ACTIVE_DIR.glob(pattern):
+            if path.name.startswith("."):
+                continue
+            marker = _read_json(path)
+            if isinstance(marker, dict) and _marker_fresh(marker):
+                return True
+    return False
 
 
 def _active_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -216,8 +234,7 @@ def _protocol_callback_evidence(
     root = Path(str(marker.get("artifact_root") or ""))
     if task != marker.get("task_id") or not root.is_absolute():
         return False
-    surface_uuid = (os.environ.get("CMUX_SURFACE_ID") or payload.get("surface_id")
-                    or payload.get("surface_uuid"))
+    surface_uuid = _surface_key(payload)
     peers = [row for row in marker.get("participants", []) if isinstance(row, dict)
              and row.get("surface_uuid") == surface_uuid
              and str(row.get("role", "")).startswith("executor")
@@ -356,11 +373,7 @@ def _evidence_ok(marker: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _current_participant_is_executor(marker: dict[str, Any], payload: dict[str, Any]) -> bool:
-    surface_uuid = (
-        os.environ.get("CMUX_SURFACE_ID")
-        or payload.get("surface_id")
-        or payload.get("surface_uuid")
-    )
+    surface_uuid = _surface_key(payload)
     if not surface_uuid:
         return False
     return any(
@@ -417,7 +430,7 @@ def _completion_callback_evidence(
     return True, "confirmed completion callback receipt matches pack and report"
 
 
-def _evaluate_with_marker(
+def _evaluate_resolved(
     payload: dict[str, Any],
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Block only an unnegated evidence-shaped claim that on-disk state refutes.
@@ -451,8 +464,7 @@ def _evaluate_with_marker(
     if protocol_ack:
         return True, "fresh bound protocol ACK; this does not complete the task", None
     for marker in markers:
-        surface = (os.environ.get("CMUX_SURFACE_ID") or payload.get("surface_id")
-                   or payload.get("surface_uuid"))
+        surface = _surface_key(payload)
         terminal = terminal_report(marker, _workspace_key(payload), surface)
         if terminal and final.strip() == handoff_line(terminal):
             # Honest report handoff is turn-end, never callback confirmation.
@@ -488,6 +500,20 @@ def _evaluate_with_marker(
     return True, last_msg, None
 
 
+def _evaluate_with_marker(payload):
+    # Reentry must terminate even if identity discovery is currently unavailable.
+    if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
+            and payload.get("stop_hook_active") is True):
+        return True, "Stop hook reentry; task and callback remain unconfirmed", None
+    try:
+        if not _has_active_markers():
+            return True, "no armed multi-agent task — pass through", None
+        with hook_identity.evaluation(payload):
+            return _evaluate_resolved(payload)
+    except hook_identity.ERRORS as exc:
+        return False, "HOOK_CALLER_UNRESOLVED: " + str(exc), None
+
+
 def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
     """Preserve the public verdict API; diagnostics use the same evaluation."""
     ok, message, _marker = _evaluate_with_marker(payload)
@@ -495,6 +521,17 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _block(message: str, marker_hint: str) -> int:
+    if message.startswith("HOOK_CALLER_UNRESOLVED:"):
+        sys.stderr.write(
+            "cmux Stop guard could not verify the hook caller.\n"
+            f"{message}\n\n"
+            "An applicable task marker exists, but its caller workspace and "
+            "surface could not be authenticated. Preserve the task markers, "
+            "report, and callback evidence. The supervisor must diagnose caller "
+            "identity resolution before retrying this gate. This result does "
+            "not judge the final message or confirm callback delivery.\n"
+        )
+        return 2
     # Callback transport failures are not failed plan-consensus rounds.
     # Keep evaluate() and its evidence requirements unchanged; give the
     # executor the recovery action for the actual failing gate.

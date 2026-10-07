@@ -276,7 +276,8 @@ def list_surfaces(workspace=None):
     verified caller, not the focused tab or a globally docked surface.
     """
     # A managed daemon's default workspace is its origin, not this caller.
-    # Tree membership also excludes global dock panels from the local inventory.
+    # A global dock can appear under a workspace in the tree without being a
+    # member of that workspace. Exclude it explicitly from peer discovery.
     from cmux_workspace_guard import caller_snapshot
     identity, tree, env, _proof = caller_snapshot()
     caller = identity["caller"]
@@ -292,7 +293,8 @@ def list_surfaces(workspace=None):
              "selected": s["ref"] == caller["surface_ref"],
              "surface_type": s.get("type", "unknown"),
              "is_terminal": s.get("type") == "terminal"}
-            for pane in ws.get("panes", []) for s in pane.get("surfaces", [])]
+            for pane in ws.get("panes", []) for s in pane.get("surfaces", [])
+            if s.get("dock_scope") != "global"]
 
 
 def _legacy_list_surfaces(workspace):

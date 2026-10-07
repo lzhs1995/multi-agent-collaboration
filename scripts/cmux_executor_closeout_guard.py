@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """PreToolUse: end post-delivery work on the currently armed executor task."""
 import json
-import os
+import cmux_hook_identity as hook_identity
 import sys
-from cmux_consensus_stop_guard import _active_markers, _workspace_key
+from cmux_consensus_stop_guard import (
+    _active_markers, _has_active_markers, _workspace_key, _surface_key,
+)
 from executor_closeout import terminal_report, handoff_line
 
 
-def evaluate(payload):
+def _evaluate_resolved(payload):
     if payload.get('hook_event_name') != 'PreToolUse':
         return True, ''
-    surface = (os.environ.get('CMUX_SURFACE_ID') or payload.get('surface_id')
-               or payload.get('surface_uuid'))
+    surface = _surface_key(payload)
     for marker in _active_markers(payload):
         evidence = terminal_report(marker, _workspace_key(payload), surface)
         if evidence:
@@ -23,6 +24,18 @@ def evaluate(payload):
                 'If delivery is not independently confirmed, use exactly:\n'
                 + handoff_line(evidence))
     return True, ''
+
+
+def evaluate(payload):
+    if payload.get('hook_event_name') != 'PreToolUse':
+        return True, ''
+    try:
+        if not _has_active_markers():
+            return True, ''
+        with hook_identity.evaluation(payload):
+            return _evaluate_resolved(payload)
+    except hook_identity.ERRORS as exc:
+        return False, 'HOOK_CALLER_UNRESOLVED: ' + str(exc)
 
 
 def main():

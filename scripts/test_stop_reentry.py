@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import uuid
 from unittest import mock
+import offline_test_hook
 
 HOOK = Path(os.environ.get('STOP_GUARD_UNDER_TEST', Path(__file__).with_name('cmux_consensus_stop_guard.py')))
 
@@ -22,7 +23,8 @@ class StopReentryTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.workspace = 'stop-reentry-test-' + uuid.uuid4().hex
         self.surface = uuid.uuid4().hex
-        self.marker = Path('/tmp/multi-agent-collaboration/_active') / (self.workspace + '.json')
+        self.active = self.root / 'active'
+        self.marker = self.active / (self.workspace + '.json')
         self.marker.parent.mkdir(parents=True, exist_ok=True)
         self.addCleanup(self.marker.unlink, missing_ok=True)
         self.marker.write_text(json.dumps(dict(task_id='offline-test', artifact_root=str(self.root), participants=[dict(role='executor', surface_uuid=self.surface)])))
@@ -35,7 +37,7 @@ class StopReentryTests(unittest.TestCase):
     def call(self, payload, check_file=False):
         data = dict(hook_event_name='Stop', last_assistant_message='Report written; callback unconfirmed.')
         data.update(payload)
-        command = [sys.executable, '-B', str(HOOK)]
+        command = offline_test_hook.command(HOOK, self.active)
         if check_file:
             path = self.root / 'input.json'
             path.write_text(json.dumps(data))
@@ -148,7 +150,9 @@ class StopReentryTests(unittest.TestCase):
         spec.loader.exec_module(guard)
         marker = json.loads(self.marker.read_text())
         payload = dict(surface_id=self.surface, final_message='Report pending')
-        with mock.patch.dict(os.environ, {'CMUX_SURFACE_ID': self.surface}), \
+        with offline_test_hook.hook_environment(self.active), \
+                mock.patch.object(guard, 'ACTIVE_DIR', self.active), \
+                mock.patch.dict(os.environ, {'CMUX_SURFACE_ID': self.surface}), \
                 mock.patch.object(guard, '_active_markers', side_effect=[[marker], []]) as read, \
                 mock.patch.object(sys, 'argv', [str(HOOK)]), \
                 mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \

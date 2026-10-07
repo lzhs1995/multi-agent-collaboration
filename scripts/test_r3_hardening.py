@@ -545,7 +545,8 @@ class StopGuardPolarityTests(unittest.TestCase):
         caught: two excisions stayed green because nothing under test ever
         reached the mutated line.
         """
-        with mock.patch.object(guard, "_active_markers", return_value=[marker]):
+        with mock.patch.object(guard, "_has_active_markers", return_value=True), \
+                mock.patch.object(guard, "_active_markers", return_value=[marker]):
             ok, _msg = guard.evaluate({"last_assistant_message": text})
         return ok
 
