@@ -216,3 +216,10 @@ Use [read-only confirmation and native receipts](references/read-only-delivery-c
 ## 归档双执行者现场经验（2026-10-05）
 
 见[归档回调与独立收尾](references/archive-callback-boundaries-20261005.md)。区分原生入站、正式回执与候选补丁实效；仅文档增量，不替换在途控制器。
+
+## Bounded review and delivery efficiency
+
+Use [bounded review and delivery efficiency](references/bounded-review-efficiency.md)
+to define review stopping conditions, reuse accepted evidence, divide independent
+work and keep callback recovery from blocking delivery. This guidance adds no
+runtime guard or authority to change an active task binding.
