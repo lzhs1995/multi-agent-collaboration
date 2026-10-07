@@ -29,6 +29,27 @@ Do not stack assignments behind active work or compaction. At the safe terminal
 boundary, assign the next useful independent task. If none exists, standby is
 appropriate. Do not manufacture repeated checks to keep both screens busy.
 
+## Schedule at actual task boundaries
+
+At each existing delivery milestone, check whether an authorized executor has
+finished and whether an independent necessary task is ready. Assign it without
+waiting for a user reminder, after verifying the original session and terminal
+boundary. Record standby when no useful independent task exists. Do not count
+a preflight challenge as a dispatched implementation task: require its valid
+ACK and finalized pack first.
+
+Assess availability per executor from current evidence. One peer's error or an
+old 5xx does not establish that both peers are unavailable. Advancing compaction
+is progress, not an outage. A received challenge with an uncertain detector
+verdict is not a reason to resend it. Observe the original nonce through the
+supported recovery route while the supervisor advances independent delivery.
+
+Put a finite scope and a review budget in the pack. If review expands into
+repeated probes, narrow or close it at a safe boundary with findings already
+supported and unresolved items stated explicitly. A budget expiry is not a
+PASS and does not authorize racing or interrupting a write. Persistent failures
+use the existing authorized solo transition, preserving the original session.
+
 ## Bound callback closeout
 
 Keep report completion, submission, receiver consumption and report acceptance
