@@ -29,6 +29,19 @@ finalize 并提交任务包。握手 PASS 但任务包仍为 draft 或尚未提�
 不让维护占住派单，也不把新任务堆进正在执行或压缩中的会话。
 这是主管调度规则；未接入运行时检查前，不称已有自动派单 hook。
 
+### 哨兵启动失败先核角色表格式
+
+`SENTINEL_ROLE_MAP_REFUSED` 是监控启动失败，不能据此判断 executor 失效或
+重发业务。`cmux_executor_sentinel.py` 同时消费 harness 的 `surface_ref`、
+`executor`/`executor2`，以及协议角色表的 `identity`、`executors[]`；一个哨兵
+只观察 argv 指定且属于该任务的执行者。多个声明必须一致，缺少执行者、
+冲突别名、executors 列表重复角色或同一 surface 占据多个角色均拒绝，不取第一项凑成功。
+
+用生产者实际输出及协议形状做离线正反例，并通过 `main` 确认冲突在启动
+daemon 前拒绝。角色表解析成功只证明文件与参数一致；实时 caller、workspace
+和 UUID 仍由原传输门禁核验，不能据解析结果跳过握手或宣称监控已运行。
+固定在途任务保留原包和已核适配器；源码发布不热替换已运行的哨兵。
+
 ### 让有界审查真正可收尾
 
 任务包列出的 role-map、inventory 和输入证据必须指向实际文件；缺少的可选
