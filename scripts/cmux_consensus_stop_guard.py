@@ -25,6 +25,7 @@ Exit codes: 0 = allow turn-end, 2 = block turn-end (Claude must act/retract).
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import hashlib
 import math
@@ -384,6 +385,58 @@ def _current_participant_is_executor(marker: dict[str, Any], payload: dict[str, 
     )
 
 
+def _task_dispatch_state(marker: dict[str, Any], pack_raw: bytes, executor: str) -> str:
+    """Read-only lifecycle of the supervisor's task prompt for this exact pack.
+
+    A finalized pack is not a delivered task. Only one state proves the task
+    never reached this executor: the original dispatch journal exists, every
+    attempt is NO_INPUT for this pack/executor, no receipt exists, and the
+    sender holds no delivery lock. Missing, legacy, malformed, in-flight,
+    pasted, queued or confirmed evidence is never treated as "not started".
+    """
+    try:
+        supervisors = [p for p in marker.get("participants", [])
+                       if isinstance(p, dict) and p.get("role") == "supervisor"]
+        if len(supervisors) != 1 or not supervisors[0].get("surface_uuid"):
+            return "UNKNOWN"
+        task_id = marker.get("task_id")
+        key = hashlib.sha256(json.dumps(
+            [supervisors[0]["surface_uuid"], task_id]).encode()).hexdigest()
+        journal = (Path.home() / ".local/state/multi-agent-collaboration"
+                   / "task-dispatch-v1" / key)
+        if journal.is_symlink() or not journal.is_dir():
+            return "UNKNOWN"
+        if (journal / "receipt.json").exists():
+            return "CONFIRMED_OR_RECONCILED"
+        attempts = sorted(journal.glob("attempt-*.json"))
+        if not attempts:
+            return "UNKNOWN"
+        lock_path = journal / "delivery.lock"
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return "IN_FLIGHT"
+            pack_sha = hashlib.sha256(pack_raw).hexdigest()
+            for path in attempts:
+                attempt = json.loads(path.read_text())
+                binding = attempt["binding"]
+                identity = binding["identity"]
+                if (binding.get("task_id") != task_id
+                        or binding.get("task_pack_sha256") != pack_sha
+                        or str(identity.get("target_surface_uuid", "")).upper()
+                        != executor.upper()):
+                    return "UNKNOWN"
+                if attempt.get("phase") != "NO_INPUT" or attempt.get("events"):
+                    return "SUBMITTED_OR_UNKNOWN"
+            if (journal / "receipt.json").exists() or sorted(journal.glob("attempt-*.json")) != attempts:
+                return "UNKNOWN"
+        return "NO_INPUT"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return "UNKNOWN"
+
+
 def _completion_callback_evidence(
     marker: dict[str, Any], payload: dict[str, Any]
 ) -> tuple[bool, str]:
@@ -406,7 +459,18 @@ def _completion_callback_evidence(
         return False, "completion_receipt is not bound directly under artifact_root"
     receipt = _read_json(receipt_path)
     if not isinstance(receipt, dict):
-        return False, f"completion callback receipt missing/unreadable at {receipt_path}"
+        # An executor-side callback attempt means work was reported; never
+        # release it through the dispatch side. Otherwise only a proven
+        # NO_INPUT dispatch shows the finalized task never reached us.
+        attempts = receipt_path.with_name(receipt_path.stem + "-attempts")
+        state = "CALLBACK_ATTEMPTED" if (attempts.exists() or attempts.is_symlink()) else \
+            _task_dispatch_state(marker, (root / "task-pack.json").read_bytes(),
+                                 _surface_key(payload) or "")
+        if state == "NO_INPUT":
+            return True, ("finalized task pack was never delivered (dispatch NO_INPUT); "
+                          "no completion callback is owed yet")
+        return False, (f"completion callback receipt missing/unreadable at {receipt_path} "
+                       f"(task dispatch state: {state})")
 
     report_value = pack.get("report")
     report = Path(report_value) if isinstance(report_value, str) else None
