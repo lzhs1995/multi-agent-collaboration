@@ -50,6 +50,7 @@ _PROOF_DIR = _STATE_ROOT / "native-delivery-proof-v1"
 
 # 消息与任务包各自的 journal。callback 的 attempt 落在任务目录下，不在这里。
 _JOURNALS = ("message-dispatch-v1", "task-dispatch-v1")
+_NEVER_INPUT = frozenset({"PREPARED", "NO_INPUT"})
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
@@ -132,6 +133,10 @@ def pending_deliveries(payload: dict[str, Any], caller: str | None,
         except (OSError, ValueError):
             continue
         if not isinstance(attempt, dict):
+            continue
+        # 从未向终端输入（接收端 compacting 时 bridge 拒绝粘贴 → NO_INPUT）就没有
+        # 可补的键；实测 17:55Z 把这种 attempt 报成 NOT_RECEIVED 并叫人 --recover-stranded。
+        if attempt.get("phase") in _NEVER_INPUT:
             continue
         binding, identity = _binding_identity(attempt)
         own = identity.get("caller_surface_uuid")
