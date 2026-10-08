@@ -11,13 +11,14 @@ two owners writing the same declared file concurrently, not to gate all file I/O
 
 Root resolution never uses the caller's cwd: the round guard's cwd-derived path
 doubled when run from inside the artifact tree and then blamed a file that
-existed and read PASS. Order is explicit --artifact-root, then the active-task
-marker, then the registry.
+existed and read PASS. An explicit --artifact-root adds to every active-task
+root, with the registry as fallback for a marker's missing root.
 """
 from __future__ import annotations
 
 import json
 import os
+import cmux_hook_identity as hook_identity
 import re
 import shlex
 import sys
@@ -49,8 +50,22 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _workspace_key(payload: dict[str, Any]) -> str:
-    return (os.environ.get("CMUX_WORKSPACE_ID")
-            or payload.get("workspace_id") or "default")
+    return hook_identity.identity(payload)[0]
+
+
+def _has_workspace_markers() -> bool:
+    """Lease jurisdiction uses any parseable v1/v2 marker, without Stop TTL.
+
+    Inspect all workspaces before resolving the caller: inherited workspace
+    variables can belong to a managed daemon rather than its native client.
+    """
+    for pattern in ("*.json", "*/*.json"):
+        for path in ACTIVE_DIR.glob(pattern):
+            if path.name.startswith("."):
+                continue
+            if isinstance(_read_json(path), dict):
+                return True
+    return False
 
 
 def _workspace_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -78,22 +93,28 @@ def _workspace_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return markers
 
 
-def _artifact_roots(payload: dict[str, Any], tokens: list[str]) -> list[Path]:
+def _artifact_roots(
+    payload: dict[str, Any], tokens: list[str], *, markers=None,
+) -> list[Path]:
     """Every absolute artifact root the guard must enforce leases under.
 
-    An explicit --artifact-root is authoritative and yields exactly one root.
-    Otherwise every armed collaboration in this workspace contributes its
-    root: with concurrent v2 markers, a write can target any of the armed
-    trees, and checking only the first marker would fail open for the rest.
+    An explicit --artifact-root contributes its root without bypassing other
+    armed collaborations. Passing markers=[] supports explicit-root checking
+    without workspace discovery when no applicable marker exists anywhere.
     """
+    roots: list[Path] = []
     if "--artifact-root" in tokens:
         i = tokens.index("--artifact-root")
         if i + 1 < len(tokens):
             candidate = Path(tokens[i + 1])
-            return [candidate] if candidate.is_absolute() else []
-        return []
-    roots: list[Path] = []
-    for marker in _workspace_markers(payload):
+            if not candidate.is_absolute():
+                return []
+            roots.append(candidate)
+        else:
+            return []
+    if markers is None:
+        markers = _workspace_markers(payload)
+    for marker in markers:
         root = marker.get("artifact_root")
         if isinstance(root, str) and root:
             candidate = Path(root)
@@ -111,7 +132,9 @@ def _artifact_roots(payload: dict[str, Any], tokens: list[str]) -> list[Path]:
     return roots
 
 
-def _invalid_root_reason(payload: dict[str, Any], tokens: list[str]) -> str | None:
+def _invalid_root_reason(
+    payload: dict[str, Any], tokens: list[str], *, markers=None,
+) -> str | None:
     """Explain an explicitly supplied relative root instead of failing open."""
     if "--artifact-root" in tokens:
         i = tokens.index("--artifact-root")
@@ -120,12 +143,14 @@ def _invalid_root_reason(payload: dict[str, Any], tokens: list[str]) -> str | No
         value = tokens[i + 1]
         if not Path(value).is_absolute():
             return f"--artifact-root {value!r} is not absolute"
-        return None
-
-    for marker in _workspace_markers(payload):
+    if markers is None:
+        markers = _workspace_markers(payload)
+    for marker in markers:
         value = marker.get("artifact_root")
-        if isinstance(value, str) and value and not Path(value).is_absolute():
-            return f"active task marker artifact_root {value!r} is not absolute"
+        if isinstance(value, str) and value:
+            if not Path(value).is_absolute():
+                return f"active task marker artifact_root {value!r} is not absolute"
+            continue
         task_id = marker.get("task_id")
         if isinstance(task_id, str) and task_id:
             entry = _read_json(REGISTRY_DIR / f"{task_id.replace(os.sep, '_')}.json") or {}
@@ -206,7 +231,7 @@ def _lease_is_stale(rec: dict[str, Any], now: datetime | None = None) -> bool:
     return expires <= now
 
 
-def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
+def _evaluate_resolved(payload: dict[str, Any], *, markers=None) -> tuple[bool, str]:
     tokens: list[str] = []
     cmd = _tool_input(payload).get("command") or payload.get("command") or ""
     if isinstance(cmd, str) and cmd:
@@ -215,14 +240,16 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
         except ValueError:
             tokens = cmd.split()
 
-    roots = _artifact_roots(payload, tokens)
+    if markers is None:
+        markers = _workspace_markers(payload)
+    invalid = _invalid_root_reason(payload, tokens, markers=markers)
+    if invalid:
+        return False, (
+            "ARTIFACT_ROOT_NOT_ABSOLUTE — refusing to evaluate the lease "
+            f"guard with {invalid}; a relative root must never fall back to cwd."
+        )
+    roots = _artifact_roots(payload, tokens, markers=markers)
     if not roots:
-        invalid = _invalid_root_reason(payload, tokens)
-        if invalid:
-            return False, (
-                "ARTIFACT_ROOT_NOT_ABSOLUTE — refusing to evaluate the lease "
-                f"guard with {invalid}; a relative root must never fall back to cwd."
-            )
         return True, "no armed task root resolvable — lease guard inactive"
 
     lease_paths: list[Path] = []
@@ -290,6 +317,20 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
             "blocking yourself."
         )
     return False, "\n".join(lines)
+
+
+def evaluate(payload):
+    # Only known read tools skip discovery. A shell command with no extracted
+    # write target can still carry an invalid explicit artifact root.
+    if not payload or _tool_name(payload) in ("read", "glob", "grep"):
+        return True, "no absolute mutation target detected"
+    try:
+        if not _has_workspace_markers():
+            return _evaluate_resolved(payload, markers=[])
+        with hook_identity.evaluation(payload):
+            return _evaluate_resolved(payload)
+    except hook_identity.ERRORS as exc:
+        return False, "HOOK_CALLER_UNRESOLVED: " + str(exc)
 
 
 def main() -> int:

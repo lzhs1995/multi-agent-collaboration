@@ -108,9 +108,10 @@ class ReceiptOrderingTests(unittest.TestCase):
 
             def assert_receipt_before_send(_executor, prompt, marker=None):
                 receipt = json.loads((root / "handshake-receipt.json").read_text())
-                # The top-level receipt is deliberately FAIL until every
-                # executor has ACKed.  The per-executor entry is the pending
-                # state that must exist before the prompt is sent.
+                # Persist a nonterminal wait before sending, never a false FAIL.
+                self.assertEqual(receipt["status"], "AWAITING_EXECUTOR_ACK")
+                self.assertEqual(receipt["lifecycle"], "PENDING")
+                self.assertNotIn("error", receipt)
                 self.assertEqual(receipt["executors"][0]["status"], "HELLO_SENT")
                 self.assertFalse(receipt["prompt_contains_literal_ack"])
                 self.assertIn("ACK_NONCE=", prompt)

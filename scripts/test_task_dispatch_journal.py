@@ -170,6 +170,38 @@ class TaskDispatchJournalTests(unittest.TestCase):
             send.assert_not_called()
             key.assert_not_called()
 
+    def test_no_input_writer_pins_original_delivery_lock(self):
+        with patch.object(b, 'read_screen', return_value='host ~ %'), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.DispatchUnconfirmed):
+                self.call()
+            attempt_path = next(self.home.rglob('attempt-*.json'))
+            attempt = json.loads(attempt_path.read_text())
+            lock = attempt_path.parent / 'delivery.lock'
+            info = lock.stat()
+            self.assertEqual(attempt['delivery_lock_identity'],
+                             dict(device=info.st_dev, inode=info.st_ino))
+            lock.rename(lock.with_name('original-lock'))
+            lock.touch()
+            with self.assertRaisesRegex(b.TaskPackContractError, 'ORIGINAL_LOCK_CHANGED'):
+                self.call()
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_lock_replacement_after_paste_stops_enter(self):
+        def replace(*args):
+            attempt_path = next(self.home.rglob('attempt-*.json'))
+            lock = attempt_path.parent / 'delivery.lock'
+            lock.rename(lock.with_name('original-lock'))
+            lock.touch()
+        with patch.object(b, 'read_screen', return_value=IDLE), \
+                patch.object(b, 'send_text', side_effect=replace) as send, \
+                patch.object(b, 'send_key') as key:
+            with self.assertRaisesRegex(b.TaskPackContractError, 'ORIGINAL_LOCK_CHANGED'):
+                self.call()
+            send.assert_called_once()
+            key.assert_not_called()
+
     def test_missing_attempt_cannot_be_reconciled(self):
         with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             with self.assertRaises(b.TaskPackContractError):

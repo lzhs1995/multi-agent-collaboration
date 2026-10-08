@@ -1019,8 +1019,14 @@ def cmd_name_surfaces(args):
 
 
 # ---------------------------------------------------------------------------
-# bridge-test (non-submitting: type token, clear with ctrl+u)
+# bridge-test (non-submitting: type token, bounded owned-token cleanup)
 # ---------------------------------------------------------------------------
+
+def _bridge_test_token(task_id, ordinal):
+    # Identity lives in the evidence, not in dozens of characters requiring
+    # guarded deletion. Keep each executor's probe short and independently fresh.
+    return f"B{ordinal}_{secrets.token_hex(4)}"
+
 
 def cmd_bridge_test(args):
     root = _artifact_root(args)
@@ -1034,13 +1040,10 @@ def cmd_bridge_test(args):
     executors = _gate_executors(gate)
     # Every executor gets its own token. A shared token would let one
     # executor's echo satisfy another executor's evidence — exactly the
-    # "declared three, proved one" state these gates exist to prevent. A lone
-    # executor keeps the unsuffixed token so existing readers see no change.
+    # "declared three, proved one" state these gates exist to prevent.
     per_executor = []
     for item in executors:
-        token = f"BRIDGE_TEST_{args.task_id}"
-        if len(executors) > 1:
-            token = f"{token}_E{item['ordinal']}"
+        token = _bridge_test_token(args.task_id, item["ordinal"])
         evidence, ok = _bridge_test_one(args, item["surface_ref"], token, item["ordinal"])
         per_executor.append(evidence)
         if not ok:
@@ -1100,12 +1103,10 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         "preexisting_compose_preview": preexisting_compose[:240] if compose_was_occupied else None,
         "preexisting_compose_lines": len(preexisting_compose.splitlines()) if compose_was_occupied else 0,
     }
-    if compose_was_occupied and not forced_compose:
+    def refuse_input(reason):
         _fail(
-            "COMPOSE_OCCUPIED — the executor's live compose block is not empty. "
-            "Refusing to type or clear: that buffer may hold unsubmitted user "
-            "text. Clear it manually (or wait for it to be submitted), then "
-            "re-run bridge-test."
+            "COMPOSE_OCCUPIED — " + reason + ". Refusing to type or clear; "
+            "preserve the receiver's input and wait for an idle empty editor."
         )
         return {
             "task_id": args.task_id,
@@ -1117,17 +1118,28 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
             "observed_in_screen": False,
             "clear_confirmed": False,
             "clear_attempts": 0,
+            "clear_key_count": 0,
             "clear_verified_at": None,
             "pre_read_performed": True,
-            "compose_was_empty_before_send": False,
+            "compose_was_empty_before_send": cmux.compose_block_is_empty(pre_screen),
+            "active_or_queued_before_send": cmux._queued_or_active_input(pre_screen),
             "token_sent": False,
             "override": override,
             "note": (
-                "Pre-read refused the operation. Nothing was typed, deleted, or "
-                "submitted; the compose buffer is byte-unchanged by this run."
+                "Pre-paste observation refused the token. No bridge token was "
+                "typed or submitted; any prior authorized clear actions are "
+                "recorded separately in override."
             ),
             "updated_at": _now(),
         }, False
+
+    # Empty compose and idle receiver are distinct facts. In particular, Claude
+    # can expose an empty bordered editor while a Bash tool is still running.
+    # Even an explicit compose override does not authorize input to that task.
+    if cmux._queued_or_active_input(pre_screen):
+        return refuse_input("active/queued work owns the executor")
+    if compose_was_occupied and not forced_compose:
+        return refuse_input("the executor's live compose block is not empty")
 
     if compose_was_occupied and forced_compose:
         _info("Force-compose override: discarding the current compose with Esc")
@@ -1138,6 +1150,8 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         cmux.send_key(executor_ref, "escape")
         time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
         pre_screen = cmux.read_screen(executor_ref, lines=args.lines)
+        if cmux._queued_or_active_input(pre_screen):
+            return refuse_input("active/queued work appeared during authorized compose clearing")
         if not cmux.compose_block_is_empty(pre_screen):
             # Claude may leave the compose unchanged after Escape.  Since the
             # operator explicitly authorized discarding this fingerprinted
@@ -1215,58 +1229,73 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         override["clear_confirmed"] = cmux.compose_block_is_empty(pre_screen)
         override["clear_verified_at"] = _now() if override["clear_confirmed"] else None
 
-    _info(f"Compose block verified empty; sending bridge token to {executor_ref}: {token!r}")
-    cmux.send_text(executor_ref, token)  # no \n — non-submitting
+    if cmux._queued_or_active_input(pre_screen):
+        return refuse_input("active/queued work appeared before the bridge token")
+
+    # Only the actual pre-paste screen can prove restoration of an explicitly
+    # authorized virtual suggestion. The earlier occupied buffer is not enough:
+    # force cleanup may already have changed it.
+    restore_text = (
+        cmux.compose_rendered_text(pre_screen)
+        if override.get("direct_replace_after_clear_attempts") else None
+    )
+    _info(f"Sending non-submitting bridge token to {executor_ref}: {token!r}")
+    cmux.send_text(executor_ref, token)  # no newline
     time.sleep(1)
     screen = cmux.read_screen(executor_ref, lines=args.lines)
     observed = token in screen
 
-    # bridge-test owns its cleanup.
-    #
-    # Measured incident (this task's own receipts): bridge-test finished at
-    # 11:45:33.009753Z leaving its token in the compose buffer, handshake started
-    # 1.003 ms later, read that token as "queued/active input", and aborted with
-    # dispatch_submitted_at=None — never pasting anything. The supervisor then
-    # attributed the abort to executor silence. SKILL.md already required this
-    # clear-and-verify step in prose; nothing enforced it, so preflight ran the
-    # two phases back-to-back and tripped its own guard.
-    #
-    # The postcondition is therefore a fact on disk, not a hope: after ctrl+u,
-    # re-read the same surface until the token is absent from the active compose
-    # block. Bounded retries, then a distinct BRIDGE_TEST_UNCONFIRMED. Note that
-    # `observed` may be False on TUIs that hide unsubmitted input, so absence is
-    # only meaningful as a *post*-clear reading, never as proof the paste failed.
-    # The Claude prompt editor on the bound terminal does not consistently
-    # consume ctrl+u. Move to the start and delete a bounded number of input
-    # cells instead. This is safe because the pre-read above *proved* the compose
-    # block was empty before the token was sent, so the only content on this line
-    # is bridge-test's own token. That proof replaces the earlier version's
-    # assertion that the line was "otherwise empty", which nothing established.
-    # The screen postcondition below remains the authority on whether the clear
-    # actually worked.
-    cmux.send_key(executor_ref, "end")
-    clear_key_count = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(token))
-    for _ in range(clear_key_count):
-        cmux.send_key(executor_ref, "backspace")
-        time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
-    _info("Cleared input with end + bounded backspace; verifying the clear")
+    def cleared(screen):
+        if cmux._queued_or_active_input(screen):
+            return None
+        if cmux.compose_block_is_empty(screen):
+            return "EMPTY_COMPOSE"
+        if (
+            restore_text is not None
+            and cmux.compose_rendered_text(screen) == restore_text
+            and not cmux._queued_or_active_input(screen)
+        ):
+            return "AUTHORIZED_PRE_PASTE_RESTORED"
+        return None
 
+    # A missing full token does not prove an empty editor. Delete only a
+    # positively observed prefix of our own token (backspace leaves prefixes).
+    # Missing glyphs, queued work, and foreign text get bounded re-reads only.
+    # Every key still goes through the live workspace/UUID guard.
     clear_confirmed = False
     clear_attempts = 0
-    post_clear_screen = ""
+    clear_key_count = 0
+    clear_confirmed_by = None
+    clear_observations = []
+    post_clear_screen = screen
     for attempt in range(1, BRIDGE_TEST_CLEAR_MAX_ATTEMPTS + 1):
         clear_attempts = attempt
-        time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
-        post_clear_screen = cmux.read_screen(executor_ref, lines=args.lines)
-        if not cmux.compose_contains(post_clear_screen, token):
-            clear_confirmed = True
-            break
-        if attempt < BRIDGE_TEST_CLEAR_MAX_ATTEMPTS:
-            _info(f"Token still in compose (attempt {attempt}); clearing again")
+        body = cmux.compose_rendered_text(post_clear_screen)
+        owned = (
+            bool(body) and token.startswith(body)
+            and not cmux._queued_or_active_input(post_clear_screen)
+        )
+        delete_count = 0
+        if not cleared(post_clear_screen) and owned:
+            delete_count = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(body))
             cmux.send_key(executor_ref, "end")
-            for _ in range(clear_key_count):
+            for _ in range(delete_count):
                 cmux.send_key(executor_ref, "backspace")
                 time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
+            clear_key_count += delete_count
+        clear_observations.append({
+            "attempt": attempt,
+            "compose_observed": body is not None,
+            "owned_token_prefix": bool(owned),
+            "delete_count": delete_count,
+            "screen_sha256": hashlib.sha256(post_clear_screen.encode("utf-8")).hexdigest(),
+        })
+        time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
+        post_clear_screen = cmux.read_screen(executor_ref, lines=args.lines)
+        clear_confirmed_by = cleared(post_clear_screen)
+        if clear_confirmed_by:
+            clear_confirmed = True
+            break
 
     evidence = {
         "task_id": args.task_id,
@@ -1276,6 +1305,9 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         "observed_in_screen": observed,
         "clear_confirmed": clear_confirmed,
         "clear_attempts": clear_attempts,
+        "clear_key_count": clear_key_count,
+        "clear_confirmed_by": clear_confirmed_by,
+        "clear_observations": clear_observations,
         "clear_verified_at": _now() if clear_confirmed else None,
         "pre_read_performed": True,
         "compose_was_empty_before_send": not compose_was_occupied,
@@ -1293,9 +1325,9 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
 
     if not clear_confirmed:
         _fail(
-            f"BRIDGE_TEST_UNCONFIRMED — token still in the compose block after "
-            f"{clear_attempts} clear attempts on {executor_ref}. Handshake would "
-            f"read our own token as executor input. Clear it manually, then rerun."
+            f"BRIDGE_TEST_UNCONFIRMED — compose cleanup was not verified after "
+            f"{clear_attempts} bounded observations on {executor_ref}. "
+            "Preserve the evidence; do not submit a handshake behind unknown input."
         )
         return evidence, False
 
@@ -1306,8 +1338,128 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
 # handshake
 # ---------------------------------------------------------------------------
 
+def _bridge_clear_binding(args, root, gate):
+    """Narrow recovery of one already-sent bridge token; never a new dispatch."""
+    if (not isinstance(gate, dict) or gate.get("task_id") != args.task_id or
+            getattr(args, "force_compose", False)):
+        raise ValueError("recovery requires the original task gate and no force-compose")
+    items = _gate_executors(gate)
+    original = root / "bridge-test-evidence.json"
+    if original.is_symlink() or (root / "identity-gate.json").is_symlink():
+        raise ValueError("recovery may not follow substituted evidence symlinks")
+    original_bytes = original.read_bytes()
+    gate_bytes = (root / "identity-gate.json").read_bytes()
+    if json.loads(gate_bytes) != gate:
+        raise ValueError("identity gate changed before recovery binding")
+    ev = json.loads(original_bytes)
+    if (not isinstance(ev, dict) or gate.get("status") != "PASS" or len(items) != 1 or
+            ev.get("task_id") != args.task_id or
+            ev.get("executor") != items[0]["surface_ref"] or
+            ev.get("clear_confirmed") is not False or
+            ev.get("pre_read_performed") is not True or
+            ev.get("compose_was_empty_before_send") is not True or
+            ev.get("token_sent") is not True):
+        raise ValueError("recovery requires one bound, previously owned, sent bridge token")
+    leaves = ev.get("executors", [ev])
+    if (not isinstance(leaves, list) or len(leaves) != 1 or
+            not isinstance(leaves[0], dict) or
+            any(leaves[0].get(key) != ev.get(key) for key in
+                ("task_id", "executor", "token", "clear_confirmed",
+                 "pre_read_performed", "compose_was_empty_before_send", "token_sent"))):
+        raise ValueError("single executor bridge evidence is inconsistent")
+    return items[0], {
+        "task_id": args.task_id,
+        "executor": items[0]["surface_ref"],
+        "original_bridge_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "identity_gate_sha256": hashlib.sha256(gate_bytes).hexdigest(),
+    }
+
+
+def _clear_recovery_path(args, root):
+    value = getattr(args, "bridge_clear_recovery", None)
+    if not value:
+        raise ValueError("--bridge-clear-recovery is required")
+    path = Path(value)
+    if (not path.is_absolute() or path.is_symlink() or
+            path.parent.resolve() != root.resolve() or
+            path.name in {"identity-gate.json", "bridge-test-evidence.json", "handshake-receipt.json", "task-pack.json"}):
+        raise ValueError("recovery receipt must be a distinct nonsymlink sibling of original evidence")
+    return path
+
+
+def _empty_idle_agent_screen(screen):
+    return (cmux.receiver_input_kind(screen) == "AGENT_TUI" and
+            cmux.compose_block_is_empty(screen) and
+            not cmux._queued_or_active_input(screen))
+
+
+def cmd_bridge_clear_observe(args):
+    """Zero-input observation; preserve the failed bridge evidence verbatim."""
+    root = _artifact_root(args)
+    gate = _read(root / "identity-gate.json") or {}
+    try:
+        path = _clear_recovery_path(args, root)
+        if path.exists():
+            raise ValueError("recovery receipt already exists; preserve it")
+        if any((root / name).exists() for name in ("handshake-receipt.json", "task-pack.json")):
+            raise ValueError("handshake/task already started; do not replay its precondition")
+        item, binding = _bridge_clear_binding(args, root, gate)
+        _recheck_workspace_gate(gate)
+        screen = cmux.read_screen(item["surface_ref"], lines=args.lines)
+        _recheck_workspace_gate(gate)
+        if _bridge_clear_binding(args, root, gate)[1] != binding:
+            raise ValueError("original evidence changed during observation")
+        ok = _empty_idle_agent_screen(screen)
+        receipt = dict(binding, status="PASS" if ok else "REFUSED",
+                       terminal_input_sent=False, clear_confirmed_by="EMPTY_COMPOSE_READ_ONLY" if ok else None,
+                       screen=screen, screen_sha256=hashlib.sha256(screen.encode("utf-8")).hexdigest(),
+                       checked_at=_now())
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump(receipt, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if not ok:
+            raise ValueError("current receiver is not a verified empty idle agent; zero input sent")
+        _ok(f"bridge clear observed without input; original failure preserved; receipt={path}")
+    except (OSError, ValueError, RuntimeError) as exc:
+        _fail(str(exc))
+        sys.exit(1)
+
+
+def _recovered_bridge_clear(args, root, gate):
+    """Bind the original failure, saved observation, and a fresh live recheck."""
+    path = _clear_recovery_path(args, root)
+    item, binding = _bridge_clear_binding(args, root, gate)
+    receipt_bytes = path.read_bytes()
+    receipt = json.loads(receipt_bytes)
+    if not isinstance(receipt, dict) or any(receipt.get(key) != value for key, value in binding.items()):
+        raise ValueError("recovery receipt binding mismatch")
+    screen = receipt.get("screen")
+    if (receipt.get("status") != "PASS" or receipt.get("terminal_input_sent") is not False or
+            receipt.get("clear_confirmed_by") != "EMPTY_COMPOSE_READ_ONLY" or
+            not isinstance(screen, str) or
+            hashlib.sha256(screen.encode("utf-8")).hexdigest() != receipt.get("screen_sha256") or
+            not _empty_idle_agent_screen(screen)):
+        raise ValueError("recovery receipt lacks a valid saved empty idle observation")
+    _recheck_workspace_gate(gate)
+    current = cmux.read_screen(item["surface_ref"], lines=args.lines)
+    _recheck_workspace_gate(gate)
+    if not _empty_idle_agent_screen(current):
+        raise ValueError("receiver changed after observation; refuse handshake")
+    if _bridge_clear_binding(args, root, gate)[1] != binding:
+        raise ValueError("original binding changed before handshake")
+    if path.read_bytes() != receipt_bytes:
+        raise ValueError("recovery receipt changed before handshake")
+    return {"path": str(path), "sha256": hashlib.sha256(receipt_bytes).hexdigest()}
+
+
 def cmd_handshake(args):
     root = _artifact_root(args)
+    if (getattr(args, "bridge_clear_recovery", None) and
+            any((root / name).exists() for name in ("handshake-receipt.json", "task-pack.json"))):
+        _fail("original handshake already started; use its existing receipt, not clear recovery")
+        sys.exit(1)
     gate = _read(root / "identity-gate.json")
     if not gate or gate.get("status") != "PASS":
         _fail("identity-gate.json not PASS — run identity-gate first")
@@ -1357,14 +1509,29 @@ def _write_handshake_receipt(root, per_executor):
             if r.get("executor_ack") is not True
         ]
         receipt["executor_ack"] = False
-        receipt["status"] = "FAIL"
         receipt["unproven_executors"] = unproven
-        # Point at the panel-level reason; the per-executor entries keep their
-        # own specific ack_state / lifecycle / attribution untouched.
-        receipt["error"] = (
-            f"handshake incomplete — {len(unproven)} of {len(per_executor)} "
-            f"executor(s) did not ACK: {', '.join(str(u) for u in unproven)}"
+        pending = all(
+            r.get("lifecycle") == "PENDING" and r.get("status") != "FAIL"
+            for r in per_executor if r.get("executor_ack") is not True
         )
+        if pending:
+            receipt["status"] = "AWAITING_EXECUTOR_ACK"
+            receipt["lifecycle"] = "PENDING"
+            receipt["terminal_error_at"] = None
+            receipt.pop("error", None)
+        else:
+            receipt["status"] = "FAIL"
+            failed = next(r for r in per_executor
+                          if r.get("executor_ack") is not True
+                          and (r.get("lifecycle") != "PENDING" or r.get("status") == "FAIL"))
+            receipt["lifecycle"] = failed.get("lifecycle", "UNKNOWN")
+            receipt["terminal_error_at"] = failed.get("terminal_error_at")
+            # Preserve per-executor attribution; an input rejection is not
+            # proof that the executor was silent.
+            receipt["error"] = (
+                f"handshake incomplete — terminal or invalid state for "
+                f"{failed.get('executor')}: {failed.get('error', 'see executor record')}"
+            )
     _write(root / "handshake-receipt.json", receipt)
 
 
@@ -1416,13 +1583,13 @@ def _handshake_one(args, root, gate, item, per_executor):
             f"{[c.get('executor') for c in (bridge_all.get('executors') or [bridge_all])]!r}."
         )
         sys.exit(1)
+    clear_recovery = None
     if bridge_ev.get("clear_confirmed") is not True:
-        _fail(
-            "BRIDGE_TEST_CLEAR_UNCONFIRMED — refusing to paste a handshake behind an "
-            "unverified compose buffer. bridge-test must report clear_confirmed=true "
-            "for this task and surface. Rerun bridge-test."
-        )
-        sys.exit(1)
+        try:
+            clear_recovery = _recovered_bridge_clear(args, root, gate)
+        except (OSError, ValueError, RuntimeError) as exc:
+            _fail("BRIDGE_TEST_CLEAR_UNCONFIRMED — " + str(exc))
+            sys.exit(1)
 
     # One fresh nonce per executor. secrets.token_hex is called once per
     # executor, so two executors cannot be issued the same challenge.
@@ -1463,6 +1630,7 @@ def _handshake_one(args, root, gate, item, per_executor):
         "ack_response_marker": False,
         "prompt_contains_literal_ack": False,
         "bridge_clear_confirmed": True,
+        "bridge_clear_recovery": clear_recovery,
         "budget_source": budget_source,
         "budget_seconds": handshake_timeout,
         "phase_minimum_seconds": phase_minimum,
@@ -3337,6 +3505,13 @@ def cmd_disarm(args):
         sys.exit(1)
     if removed:
         _ok(f"disarmed {removed} task marker(s) for workspace {_workspace_key()}")
+        _info(
+            "next_action=SUPERVISOR_STATUS_SYNC_IF_STALE — if a settled report's "
+            "executor repeats its old closeout status, send one guarded notice "
+            "linking the existing callback receipt, supervisor adjudication, "
+            "and disarm evidence. A notice is not proof of tool recovery or "
+            "deliverable acceptance."
+        )
     else:
         _info(f"no active marker for workspace {_workspace_key()} (already disarmed)")
 
@@ -3374,7 +3549,7 @@ def main():
     )
     p.add_argument("command", choices=[
         "doctor", "setup-check", "identity", "surface-inventory",
-        "identity-gate", "name-surfaces", "bridge-test", "handshake",
+        "identity-gate", "name-surfaces", "bridge-test", "bridge-clear-observe", "handshake",
         "validate", "task-pack", "finalize-pack", "map", "receipt", "guard-check",
         "preflight", "helper-parity",
         "record-round", "consensus-check", "disarm",
@@ -3425,6 +3600,8 @@ def main():
     p.add_argument("--round-timeout",     type=int, default=180,
                    help="per-round ACK poll budget (default: 180s)")
     p.add_argument("--lines",            type=int, default=200)
+    p.add_argument("--bridge-clear-recovery", default=None,
+                   help="independent zero-input clear observation bound to the original failed bridge test")
     p.add_argument(
         "--force-compose",
         action=argparse.BooleanOptionalAction,
@@ -3463,6 +3640,7 @@ def main():
         "identity-gate":    cmd_identity_gate,
         "name-surfaces":    cmd_name_surfaces,
         "bridge-test":      cmd_bridge_test,
+        "bridge-clear-observe": cmd_bridge_clear_observe,
         "handshake":        cmd_handshake,
         "validate":         cmd_validate,
         "task-pack":        cmd_task_pack,

@@ -107,6 +107,13 @@ class OfflineWorkspaceFixture(unittest.TestCase):
         patcher = mock.patch.object(HARNESS.cmux, "pin_workspace", side_effect=pin)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Deterministic screen fixtures; production probes are short and random.
+        token_patcher = mock.patch.object(
+            HARNESS, "_bridge_test_token",
+            side_effect=lambda task_id, ordinal: f"B{ordinal}_01234567",
+        )
+        token_patcher.start()
+        self.addCleanup(token_patcher.stop)
 
 
 class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
@@ -130,7 +137,7 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
                                   # must be provably empty before anything is
                                   # typed. 2nd is post-paste, 3rd is post-clear.
                                   side_effect=["❯ \n  ? for shortcuts",
-                                               "❯ BRIDGE_TEST_r3-test",
+                                               "❯ B1_01234567",
                                                "❯ "]),
                 mock.patch.object(HARNESS.time, "sleep"),
             ):
@@ -143,7 +150,7 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
             self.assertTrue(ev["compose_was_empty_before_send"])
             self.assertTrue(ev["token_sent"])
             backspaces = [c for c in send_key.call_args_list if c.args[1] == "backspace"]
-            self.assertEqual(len(backspaces), len("BRIDGE_TEST_r3-test"))
+            self.assertEqual(len(backspaces), len("B1_01234567"))
             self.assertLess(len(backspaces), HARNESS.BRIDGE_TEST_CLEAR_DELETE_COUNT)
 
     def test_persistent_token_fails_closed_and_records_it(self):
@@ -151,7 +158,7 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             gate(root)
-            stuck = "❯ BRIDGE_TEST_r3-test"
+            stuck = "❯ B1_01234567"
             with (
                 mock.patch.object(HARNESS.cmux, "send_text"),
                 mock.patch.object(HARNESS.cmux, "send_key"),
@@ -538,7 +545,8 @@ class StopGuardPolarityTests(unittest.TestCase):
         caught: two excisions stayed green because nothing under test ever
         reached the mutated line.
         """
-        with mock.patch.object(guard, "_active_markers", return_value=[marker]):
+        with mock.patch.object(guard, "_has_active_markers", return_value=True), \
+                mock.patch.object(guard, "_active_markers", return_value=[marker]):
             ok, _msg = guard.evaluate({"last_assistant_message": text})
         return ok
 
@@ -824,14 +832,14 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
                     "read_screen",
                     side_effect=[
                         occupied, occupied, occupied, occupied, "❯ ",
-                        "❯ BRIDGE_TEST_r3-test", "❯ ",
+                        "❯ B1_01234567", "❯ ",
                     ],
                 ),
                 mock.patch.object(HARNESS.time, "sleep"),
             ):
                 HARNESS.cmd_bridge_test(args(root, force_compose=True))
 
-            send_text.assert_called_once_with("surface:2", "BRIDGE_TEST_r3-test")
+            send_text.assert_called_once_with("surface:2", "B1_01234567")
             bounded_delete.assert_called_once_with("surface:2", "stale multiline prompt")
             self.assertEqual(
                 [call.args[1] for call in send_key.call_args_list[:3]],
@@ -866,14 +874,14 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
                     "read_screen",
                     side_effect=[
                         occupied, occupied, occupied, occupied, occupied,
-                        "❯ BRIDGE_TEST_r3-test", occupied,
+                        "❯ B1_01234567", occupied,
                     ],
                 ),
                 mock.patch.object(HARNESS.time, "sleep"),
             ):
                 HARNESS.cmd_bridge_test(args(root, force_compose=True))
 
-            send_text.assert_called_once_with("surface:2", "BRIDGE_TEST_r3-test")
+            send_text.assert_called_once_with("surface:2", "B1_01234567")
             ev = json.loads((root / "bridge-test-evidence.json").read_text())
             self.assertTrue(ev["override"]["direct_replace_after_clear_attempts"])
             self.assertTrue(ev["clear_confirmed"])
@@ -904,14 +912,12 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
             ):
                 HARNESS.cmd_bridge_test(args(root, force_compose=True))
 
-            self.assertEqual(
-                [call.args[1] for call in send_key.call_args_list],
-                ["escape", "ctrl+u"],
-            )
+            send_key.assert_not_called()
             send_text.assert_not_called()
             bounded_delete.assert_not_called()
             ev = json.loads((root / "bridge-test-evidence.json").read_text())
-            self.assertEqual(ev["status"], "FORCE_COMPOSE_CLEAR_FAILED")
+            self.assertEqual(ev["status"], "COMPOSE_OCCUPIED")
+            self.assertTrue(ev["active_or_queued_before_send"])
             self.assertFalse(ev["token_sent"])
 
     def test_suggestion_like_drafts_refuse_all_input(self):
@@ -957,7 +963,7 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
                 mock.patch.object(HARNESS.cmux, "send_key"),
                 mock.patch.object(HARNESS.cmux, "read_screen",
                                   side_effect=["› Ask Codex to do anything\n\n  gpt-5.6-sol xhigh",
-                                               "› BRIDGE_TEST_r3-test",
+                                               "› B1_01234567",
                                                "› Ask Codex to do anything"]),
                 mock.patch.object(HARNESS.time, "sleep"),
             ):
@@ -2979,6 +2985,26 @@ class ActiveMarkerContractTests(unittest.TestCase):
             self.assertEqual(len(HARNESS._workspace_marker_paths()), 1)
             self.assertIn("disarmed 1 task marker(s)", out)
 
+    def test_successful_disarm_emits_conditional_status_sync_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, marker_path = self._armed(tmp, task_id="fin-sync")
+            code, out = self._disarm(root, "fin-sync")
+            self.assertIsNone(code)
+            self.assertFalse(marker_path.exists())
+            self.assertIn("next_action=SUPERVISOR_STATUS_SYNC_IF_STALE", out)
+            self.assertIn("if a settled report's executor repeats", out)
+            self.assertIn("not proof of tool recovery", out)
+
+    def test_absent_marker_does_not_emit_a_new_status_sync_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, marker_path = self._armed(tmp, task_id="fin-sync-once")
+            self.assertEqual(HARNESS.disarm_task("fin-sync-once"), 1)
+            code, out = self._disarm(root, "fin-sync-once")
+            self.assertIsNone(code)
+            self.assertFalse(marker_path.exists())
+            self.assertIn("nothing disarmed", out)
+            self.assertNotIn("next_action=", out)
+
     def test_default_task_id_matches_the_argparse_default(self):
         """Poison case for constant drift.
 
@@ -3243,9 +3269,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         def read(surface, lines=None, **kw):
             seq = screens[surface] if screens else None
             if seq is None:
-                token = f"BRIDGE_TEST_multi-exec"
-                if len(bare) > 1:
-                    token = f"{token}_E{bare.index(surface) + 1}"
+                token = f"B{bare.index(surface) + 1}_01234567"
                 if surface == fail_on:
                     seq = ["❯ \n  ? for shortcuts"] + [f"❯ {token}"] * 12
                 else:
@@ -3278,21 +3302,21 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                          ["surface:2", "surface:3", "surface:4"])
         tokens = [t for _, t in sent]
         self.assertEqual(len(set(tokens)), 3, f"tokens must be distinct: {tokens}")
-        self.assertEqual(tokens, ["BRIDGE_TEST_multi-exec_E1",
-                                  "BRIDGE_TEST_multi-exec_E2",
-                                  "BRIDGE_TEST_multi-exec_E3"])
+        self.assertEqual(tokens, ["B1_01234567",
+                                  "B2_01234567",
+                                  "B3_01234567"])
         self.assertEqual(len(ev["executors"]), 3)
         self.assertTrue(all(e["clear_confirmed"] for e in ev["executors"]))
         # Singular top-level fields still describe executor 1.
         self.assertEqual(ev["executor"], "surface:2")
         self.assertTrue(ev["clear_confirmed"])
 
-    def test_single_executor_keeps_the_unsuffixed_token(self):
-        """1S+1E: an existing reader matching the exact token must still match."""
+    def test_single_executor_records_its_actual_probe_token(self):
+        """1S+1E: consumers read the actual token from evidence, not a task-name formula."""
         code, ev, sent = self._bridge(["surface:2"])
         self.assertIsNone(code)
-        self.assertEqual([t for _, t in sent], ["BRIDGE_TEST_multi-exec"])
-        self.assertEqual(ev["token"], "BRIDGE_TEST_multi-exec")
+        self.assertEqual([t for _, t in sent], ["B1_01234567"])
+        self.assertEqual(ev["token"], "B1_01234567")
         self.assertEqual(len(ev["executors"]), 1)
 
     def test_one_stuck_executor_fails_the_bridge_and_records_the_others(self):

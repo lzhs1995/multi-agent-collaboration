@@ -131,7 +131,18 @@ attempt has returned. Stop permits its exact honest REPORT_READY handoff without
 manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
 remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
+After verified acceptance/disarm, the supervisor owns
+[closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
+A normal task boundary is not an API failure or a permanent session stop. Use
+current evidence for authorized follow-up; never ask the user to relay to a bound peer.
+
 ### Fast handshake and verified delivery in both directions
+
+- Bridge cleanup must observe an empty compose, not merely the absence of the
+  full probe. Short per-executor tokens reduce guarded key count; unknown input
+  is reread, never blindly deleted. ACK waits remain `AWAITING_EXECUTOR_ACK`,
+  not terminal failures. See the executable postconditions in
+  [efficiency and closeout](references/efficiency-and-closeout.md).
 
 - Give the executor the absolute pending handshake receipt path in the initial
   challenge. It reads that file and the bound skill, then returns the exact ACK;
@@ -182,14 +193,19 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   samples; explicit thrashing is immediate failure. Freshly read the same surface,
   interrupt the failed compact once with Esc, preserve/disarm work, then permit
   one narrow same-session compact only within operator authority. Never clear.
-- Retryable 5xx: 60 seconds, at most three outer retries after the prior attempt
-  ends. Billing/authentication failures: zero retries. Stop the sentinel and
-  record unavailability. Use `executor_availability.py` for authorized SOLO
-  takeover and phase-boundary handback; never allow concurrent writers.
-  When the user has authorized automatic takeover, continue the task locally
-  after freezing the unavailable executor; do not stop the whole task. Read
-  [availability and shared resources](references/availability-and-resources.md)
-  for v2 initialization, v1 migration, exact-session recovery and resource leases.
+- Retryable Claude API failures: use bounded same-session retries, at least
+  60 seconds after the prior attempt ends. Temporary unavailability requires
+  at least 300 consecutive seconds of evidenced API failures, starting at the
+  first actual failure, plus a fresh failed attempt at or beyond that threshold.
+  Any actual API success resets the failure clock; a static screen, queued or
+  unknown delivery, and retry counts do not establish that failure interval.
+  Billing/authentication/quota failures permit no blind retries and are classified
+  separately, as is a user's explicit stop or withdrawal of authorization.
+  Continue independent work while waiting. Freeze the executor, stop its sentinel
+  and verify no concurrent writers before an already-authorized SOLO takeover;
+  recover only in the original session at a safe handoff and fresh handshake.
+  Read [availability and shared resources](references/availability-and-resources.md)
+  for the evidence rule, v2 initialization, v1 migration and resource leases.
 - Pasting is not submission. Confirm lowercase `enter` and new receiver activity
   using the bridge's delivery classifier. Prompt echo, stale callbacks and marker
   absence are not proof. On ambiguous delivery inspect before any resend.
@@ -259,3 +275,8 @@ rows cannot veto it. The selected UUID row must still match its actual TTY and
 workspace. Report caller-resolution failures as such, never as Claude identity
 failures. Keep the bridge test bounded to the test token and verify compose is
 clear; keep prompt/callback Enter checks and original-attempt recovery intact.
+
+For an ordinary-terminal Hook stopped by a root login permission denial, use the
+[narrow login boundary](references/root-login-permission-boundary.md). Preserve
+the original session and task; a source fix or process probe is not proof that
+the original executor has resumed.

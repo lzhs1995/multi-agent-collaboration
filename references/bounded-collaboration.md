@@ -36,6 +36,28 @@ case; an empty set that makes an aggregate predicate true is not a passing
 control. Compare the actual classified members when equal totals can hide
 different membership.
 
+## Identify the real caller and coordinate authorized resource requests
+
+Resolve the originating client's workspace and surface UUIDs before deciding
+whether a peer is local or cross-workspace. A shared daemon can inherit another
+client's environment, and the focused window can belong to another task; neither
+alone establishes the caller. Reconcile identification with the current client
+and role-map evidence. Preserve a mismatch and correct the binding before a send;
+do not relocate an executor or assume a new permission is needed from that mismatch.
+
+When the user has authorized direct resource-coordinator communication, the
+supervisor carries the scoped request to the verified coordinator through the
+supported interface. Do not ask the user to relay that same request. Keep the
+original request identity and evidence, preserve receiver drafts and FIFO order,
+and do not take over another task's executor or release its resource. If the
+current interface cannot deliver safely, retain the pending request, identify the
+transport limitation and continue independent authorized work. Do not turn that
+limitation into a repeated request for permission already granted.
+
+This is an operator responsibility, not a claim that cross-workspace transport,
+queue promotion or caller-identity recovery has been implemented. Check the
+actual pinned interface; a prose change does not create a missing capability.
+
 ## A handshake proves identity, not scientific agreement
 
 The initial challenge includes the absolute pending receipt and required skill.
@@ -55,12 +77,17 @@ Use `submit_task_pack` for task dispatch and `submit_completion_callback` for
 completion, from the bound guarded bridge. A helper return code, echoed prompt,
 report file or disappearing marker is insufficient evidence of delivery.
 
-| Observation after the guarded send | Meaning and next action |
+Keep the following distinctions in the evidence ledger; they are descriptive
+states, not new runtime receipt enums or a reason to require extra ACKs.
+
+| State | Required observation and next action |
 | --- | --- |
-| Complete payload remains in compose | Not submitted; preserve the draft and original attempt. No blind Enter, Tab, paste or force-clear. |
-| Payload is in the receiver queue | Submitted but pending; observe that attempt without resending. |
-| Exact task payload has task-related receiver activity or verified native receipt | Record actual consumption against the original attempt; do not resend after a detector false-negative. |
-| Missing, truncated or ambiguous evidence | UNKNOWN; preserve identity/journal and do bounded read-only recovery. |
+| Not submitted | Complete payload remains in compose. Preserve the draft and original attempt; no blind Enter, Tab, paste or force-clear. |
+| Submitted | The supported bridge verifies submission of the exact payload to the bound target. Submission alone proves neither queue position nor consumption. |
+| Queued | The exact payload is observed in the receiver queue. Observe the same attempt without resending or promoting it over existing input. |
+| Consumed | Task-related receiver activity or a verified native receipt binds consumption to the exact request. Do not resend after a detector false-negative. |
+| Processed | The requested business action has its own outcome evidence. A read notice is insufficient; a resource release needs the actual lifecycle result. Record success or failure separately. |
+| Unknown | Evidence is missing, truncated or ambiguous. Preserve identity/journal and do bounded read-only recovery. |
 
 Recovery may not change the task, report hash, nonce or original attempt to make
 it pass. If the pinned version lacks a read-only recovery API, checkpoint the
@@ -95,9 +122,15 @@ that failure and make it a separate maintenance scope; do not claim a prose rule
 fixed runtime enforcement. Safely finish an active command; do not raw Ctrl-C it.
 Before reusing the executor, verify its actual safe boundary.
 
-Persistent provider failures follow SKILL.md: finite retries only for retryable
-errors, zero blind billing/auth retries, original session preserved, authorized
-SOLO takeover after concurrent writes are stopped. The research task continues.
+Persistent provider failures follow SKILL.md and the
+[failure-window evidence rule](availability-and-resources.md#retryable-claude-api-failures-evidence-before-takeover):
+finite same-session retries for retryable Claude API failures, at least 300
+consecutive seconds from a real failure to a fresh failure, and reset on any
+actual API success. Counts, queued input and unknown outcomes do not prove this
+interval. Billing/auth/quota failures permit no blind retries; an explicit user
+stop is separately classified. Continue independent research during the wait.
+Authorized SOLO takeover still requires frozen executor writes and a verified
+safe boundary; this rule does not lengthen callback probes or release resources.
 
 ## Measure benefit and state the limits
 

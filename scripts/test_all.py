@@ -33,6 +33,8 @@ class OfflineResult(unittest.TextTestResult):
 
 if __name__ == "__main__":
     chatter = io.StringIO()
+    # CLI fixtures use offline_test_hook to isolate process/marker inputs too.
+    # Preserve the invoking environment; identity cases supply explicit inputs.
     with contextlib.redirect_stdout(chatter), contextlib.redirect_stderr(chatter):
         suite = unittest.defaultTestLoader.discover(str(Path(__file__).parent), pattern="test_*.py")
         result = unittest.TextTestRunner(stream=sys.__stderr__, verbosity=1,

@@ -105,8 +105,10 @@ class DaemonTests(unittest.TestCase):
         with self.assertRaises(d.IdentityError): self.resolve()
 
     def collect(self, pids='10\n30\n', process_fn=None):
+        def read(pid, **_kwargs):
+            return process_fn(pid) if process_fn else copy.deepcopy(self.processes[pid])
         with patch.object(d.sys, 'platform', 'darwin'), patch.object(d.os, 'getppid', return_value=20), \
-             patch.object(d, 'process', side_effect=process_fn or (lambda pid: copy.deepcopy(self.processes[pid]))), \
+             patch.object(d, 'process', side_effect=read), \
              patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout=''.join(f'{pid} /bin/codex\n' for pid in pids.split())), SimpleNamespace(stdout='ttys1')]):
             return d.collect(self.env)
 
@@ -126,14 +128,14 @@ class DaemonTests(unittest.TestCase):
 
     def test_no_terminal(self):
         with patch.object(d.sys, 'platform', 'darwin'), patch.object(d.os, 'getppid', return_value=20), \
-             patch.object(d, 'process', side_effect=lambda pid: copy.deepcopy(self.processes[pid])), \
+             patch.object(d, 'process', side_effect=lambda pid, **kw: copy.deepcopy(self.processes[pid])), \
              patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout='30 /bin/codex'), SimpleNamespace(stdout='??')]):
             with self.assertRaisesRegex(d.IdentityError, 'terminal'): d.collect(self.env)
 
     def test_duplicate_session(self):
         self.processes[31] = dict(self.processes[30], pid=31)
         with patch.object(d.sys, 'platform', 'darwin'), patch.object(d.os, 'getppid', return_value=20), \
-             patch.object(d, 'process', side_effect=lambda pid: copy.deepcopy(self.processes[pid])), \
+             patch.object(d, 'process', side_effect=lambda pid, **kw: copy.deepcopy(self.processes[pid])), \
              patch.object(d.subprocess, 'run', side_effect=[SimpleNamespace(returncode=0, stdout='30 /bin/codex\n31 /bin/codex'), SimpleNamespace(stdout='ttys1'), SimpleNamespace(stdout='ttys2')]):
             with self.assertRaisesRegex(d.IdentityError, 'unique'): d.collect(self.env)
 

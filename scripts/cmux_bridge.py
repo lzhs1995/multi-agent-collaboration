@@ -276,7 +276,8 @@ def list_surfaces(workspace=None):
     verified caller, not the focused tab or a globally docked surface.
     """
     # A managed daemon's default workspace is its origin, not this caller.
-    # Tree membership also excludes global dock panels from the local inventory.
+    # A global dock can appear under a workspace in the tree without being a
+    # member of that workspace. Exclude it explicitly from peer discovery.
     from cmux_workspace_guard import caller_snapshot
     identity, tree, env, _proof = caller_snapshot()
     caller = identity["caller"]
@@ -292,7 +293,8 @@ def list_surfaces(workspace=None):
              "selected": s["ref"] == caller["surface_ref"],
              "surface_type": s.get("type", "unknown"),
              "is_terminal": s.get("type") == "terminal"}
-            for pane in ws.get("panes", []) for s in pane.get("surfaces", [])]
+            for pane in ws.get("panes", []) for s in pane.get("surfaces", [])
+            if s.get("dock_scope") != "global"]
 
 
 def _legacy_list_surfaces(workspace):
@@ -673,15 +675,57 @@ def delivery_compose_text(screen):
     return "\n".join([_PROMPT_GLYPH_RE.sub("", lines[i], count=1), *lines[i+1:]])
 
 
-def compose_block_is_empty(screen):
+# Measured 2026-10-08: the running-tool footer is below the editor border.
+# Do not broadly strip its glyph from drafts; recognize a complete bordered
+# Claude editor and its known footer before separating content from chrome.
+_CLAUDE_RUNNING_TOOL_FOOTER_RE = re.compile(r"^\s*◐\s+Bash:\s+\S[^\n]*$", re.I)
+
+
+def _claude_bordered_compose(screen):
+    lines = screen.splitlines()
+    prompts = [i for i, line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
+    if not prompts:
+        return None
+    start = prompts[-1]
+    border = re.compile(r"^\s*─{8,}\s*$")
+    if start == 0 or not border.fullmatch(lines[start - 1]):
+        return None
+    end = next((i for i in range(start + 1, len(lines))
+                if border.fullmatch(lines[i])), None)
+    if end is None:
+        return None
+    footer = [line for line in lines[end + 1:] if line.strip()]
+    model = re.compile(
+        r"^\s*\[claude-[\w.-]+(?:\[\d+m\])?\]"
+        r"(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
+    if not footer or not model.fullmatch(footer[0]):
+        return None
+    if any(not (_COMPOSE_CHROME_RE.fullmatch(line.strip()) or
+                _CLAUDE_RUNNING_TOOL_FOOTER_RE.fullmatch(line))
+           for line in footer[1:]):
+        return None
+    body = [_PROMPT_GLYPH_RE.sub("", lines[start], count=1),
+            *lines[start + 1:end]]
+    return "\n".join(body).strip(), footer
+
+
+def compose_rendered_text(screen):
+    """Conservative editor text, stripping footer chrome; None is unobserved."""
+    bordered = _claude_bordered_compose(screen)
+    if bordered is not None:
+        return bordered[0]
     body = delivery_compose_text(screen)
     if body is None:
-        return False
+        return None
     lines = body.splitlines()
     # Never discard a typed first line, even when it resembles footer chrome.
     while len(lines) > 1 and (not lines[-1].strip() or _COMPOSE_CHROME_RE.fullmatch(lines[-1].strip())):
         lines.pop()
-    rendered = "\n".join(lines).strip(" \t\r\n│─╭╮╰╯")
+    return "\n".join(lines).strip(" \t\r\n│─╭╮╰╯")
+
+
+def compose_block_is_empty(screen):
+    rendered = compose_rendered_text(screen)
     # Plain screen text cannot distinguish a dim suggestion from a user who
     # typed continue, /context, /compact, or a prior virtual-prompt allowlist.
     return rendered in ("", "Ask Codex to do anything", "Ask Claude to do anything")
@@ -1029,6 +1073,11 @@ def _new_activity_after_submit(before, after):
 
 def _queued_or_active_input(screen):
     """Do not issue a blind second Enter while a queued/active task owns the TUI."""
+    bordered = _claude_bordered_compose(screen)
+    if bordered is not None and any(
+            _CLAUDE_RUNNING_TOOL_FOOTER_RE.fullmatch(line)
+            for line in bordered[1]):
+        return True
     if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", screen, re.I | re.M):
         return True
     if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):

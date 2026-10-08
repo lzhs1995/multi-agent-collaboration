@@ -380,55 +380,96 @@ def verify_role_map_target(
     except (OSError, ValueError) as exc:
         return False, f"role map unreadable: {type(exc).__name__}"
 
+    if not isinstance(doc, dict):
+        return False, "role map must be an object"
     if doc.get("task_id") and doc.get("task_id") != task_id:
         return False, (
             f"role map is bound to task {doc.get('task_id')!r}, not {task_id!r}"
         )
 
-    # Accept either a flat mapping or the roles-list shape; both appear on disk.
+    # Both the harness (executor, executor2...) and the supervisor protocol
+    # (identity, executors[]) are producers. Merge declarations rather than
+    # choosing a shape and silently ignoring a conflicting second declaration.
     roles: dict[str, str] = {}
-    entries = doc.get("roles") or doc.get("entries")
-    if isinstance(entries, list):
-        for item in entries:
-            if isinstance(item, dict) and item.get("role"):
-                ref = item.get("surface_ref") or item.get("surface")
-                if ref:
-                    roles[str(item["role"]).lower()] = str(ref)
-    elif isinstance(entries, dict):
-        roles = {str(k).lower(): str(v) for k, v in entries.items()}
-    for key in ("supervisor", "executor"):
-        if key not in doc:
-            continue
-        declared = doc.get(key)
-        # mac_harness map emits role objects, not the legacy flat strings.
+
+    def role_name(value):
+        if not isinstance(value, str):
+            raise ValueError("invalid role name")
+        name = value.lower()
+        if name == "executor1":
+            return "executor"
+        if name != "supervisor" and not re.fullmatch(r"executor(?:[1-9][0-9]*)?", name):
+            raise ValueError(f"unsupported role name: {value!r}")
+        return name
+
+    def add_role(key, declared):
+        key = role_name(key)
         if isinstance(declared, dict):
-            refs = [declared[name] for name in ("surface_ref", "surface") if name in declared]
+            refs = [declared[name] for name in ("surface_ref", "surface", "identity") if name in declared]
             if (not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
                     or len(set(refs)) != 1):
-                return False, f"invalid or conflicting {key} surface declaration"
+                raise ValueError(f"invalid or conflicting {key} surface declaration")
             declared = refs[0]
         if not isinstance(declared, str) or not declared.strip():
-            return False, f"invalid {key} surface declaration"
+            raise ValueError(f"invalid {key} surface declaration")
         if key in roles and roles[key] != declared:
-            return False, f"conflicting {key} surfaces in role map"
+            raise ValueError(f"conflicting {key} surfaces in role map")
         roles[key] = declared
 
+    try:
+        for field in ("roles", "entries"):
+            if field not in doc:
+                continue
+            entries = doc[field]
+            if isinstance(entries, dict):
+                for key, declared in entries.items():
+                    add_role(key, declared)
+            elif isinstance(entries, list):
+                for item in entries:
+                    if not isinstance(item, dict):
+                        raise ValueError(f"invalid {field} member")
+                    add_role(item.get("role"), item)
+            else:
+                raise ValueError(f"invalid {field} collection")
+        for key, declared in doc.items():
+            if key == "supervisor" or re.fullmatch(r"executor(?:[1-9][0-9]*)?", key):
+                add_role(key, declared)
+        if "executors" in doc:
+            entries = doc["executors"]
+            if not isinstance(entries, list) or not entries:
+                raise ValueError("invalid or empty executors collection")
+            seen = set()
+            for ordinal, item in enumerate(entries, 1):
+                if not isinstance(item, dict):
+                    raise ValueError("invalid executors member")
+                name = role_name(item.get("role", "executor" if ordinal == 1 else f"executor{ordinal}"))
+                if name == "supervisor" or name in seen:
+                    raise ValueError("invalid or duplicate executor role")
+                seen.add(name)
+                add_role(name, item)
+    except ValueError as exc:
+        return False, str(exc)
+
     expected_supervisor = roles.get("supervisor")
-    expected_executor = roles.get("executor") or roles.get("executor1")
+    expected_executors = {ref for role, ref in roles.items() if role != "supervisor"}
     if not expected_supervisor:
         return False, "role map declares no supervisor surface"
+    if not expected_executors:
+        return False, "role map declares no executor surface"
+    if len(set(roles.values())) != len(roles):
+        return False, "same surface declared for multiple roles"
 
     if expected_supervisor != supervisor_surface:
         return False, (
             f"supervisor target mismatch: argv {supervisor_surface!r} != "
             f"role map {expected_supervisor!r}"
         )
-    if expected_executor and expected_executor != executor_surface:
+    if executor_surface not in expected_executors:
         return False, (
             f"executor target mismatch: argv {executor_surface!r} != "
-            f"role map {expected_executor!r}"
+            f"role map {sorted(expected_executors)!r}"
         )
-    return True, f"role map agrees (supervisor={expected_supervisor})"
+    return True, f"role map agrees (supervisor={expected_supervisor}, executor={executor_surface})"
 
 
 def main() -> int:

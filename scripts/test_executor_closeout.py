@@ -12,6 +12,7 @@ import unittest
 import uuid
 
 import executor_closeout as closeout
+import offline_test_hook
 
 
 class CloseoutTests(unittest.TestCase):
@@ -25,7 +26,8 @@ class CloseoutTests(unittest.TestCase):
                                dict(role='supervisor', surface_ref='surface:1',
                                     surface_uuid=self.supervisor),
                                dict(role='executor', surface_uuid=self.surface)])
-        self.marker_path = Path('/tmp/multi-agent-collaboration/_active') / (self.workspace + '.json')
+        self.active = self.root / 'active'
+        self.marker_path = self.active / (self.workspace + '.json')
         self.marker_path.parent.mkdir(parents=True, exist_ok=True)
         self.write(self.marker_path, self.marker)
         self.addCleanup(self.marker_path.unlink, missing_ok=True)
@@ -71,7 +73,7 @@ class CloseoutTests(unittest.TestCase):
         data = dict(hook_event_name=event, tool_name='Bash',
                     tool_input=dict(command='touch MUST_NOT_RUN'),
                     last_assistant_message=final or self.line, stop_hook_active=False)
-        return subprocess.run([sys.executable, '-B', str(Path(__file__).with_name(name))],
+        return subprocess.run(offline_test_hook.command(Path(__file__).with_name(name), self.active),
                               input=json.dumps(data), text=True, capture_output=True,
                               env=env or self.env, timeout=5)
 
