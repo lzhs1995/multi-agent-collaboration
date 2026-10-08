@@ -1,6 +1,6 @@
 ## Unreleased — executor idle pull (2026-10-08)
 
-Executors no longer wait silently after a callback. Before the honest handoff the Stop guard requires one file-only idle request (`scripts/cmux_idle_pull.py --task-pack`), which the closeout guard admits as the single exact command. The supervisor's Stop is blocked while an addressed request is neither followed by a newer task dispatch nor acknowledged with a reason. No terminal input is sent, so a busy supervisor cannot lose the request. See `references/executor-idle-pull.md`.
+Executors no longer wait silently after a callback. Before the honest handoff the Stop guard requires one file-only idle request (`scripts/cmux_idle_pull.py --task-pack`), which the closeout guard admits as the single exact command. The supervisor's Stop is blocked while an addressed request is neither followed by a newer task dispatch nor acknowledged with a reason. The request itself sends no terminal input, so a busy supervisor cannot lose it. The same command starts a detached `scripts/cmux_idle_push.py`. It re-asks the supervisor every 60 s with new marked STATUS messages, for up to 24 h, until the supervisor answers with an ack, a newer dispatch, or a message. The executor's handoff requires that pusher to be live. See `references/executor-idle-pull.md`.
 
 ## 0.1.1 — 2026-09-26
 

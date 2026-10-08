@@ -7,7 +7,11 @@ import tempfile
 import unittest
 import uuid
 
+from unittest.mock import patch
+
 import cmux_idle_pull as idle
+import cmux_idle_push as push
+import idle_push_fixture
 import offline_test_hook
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +24,10 @@ class IdlePullTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.home = self.root / 'home'
         self.home.mkdir()
+        # 后台催办器只能打到假 bridge；测试结束先杀掉它再删临时目录
+        self.extra_env = {}
+        self.calls_log = idle_push_fixture.install(self.root, self.extra_env)
+        self.addCleanup(idle_push_fixture.kill_pushers, self.home)
         self.workspace, self.executor, self.supervisor = [str(uuid.uuid4()).upper() for _ in range(3)]
         self.art = self.root / 'task'
         self.art.mkdir()
@@ -39,7 +47,7 @@ class IdlePullTests(unittest.TestCase):
 
     def env(self, surface):
         return dict(os.environ, HOME=str(self.home), CMUX_WORKSPACE_ID=self.workspace,
-                    CMUX_SURFACE_ID=surface, PYTHONDONTWRITEBYTECODE='1')
+                    CMUX_SURFACE_ID=surface, PYTHONDONTWRITEBYTECODE='1', **self.extra_env)
 
     def run_hook(self, name, data, surface):
         return subprocess.run(offline_test_hook.command(HERE / name, self.active), input=json.dumps(data),
@@ -155,6 +163,159 @@ class IdlePullTests(unittest.TestCase):
                      '--reason', 'x', surface=other)
         self.assertEqual(r.returncode, 2)
         self.assertEqual(self.sup_stop().returncode, 2)
+
+    # detached pusher (real spawn, fake bridge) -------------------------------
+    def test_record_spawns_pusher_that_asks_now_and_stops_on_ack(self):
+        self.callback_attempted()
+        r = self.cli('--task-pack', self.pack)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)['pusher'], 'STARTED')
+        rows = idle_push_fixture.calls(self.calls_log)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['surface'], 'surface:1')
+        self.assertTrue(rows[0]['text'].startswith('STATUS: ' + rows[0]['marker']))
+        self.assertIn('--ack ' + self.executor, rows[0]['text'])
+        with patch.dict(os.environ, {'HOME': str(self.home)}):
+            self.assertTrue(push.alive(self.workspace, self.executor))
+        # 二次记录不重复起催办器
+        self.assertEqual(json.loads(self.cli('--task-pack', self.pack).stdout)['pusher'], 'RUNNING')
+        self.cli('--ack', self.executor, '--workspace', self.workspace, '--supervisor', self.supervisor,
+                 '--reason', 'WAITING_DEPENDENCY: x', surface=self.supervisor)
+        status = self.home / '.local/state/multi-agent-collaboration/idle-push-v1' / self.workspace / self.executor / 'status.json'
+        deadline = __import__('time').time() + push.POLL + 10
+        while __import__('time').time() < deadline and json.loads(status.read_text()).get('state') != 'ANSWERED':
+            __import__('time').sleep(0.2)
+        self.assertEqual(json.loads(status.read_text())['answer'], 'ACKED')
+        self.assertEqual(len(idle_push_fixture.calls(self.calls_log, wait=0)), 1)
+
+
+class IdlePushLadderTests(unittest.TestCase):
+    """run() in-process with a fake clock: ladder shape, answers, restarts."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='idle-push-')
+        self.addCleanup(self.tmp.cleanup)
+        home = Path(self.tmp.name)
+        env = patch.dict(os.environ, {'HOME': str(home)})
+        env.start()
+        self.addCleanup(env.stop)
+        self.ws, self.ex, self.sup = [str(uuid.uuid4()).upper() for _ in range(3)]
+        self.t = 1000.0
+        self.write_request('r1')
+        self.sent = []
+        self.hooks = {}  # 假时钟到点时执行的动作
+
+    def write_request(self, report_sha):
+        idle._atomic(idle.request_path(self.ws, self.ex), dict(
+            at_epoch=self.t, executor_uuid=self.ex, supervisor_uuid=self.sup, workspace_uuid=self.ws,
+            supervisor_ref='surface:9', last_task_id='t', report='/r.md', report_sha256=report_sha))
+
+    def submit_text(self, surface, text, marker=None):
+        self.sent.append((self.t, surface, marker, text))
+        return {'confirmed': False}
+
+    def sleep(self, seconds):
+        self.t += seconds
+        for at in sorted(k for k in self.hooks if k <= self.t):
+            self.hooks.pop(at)()
+
+    def run_push(self):
+        return push.run(self.ws, self.ex, bridge=self, clock=lambda: self.t, sleep=self.sleep, poll=60)
+
+    def ack(self):
+        idle.ack(self.ws, self.sup, self.ex, 'WAITING_DEPENDENCY: test', now=self.t)
+
+    def test_schedule_is_non_decreasing_and_unbounded_within_horizon(self):
+        s = push.schedule()
+        gaps = [b - a for a, b in zip(s, s[1:])]
+        # 用户要求：60 秒没回复就再问一次
+        self.assertEqual(s[:3], [0, 60, 120])
+        self.assertEqual(set(gaps), {60})
+        self.assertEqual(gaps, sorted(gaps))
+        self.assertEqual(s[-1], push.HORIZON)
+        self.assertEqual(len(s), push.HORIZON // 60 + 1)
+
+    def before(self, seconds):
+        return len([x for x in push.schedule() if x < seconds])
+
+    def test_keeps_asking_with_new_markers_until_horizon(self):
+        self.assertEqual(self.run_push(), 'EXHAUSTED')
+        self.assertEqual(len(self.sent), len(push.schedule()))
+        self.assertEqual(len({m for _, _, m, _ in self.sent}), len(self.sent))
+        self.assertTrue(all(s == 'surface:9' for _, s, _, _ in self.sent))
+        offsets = [round(t - 1000.0) for t, *_ in self.sent]
+        self.assertEqual(offsets[:3], [0, 60, 120])
+
+    def test_ack_stops_pushing(self):
+        self.hooks[1000.0 + 700] = self.ack
+        self.assertEqual(self.run_push(), 'ACKED')
+        self.assertEqual(len(self.sent), self.before(700))
+        self.assertEqual(len(self.sent), 12)
+
+    def test_task_dispatch_and_supervisor_message_answer(self):
+        for kind, folder, record in (
+                ('TASK_DISPATCHED', 'task-dispatch-v1', lambda at: dict(started_at_epoch=at)),
+                ('SUPERVISOR_MESSAGED', 'message-dispatch-v1',
+                 lambda at: dict(events=[dict(phase='PASTE_INTENT', at_epoch=at)]))):
+            with self.subTest(kind=kind):
+                self.sent.clear()
+                self.t = 1000.0 + len(kind)
+                self.write_request(kind)
+                journal = idle.state_root() / folder / kind
+                journal.mkdir(parents=True)
+                ident = dict(workspace_uuid=self.ws, caller_surface_uuid=self.sup,
+                             target_surface_uuid=self.ex, target_pane_uuid='p')
+                # 早于请求的旧派发不算回复
+                (journal / 'attempt-0001.json').write_text(json.dumps(dict(binding=dict(identity=ident),
+                                                                            **record(self.t - 5))))
+                at = self.t + 900
+                self.hooks[at] = lambda j=journal, i=ident, a=at: (j / 'attempt-0002.json').write_text(
+                    json.dumps(dict(binding=dict(identity=i), **record(a))))
+                self.assertEqual(self.run_push(), kind)
+                self.assertEqual(len(self.sent), self.before(900))
+                for p in journal.glob('*'):
+                    p.unlink()
+                journal.rmdir()
+
+    def test_new_request_restarts_ladder_in_same_pusher(self):
+        self.hooks[1000.0 + 2000] = lambda: self.write_request('r2')
+        self.hooks[1000.0 + 2700] = self.ack
+        self.assertEqual(self.run_push(), 'ACKED')
+        offsets = [round(t - 1000.0) for t, *_ in self.sent]
+        # 旧请求每 60 秒一次共 34 次（0..1980）；2040 发现新请求，从第 1 次重来
+        first = self.before(2000)
+        self.assertEqual(offsets[first - 1], 1980)
+        self.assertEqual(offsets[first], 2040)
+        self.assertIn('-1-', self.sent[first][2])
+        self.assertIn('-%d-' % first, self.sent[first - 1][2])
+        self.assertEqual(len(offsets), first + self.before(2700 - 2040))
+
+    def test_bridge_failure_is_recorded_not_fatal(self):
+        def boom(surface, text, marker=None):
+            self.sent.append((self.t, surface, marker, text))
+            raise RuntimeError('COMPOSE_OCCUPIED')
+        self.submit_text = boom
+        self.hooks[1000.0 + 1900] = self.ack
+        self.assertEqual(self.run_push(), 'ACKED')
+        status = json.loads(push.status_path(self.ws, self.ex).read_text())
+        self.assertEqual(len(status['pushes']), self.before(1900))
+        self.assertTrue(all(p['outcome'].startswith('RuntimeError') for p in status['pushes']))
+
+    def test_alive_requires_lock_holder_or_answer(self):
+        import fcntl
+        self.assertFalse(push.alive(self.ws, self.ex))
+        folder = push.push_dir(self.ws, self.ex)
+        folder.mkdir(parents=True)
+        holder = open(folder / 'push.lock', 'a')
+        self.addCleanup(holder.close)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.assertTrue(push.alive(self.ws, self.ex))
+        self.assertEqual(push.run(self.ws, self.ex, bridge=self, clock=lambda: self.t,
+                                  sleep=self.sleep), 'ALREADY_RUNNING')
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        self.assertFalse(push.alive(self.ws, self.ex))
+        self.ack()
+        self.assertTrue(push.alive(self.ws, self.ex))
 
 
 if __name__ == '__main__':

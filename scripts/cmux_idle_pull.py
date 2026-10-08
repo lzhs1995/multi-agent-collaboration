@@ -11,6 +11,11 @@ next dispatch instead of silently ending the collaboration.
 A request is settled by either a new task dispatch attempt from that supervisor
 to that executor after the request time, or an explicit supervisor ack with a
 reason (e.g. WAITING_DEPENDENCY). The ack is bound to the exact request sha.
+
+Recording also starts cmux_idle_push, which re-asks the supervisor with new
+marked STATUS messages on a non-decreasing ladder until it answers; the
+supervisor Stop block only fires at turn end, so a long Codex turn still hears
+the executor.
 """
 import argparse
 import datetime as dt
@@ -208,6 +213,14 @@ def fresh_for(terminal, workspace, executor):
         return False
 
 
+def ready_for(terminal, workspace, executor):
+    """Handoff allowed: fresh request AND someone keeps asking (live pusher or answered)."""
+    if not fresh_for(terminal, workspace, executor):
+        return False
+    import cmux_idle_push
+    return cmux_idle_push.alive(_uuid(workspace), _uuid(executor))
+
+
 def supervisor_message(waiting):
     me = str(Path(__file__).resolve())
     lines = ["EXECUTOR_IDLE_REQUEST_PENDING: an executor is idle and waiting for you. "
@@ -254,6 +267,9 @@ def main(argv=None):
     try:
         if a.task_pack:
             result = record(a.task_pack)
+            # 文件请求之外再起后台催办器：反复问主管，直到派发/消息/ack
+            import cmux_idle_push
+            result["pusher"] = cmux_idle_push.spawn(result["workspace_uuid"], result["executor_uuid"])
         elif a.list:
             result = pending(a.workspace, a.supervisor)
         elif a.ack:

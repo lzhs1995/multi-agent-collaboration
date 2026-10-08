@@ -144,7 +144,9 @@ class HookIdentityTests(unittest.TestCase):
                                                   'CMUX_SURFACE_ID': fixture.surface}, {})
             self.write(self.active / (fixture.workspace + '.json'), fixture.marker)
             # 空闲请求写入私有 HOME，不碰真实 ~/.local/state
-            self.stack.enter_context(patch.dict(os.environ, {'HOME': str(fixture.home)}))
+            self.stack.enter_context(patch.dict(os.environ, {
+                'HOME': str(fixture.home),
+                'CMUX_IDLE_PUSH_BRIDGE': fixture.env['CMUX_IDLE_PUSH_BRIDGE']}))
             self.stack.enter_context(patch.object(stop.idle_pull, 'ACTIVE_DIR', self.active))
             before = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
             self.assertFalse(closeout.evaluate(dict(hook_event_name='PreToolUse'))[0])
@@ -152,13 +154,18 @@ class HookIdentityTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn('EXECUTOR_IDLE_PULL_REQUIRED', msg)
             self.assertEqual(before, {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()})
-            stop.idle_pull.record(fixture.pack_path)
+            req = stop.idle_pull.record(fixture.pack_path)
+            # 只有请求、没有在跑的催办器 → 仍拒交接
+            self.assertFalse(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
+            import cmux_idle_push
+            self.assertEqual(cmux_idle_push.spawn(req['workspace_uuid'], req['executor_uuid']), 'STARTED')
             self.assertTrue(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
             self.assertFalse(fixture.receipt.exists())
             after = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
             # 只新增空闲请求文件，报告/回执/原 attempt 不变
             self.assertEqual(before, {p: v for p, v in after.items()
-                                      if p.name != 'executor-idle-request.json'
+                                      if p.name not in ('executor-idle-request.json',
+                                                        'fake_bridge.calls.jsonl')
                                       and fixture.home not in p.parents})
         finally:
             fixture.doCleanups()

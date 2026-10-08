@@ -588,9 +588,10 @@ def _evaluate_resolved(
         if terminal and final.strip() == handoff_line(terminal):
             # Honest report handoff is turn-end, never callback confirmation,
             # and never a silent wait: an idle request for this report must exist.
-            if not idle_pull.fresh_for(terminal, _workspace_key(payload), surface):
+            if not idle_pull.ready_for(terminal, _workspace_key(payload), surface):
                 return False, ("EXECUTOR_IDLE_PULL_REQUIRED: before handing off, request the "
-                               "next task with exactly this one command (file-only):\n"
+                               "next task with exactly this one command (records the request "
+                               "and starts the pusher that re-asks the supervisor until it answers):\n"
                                + idle_pull.command_for(Path(marker["artifact_root"]) / "task-pack.json")
                                + "\nthen end with exactly:\n" + handoff_line(terminal)), marker
             continue

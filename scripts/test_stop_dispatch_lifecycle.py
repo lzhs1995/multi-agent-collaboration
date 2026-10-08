@@ -14,9 +14,10 @@ import unittest
 import uuid
 
 import executor_closeout as closeout
+import idle_push_fixture
 import offline_test_hook
 
-HOOK = Path(os.environ.get('STOP_GUARD_UNDER_TEST',
+HOOK =Path(os.environ.get('STOP_GUARD_UNDER_TEST',
                            Path(__file__).with_name('cmux_consensus_stop_guard.py')))
 
 
@@ -47,6 +48,9 @@ class StopDispatchLifecycleTests(unittest.TestCase):
         self.dispatch = self.home / '.local/state/multi-agent-collaboration/task-dispatch-v1' / key
         self.env = dict(os.environ, HOME=str(self.home), CMUX_WORKSPACE_ID=self.workspace,
                         CMUX_SURFACE_ID=self.surface, PYTHONDONTWRITEBYTECODE='1')
+        # 空闲催办器只打假 bridge；结束时先杀催办器再删目录
+        idle_push_fixture.install(self.root, self.env)
+        self.addCleanup(idle_push_fixture.kill_pushers, self.home)
 
     def write(self, path, value):
         path.parent.mkdir(parents=True, exist_ok=True)

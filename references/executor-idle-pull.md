@@ -25,6 +25,22 @@
 
 请求格式损坏时一律视为未结（只给路径，不删除）。`stop_hook_active=true` 时照常放行，不会无限递归。
 
+## 反复问直到主管回复（cmux_idle_push）
+
+主管侧 Stop 只在回合结束时触发；Codex 一个 goal 回合可以跑好几个小时，期间听不到文件请求。所以第 1 步的命令在写完请求后，还会启动一个脱离会话的后台催办器 `scripts/cmux_idle_push.py`（每个执行者一个，靠 flock 保证单例）：
+
+- **节奏**：立即问一次，之后**每 60 秒**再问一次（间隔恒定，满足非递减），最长 24 小时。每次都是带新 marker 的 `STATUS:` 普通消息（`IDLEPUSH-<executor前8位>-<第几次>-<请求sha前8位>`），经 journaled bridge `submit_text` 发出，不是重发旧消息，也不是重发 callback。
+- **不叠加**：主管输入框里还留着上一条时，bridge 返回 COMPOSE_OCCUPIED，不输入任何内容。这次的结果记账，下一个 60 秒用新 marker 再试。投递异常只记账，不终止催办。
+- **停止条件 = 主管回复**，满足任一即停：
+  - 带理由的 `--ack`，且绑定当前请求 sha；
+  - 晚于请求的 task-dispatch，方向是本主管→本执行者；
+  - 晚于请求的普通消息，同为本主管→本执行者（message-dispatch journal 首个 PASTE_INTENT 时刻）。
+- **到 24 小时**：记 `EXHAUSTED`。执行者下一次交付时会写新请求，重新开始。
+- **新请求**（下一任务交付）：同一个催办器发现请求 sha 变了，就从第 1 次重新开始，不会出现新请求无人催办的情况。
+- **状态**：`~/.local/state/multi-agent-collaboration/idle-push-v1/<ws>/<executor>/status.json`（pid、每次的 marker/时刻/结果、ANSWERED/EXHAUSTED），日志写在同目录的 `push.log`。
+- **执行者 Stop**：放行精确 REPORT_READY 行需要同时满足两点：请求与冻结报告绑定，且催办器持有锁或请求已被回复（`ready_for`）。只写了请求、催办器没起来，照样拦截。
+- **测试**：只能通过 `CMUX_IDLE_PUSH_BRIDGE=<假 bridge .py>` 注入。测试用的 `idle_push_fixture.py` 只把调用写进 JSONL，结束时杀掉催办器。
+
 ## 边界
 
 - 这不是送达确认，不是业务接受，也不能用来 disarm。callback 核收仍由主管在原始尝试上零输入完成。

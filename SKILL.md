@@ -125,7 +125,13 @@ the handoff until a request bound to the frozen report exists. On the supervisor
 side, the Stop guard refuses turn-end while that request is pending. The request
 is settled by a newer task dispatch to that executor, or by `--ack` with a reason
 such as `WAITING_DEPENDENCY`. A busy supervisor delays the next task, but it
-cannot silently strand an executor. The request sends no terminal input.
+cannot silently strand an executor. The request itself sends no terminal input.
+The same command also starts one detached `scripts/cmux_idle_push.py`. It re-asks
+the supervisor every 60 s, each time with a new marked `STATUS:` message through
+the journaled bridge; an occupied compose gets zero input. It keeps asking for up
+to 24 h, until an ack, a newer task dispatch, or an ordinary message from that
+supervisor arrives. The executor Stop admits the handoff only while that pusher
+holds its lock or the request is already answered.
 
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).

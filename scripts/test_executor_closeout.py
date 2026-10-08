@@ -13,6 +13,7 @@ import uuid
 
 import executor_closeout as closeout
 import cmux_idle_pull as idle_pull_mod
+import idle_push_fixture
 import offline_test_hook
 
 
@@ -62,6 +63,9 @@ class CloseoutTests(unittest.TestCase):
         self.home.mkdir()
         self.env = dict(os.environ, HOME=str(self.home), CMUX_WORKSPACE_ID=self.workspace,
                         CMUX_SURFACE_ID=self.surface)
+        # 空闲催办器只打假 bridge；结束时先杀催办器再删目录
+        self.push_calls = idle_push_fixture.install(self.root, self.env)
+        self.addCleanup(idle_push_fixture.kill_pushers, self.home)
         self.line = closeout.handoff_line(dict(task_id='test-task', report=str(self.report)))
 
     def write(self, path, value):
