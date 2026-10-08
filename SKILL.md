@@ -216,6 +216,29 @@ when a surface may have returned to a shell or a send is unconfirmed. Current
 input type, submission, consumption, agreement and accepted output are separate
 facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts.
 
+- **An idle executor never waits silently.** When its task is closed or
+  disarmed, start the out-of-turn ask loop and let it outlive the turn: the
+  supervisor can dispatch only while this executor is NOT inside a turn, so
+  asking must not depend on turns.
+  `nohup python3 scripts/executor_ready.py persist --supervisor <ref>
+  --caller-uuid "$CMUX_SURFACE_ID" --interval 60 --transcript <this session
+  jsonl> &`, then `status --caller-uuid`. The interval is 60 s with no cap; it
+  stops only when a reply actually reaches this surface, when the supervisor
+  dispatches again, or on an explicit operator stop. An exhausted budget is not
+  a reason to stop, and neither is re-entering Stop. Never ask the user to
+  relay. Each ask is its own journaled ordinary message with its own marker,
+  never a task pack and never force-compose; a marker the loop recorded as
+  UNCONFIRMED is never resent, because resending delivers it twice. The loop
+  does not stack asks: while an earlier one still sits in the supervisor's
+  input it reports `held` and re-reads that input first, so a receiver that is
+  compacting cannot be helped by asking harder. A stale stop flag from an
+  earlier round keeps a new loop from starting; check `status` first, keep an
+  audit copy when clearing one, and disclose the override. `Stop`
+  `cmux_executor_idle_guard.py` enforces this; its jurisdiction is positive and
+  bounded, so measure that it is non-empty before trusting an install. When a
+  marker is armed but no pack was delivered, that guard reads you as dispatched
+  and stops the loop as `DISPATCHED` -- neither idle nor working. Report that
+  structural gap to the supervisor instead of pretending to work.
 - Normal supervision is callback-first: one sentinel per task, 7200-second stable
   cadence, 1800 seconds for medium-risk work, 300-600 only for bounded high-risk
   windows. Do not spend tokens polling a healthy peer every few seconds.
