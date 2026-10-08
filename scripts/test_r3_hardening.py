@@ -912,14 +912,12 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
             ):
                 HARNESS.cmd_bridge_test(args(root, force_compose=True))
 
-            self.assertEqual(
-                [call.args[1] for call in send_key.call_args_list],
-                ["escape", "ctrl+u"],
-            )
+            send_key.assert_not_called()
             send_text.assert_not_called()
             bounded_delete.assert_not_called()
             ev = json.loads((root / "bridge-test-evidence.json").read_text())
-            self.assertEqual(ev["status"], "FORCE_COMPOSE_CLEAR_FAILED")
+            self.assertEqual(ev["status"], "COMPOSE_OCCUPIED")
+            self.assertTrue(ev["active_or_queued_before_send"])
             self.assertFalse(ev["token_sent"])
 
     def test_suggestion_like_drafts_refuse_all_input(self):
@@ -2954,6 +2952,26 @@ class ActiveMarkerContractTests(unittest.TestCase):
             self.assertTrue(path_b.exists())
             self.assertEqual(len(HARNESS._workspace_marker_paths()), 1)
             self.assertIn("disarmed 1 task marker(s)", out)
+
+    def test_successful_disarm_emits_conditional_status_sync_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, marker_path = self._armed(tmp, task_id="fin-sync")
+            code, out = self._disarm(root, "fin-sync")
+            self.assertIsNone(code)
+            self.assertFalse(marker_path.exists())
+            self.assertIn("next_action=SUPERVISOR_STATUS_SYNC_IF_STALE", out)
+            self.assertIn("if a settled report's executor repeats", out)
+            self.assertIn("not proof of tool recovery", out)
+
+    def test_absent_marker_does_not_emit_a_new_status_sync_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, marker_path = self._armed(tmp, task_id="fin-sync-once")
+            self.assertEqual(HARNESS.disarm_task("fin-sync-once"), 1)
+            code, out = self._disarm(root, "fin-sync-once")
+            self.assertIsNone(code)
+            self.assertFalse(marker_path.exists())
+            self.assertIn("nothing disarmed", out)
+            self.assertNotIn("next_action=", out)
 
     def test_default_task_id_matches_the_argparse_default(self):
         """Poison case for constant drift.
