@@ -20,36 +20,52 @@ every escalation.
 
 While an armed executor has no finalized task pack, its idle clock runs from
 the latest supervisor-side activity: marker `armed_at` / `last_activity_at`,
-any `handshake-receipt.json` executor `created_at`, and the draft
-`task-pack.json` mtime. Bare (timezone-less) timestamps are ignored.
+any `handshake-receipt.json` executor `created_at`, the mtime of any top-level
+file in the artifact root (before dispatch only the supervisor writes there:
+preflight evidence, receipts, draft pack), and a supervisor `ack` (below).
+Bare (timezone-less) timestamps are ignored. Any of these is a "reply".
 
-A supervisor `ack` (below) also counts as activity.
-
-Keep asking until the supervisor replies (user directive, 2026-10-08):
+Ask again every 60 s until the supervisor replies (user directive,
+2026-10-08: "设定一个时间阈值，比如一分钟60秒，没有回复就再问一次，循环往复，
+session不能以任何理由中止，直到 codex supervisor 回复为止"):
 
 | escalation | due |
 |------------|-----|
-| #1 | 5 min idle |
-| #2, #3, … | 10 min after the previous record, no cap |
+| #1 | 60 s idle |
+| #2, #3, … | 60 s after the previous record, no cap |
 
-An escalation is never due earlier than 10 minutes after the previous record,
-so a late one cannot cascade into a burst. The marker ttl bounds the total
-(6 h ttl gives at most 37).
+An escalation is never due earlier than 60 s after the previous record, so a
+late one cannot cascade into a burst. The marker ttl bounds the total.
 
-Asking must not depend on the executor's own turns. Past 5 idle minutes the
-Stop guard blocks turn-end unless a live watcher covers the task (watcher
-record pid running and heartbeat at most 180 s old). The block gives the exact
-command:
+### Two processes, one sender
+
+- `watch` (background, detached) is the only sender. It heartbeats, re-reads
+  the marker, escalates when due and sleeps at most 30 s. An ack only restarts
+  its clock. It exits 0 on dispatch (finalized pack), 3 when the marker is gone
+  or expired, and 8 at once if another live watcher already covers the task.
+- `pursue` (foreground) is the executor's step. It (re)starts the watcher when
+  none is alive (pid running, heartbeat ≤ 90 s), then waits. Exit 0 = the
+  supervisor replied or dispatched; exit 9 = no reply within 540 s (under
+  10-minute tool timeouts); exit 3 = marker gone. It never sends itself.
+
+### The session does not end while unanswered
+
+Past 60 s with no reply, the Stop guard blocks turn-end, **including on
+Stop-hook reentry** (`stop_hook_active=true`), and names the command:
 
 ```bash
-nohup python3 -B scripts/executor_idle_escalation.py watch --task-id <id> --executor-uuid <uuid> >/dev/null 2>&1 &
+python3 -B scripts/executor_idle_escalation.py pursue --task-id <id> --executor-uuid <uuid>
 ```
 
-`watch` loops: heartbeat, re-read the marker, escalate when due, sleep at most
-60 s. It exits 0 when a reply or dispatch arrives, 3 when the marker is gone or
-expired, and 8 immediately if another live watcher already covers the task.
-A recorded one-off `escalate` without a watcher still blocks: nothing would ask
-again after the turn ends.
+A live background watcher does not lift the block; only a reply does. A reply
+restarts the idle clock, so the executor can end its turn at once and leave its
+input free for the supervisor's handshake. If a supervisor preflight against
+the busy executor fails (`COMPOSE_OCCUPIED`), its evidence file is itself a
+reply: the executor's `pursue` returns within seconds, and the supervisor
+retries. Reentry checks run identity discovery only when some fresh marker
+actually has an unanswered executor; otherwise reentry still terminates
+without discovery. A user interrupt always ends the loop, and marker expiry or
+disarm ends the rule.
 
 Each escalation (`escalate`, also callable by hand):
 
@@ -84,7 +100,7 @@ python3 -B scripts/executor_idle_escalation.py ack --task-id <id> --executor-uui
 ```
 
 The ack restarts the idle clock at `acked_at + hold` (hold capped at 2 h), so
-asking resumes 5 minutes after the hold if nothing else happens.
+asking resumes 60 s after the hold if nothing else happens.
 
 ## Other commands
 
@@ -100,4 +116,8 @@ due, 7 = window elapsed, 3 = no unique armed marker).
   that shape for ordinary messages.
 - Finalized packs are governed only by the completion-callback rules.
 - The supervisor and non-participants are never subject to this rule.
-- Stop reentry (`stop_hook_active=true`) still terminates first.
+- Stop reentry (`stop_hook_active=true`) still terminates for everyone except
+  a positively identified unanswered idle executor; identity discovery failure
+  on reentry terminates as before.
+- Cost: each blocked Stop is one more model turn. `pursue` waits up to 540 s
+  per call, so a long-unanswered executor spends about 7 turns per hour.

@@ -100,7 +100,8 @@ class IdleEscalationTests(unittest.TestCase):
         self.assertGreaterEqual(idle.REPEAT_SECONDS, idle.FIRST_SECONDS)
         self.assertEqual(idle.gap(1), idle.FIRST_SECONDS)
         self.assertEqual({idle.gap(n) for n in range(2, 60)}, {idle.REPEAT_SECONDS})
-        self.assertLess(idle.WATCHER_STALE_SECONDS, idle.FIRST_SECONDS)
+        self.assertLessEqual(idle.REPEAT_SECONDS, 60)  # user directive: ask every 60 s
+        self.assertLess(idle.PURSUE_MAX_SECONDS, 600)  # stays under 10-min tool timeouts
 
     def test_no_tier_cap_repeats_until_reply(self):
         self.arm(9000)
@@ -113,23 +114,24 @@ class IdleEscalationTests(unittest.TestCase):
 
     # --- Stop hook ----------------------------------------------------------
     def test_fresh_arm_allows_turn_end(self):
-        self.arm(120)
+        self.arm(10)
         r = self.hook()
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_idle_without_watcher_blocks_with_watch_command(self):
+    def test_idle_without_watcher_blocks_with_pursue_command(self):
         r = self.hook()
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn('executor idle escalation due', r.stderr)
-        self.assertIn('executor_idle_escalation.py watch --task-id idle-task', r.stderr)
-        self.assertIn('nohup', r.stderr)
+        self.assertIn('executor_idle_escalation.py pursue --task-id idle-task', r.stderr)
         self.assertIn('no watcher record', r.stderr)
         self.assertNotIn('Produce real evidence', r.stderr)
 
-    def test_live_watcher_allows_turn_end(self):
+    def test_live_watcher_does_not_release_an_unanswered_session(self):
+        """Background asking is not a reply: the session keeps pursuing."""
         self.watcher()
         r = self.hook()
-        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('alive', r.stderr)
 
     def test_stale_watcher_heartbeat_blocks(self):
         self.watcher(beat_ago=idle.WATCHER_STALE_SECONDS + 30)
@@ -161,11 +163,24 @@ class IdleEscalationTests(unittest.TestCase):
     def test_supervisor_is_not_subject_to_executor_idle_rule(self):
         self.assertEqual(self.hook(surface=self.supervisor).returncode, 0)
 
-    def test_stop_reentry_still_terminates(self):
+    def test_stop_reentry_terminates_when_not_idle(self):
+        self.arm(10)
         self.assertEqual(self.hook(stop_hook_active=True).returncode, 0)
 
+    def test_stop_reentry_holds_an_unanswered_executor(self):
+        r = self.hook(stop_hook_active=True)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('pursue --task-id idle-task', r.stderr)
+
+    def test_stop_reentry_for_supervisor_still_terminates(self):
+        self.assertEqual(self.hook(surface=self.supervisor, stop_hook_active=True).returncode, 0)
+
     def test_recent_supervisor_activity_resets_the_clock(self):
-        self.arm(4000, last_activity_at=iso(60))
+        self.arm(4000, last_activity_at=iso(10))
+        self.assertEqual(self.hook().returncode, 0)
+
+    def test_supervisor_preflight_file_counts_as_reply(self):
+        (self.artifacts / 'bridge-test-evidence.json').write_text('{"status": "COMPOSE_OCCUPIED"}')
         self.assertEqual(self.hook().returncode, 0)
 
     def test_draft_pack_write_resets_the_clock(self):
@@ -207,7 +222,7 @@ class IdleEscalationTests(unittest.TestCase):
         self.assertEqual(len(bridge.sent), 1)
 
     def test_not_due_sends_nothing(self):
-        self.arm(60)
+        self.arm(10)
         bridge = FakeBridge(self.supervisor)
         self.assertEqual(idle.escalate(self.marker, self.executor, bridge)['result'], 'NOT_DUE')
         self.assertEqual(bridge.sent, [])
@@ -252,7 +267,7 @@ class IdleEscalationTests(unittest.TestCase):
         self.assertEqual((code, result['result']), (6, 'ESCALATION_DUE'))
 
     def test_wait_returns_when_dispatch_arrives(self):
-        self.arm(60)
+        self.arm(10)
         def arrive(_seconds):
             (self.artifacts / 'task-pack.json').write_text(json.dumps(dict(draft=False)))
         with mock.patch.object(idle, 'ACTIVE_DIR', self.active):
@@ -308,12 +323,16 @@ class IdleEscalationTests(unittest.TestCase):
         with mock.patch.object(idle, 'ACTIVE_DIR', self.active):
             code, result = idle.watch('idle-task', self.executor, 60, bridge,
                                       clock=lambda: now[0], sleep=sleep,
-                                      max_iterations=25)
+                                      max_iterations=10)
         self.assertEqual(code, 7, result)
         tags = [tag for _, _, tag in bridge.sent]
-        self.assertEqual(len(tags), 3, tags)  # t=0, +600, +1200 of 1500 s simulated
-        self.assertEqual(len(set(tags)), 3)
-        self.assertEqual([r['tier'] for r in result['escalations']], [1, 2, 3])
+        self.assertGreaterEqual(len(tags), 4, tags)
+        self.assertEqual(len(set(tags)), len(tags))
+        self.assertEqual([r['tier'] for r in result['escalations']],
+                         list(range(1, len(tags) + 1)))
+        records = idle.idle_status(self.marker, self.executor)['records']
+        spacing = {round(b['recorded_at'] - a['recorded_at']) for a, b in zip(records, records[1:])}
+        self.assertEqual(spacing, {idle.REPEAT_SECONDS})  # exactly every 60 s, no burst
 
     def test_second_watcher_exits_instead_of_doubling(self):
         self.watcher()
@@ -323,6 +342,63 @@ class IdleEscalationTests(unittest.TestCase):
                                       sleep=lambda s: None, max_iterations=1)
         self.assertEqual((code, result['result']), (8, 'ALREADY_WATCHING'))
         self.assertEqual(bridge.sent, [])
+
+    # --- pursue --------------------------------------------------------------
+    def pursue(self, sleep, spawn=None, clock=time.time, max_seconds=300):
+        spawned = []
+        def default_spawn(task_id, executor):
+            spawned.append((task_id, executor))
+            return 4242
+        with mock.patch.object(idle, 'ACTIVE_DIR', self.active):
+            code, result = idle.pursue('idle-task', self.executor, max_seconds, 10,
+                                       clock=clock, sleep=sleep,
+                                       spawn=spawn or default_spawn)
+        return code, result, spawned
+
+    def test_pursue_returns_on_supervisor_reply(self):
+        def reply(_seconds):
+            (self.artifacts / 'bridge-test-evidence.json').write_text('{}')
+        code, result, spawned = self.pursue(reply)
+        self.assertEqual((code, result['result']), (0, 'SUPERVISOR_REPLIED'))
+        self.assertTrue(spawned)  # no live watcher -> one was started
+
+    def test_pursue_returns_on_ack(self):
+        def reply(_seconds):
+            idle.ack(self.marker, self.executor, self.supervisor)
+        code, result, _ = self.pursue(reply)
+        self.assertEqual((code, result['result']), (0, 'SUPERVISOR_REPLIED'))
+
+    def test_pursue_returns_on_dispatch(self):
+        def arrive(_seconds):
+            (self.artifacts / 'task-pack.json').write_text(json.dumps(dict(draft=False)))
+        code, _, _ = self.pursue(arrive)
+        self.assertEqual(code, 0)
+
+    def test_pursue_does_not_spawn_when_watcher_alive_and_is_bounded(self):
+        now = [time.time()]
+        self.watcher()
+        def sleep(seconds):
+            now[0] += seconds
+            self.watcher(beat_ago=time.time() - now[0])  # heartbeat on the fake clock
+        code, result, spawned = self.pursue(sleep, clock=lambda: now[0], max_seconds=100)
+        self.assertEqual((code, result['result']), (9, 'NO_REPLY_YET'))
+        self.assertEqual(spawned, [])
+
+    def test_pursue_never_sends_itself(self):
+        with mock.patch.object(idle, 'escalate', side_effect=AssertionError('sent')):
+            now = [time.time()]
+            def sleep(seconds):
+                now[0] += seconds
+            code, _, _ = self.pursue(sleep, clock=lambda: now[0], max_seconds=60)
+        self.assertEqual(code, 9)
+
+    def test_pursue_is_capped_below_tool_timeouts(self):
+        now = [time.time()]
+        def sleep(seconds):
+            now[0] += seconds
+        start = now[0]
+        self.pursue(sleep, clock=lambda: now[0], max_seconds=10**6)
+        self.assertLessEqual(now[0] - start, idle.PURSUE_MAX_SECONDS + 1)
 
     def test_watch_without_marker_exits(self):
         with mock.patch.object(idle, 'ACTIVE_DIR', self.root / 'empty'):

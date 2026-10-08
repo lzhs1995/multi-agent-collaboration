@@ -552,11 +552,13 @@ def _completion_callback_evidence(
 def _idle_escalation_evidence(
     marker: dict[str, Any], payload: dict[str, Any]
 ) -> tuple[bool, str]:
-    """An armed executor awaiting dispatch may not end a turn without a live watcher.
+    """An unanswered armed executor may not end its session (user directive 2026-10-08).
 
-    Past FIRST_SECONDS of idle time something must keep asking the supervisor
-    after this turn ends; a turn-scoped ladder would stop exactly when the
-    executor goes quiet.
+    Past FIRST_SECONDS without supervisor activity the turn-end is blocked, also
+    on Stop-hook reentry, until the supervisor replies: the executor keeps
+    running the foreground `pursue` step while the background watcher asks
+    again every REPEAT_SECONDS. A reply restarts the idle clock, which lifts the
+    block so the executor can go idle for the supervisor's preflight.
     """
     executor = _surface_key(payload) or ""
     if not _current_participant_is_executor(marker, payload):
@@ -564,23 +566,46 @@ def _idle_escalation_evidence(
     status = idle_escalation.idle_status(marker, executor)
     if not status["applicable"] or status["idle_seconds"] < idle_escalation.FIRST_SECONDS:
         return True, "no executor idle escalation is due"
-    alive, why = idle_escalation.watcher_alive(marker, executor)
-    if alive:
-        return True, f"executor idle escalation watcher active ({why})"
+    _alive, why = idle_escalation.watcher_alive(marker, executor)
     script = Path(__file__).with_name("executor_idle_escalation.py")
-    command = (f"python3 -B {script} watch --task-id {marker.get('task_id')} "
-               f"--executor-uuid {executor}")
     return False, (
-        f"executor idle escalation due: task {marker.get('task_id')} has had no finalized "
-        f"task pack for {int(status['idle_seconds'] // 60)} min "
-        f"({len(status['records'])} escalations recorded) and no live escalation "
-        f"watcher ({why}). Do not dead-wait. Start the persistent watcher in the "
-        "background, then end the turn:\n"
-        f"  nohup {command} >/dev/null 2>&1 &\n"
-        "It sends a new marked message plus a notice file now and again every "
-        f"{idle_escalation.REPEAT_SECONDS // 60} min until the supervisor replies "
-        "(handshake, pack, marker activity or supervisor `ack`), then exits. Never "
-        "resend an earlier message by hand.")
+        f"executor idle escalation due: task {marker.get('task_id')} has no supervisor "
+        f"reply for {int(status['idle_seconds'])} s ({len(status['records'])} escalations "
+        f"recorded; watcher: {why}). The session must not end until the supervisor "
+        "replies. Run in the foreground (it restarts a dead background watcher, which "
+        f"asks again every {idle_escalation.REPEAT_SECONDS} s, and returns on reply):\n"
+        f"  python3 -B {script} pursue --task-id {marker.get('task_id')} "
+        f"--executor-uuid {executor}\n"
+        "Exit 0 = supervisor replied or dispatched: end the turn at once so its "
+        "handshake can reach you. Exit 9 = no reply yet: run it again. Never resend "
+        "an earlier message by hand; a user interrupt always ends the loop.")
+
+
+def _any_unanswered_executor() -> bool:
+    """Identity-free precheck across all fresh markers (same scan as _has_active_markers)."""
+    for pattern in ("*.json", "*/*.json"):
+        for path in ACTIVE_DIR.glob(pattern):
+            if path.name.startswith("."):
+                continue
+            marker = _read_json(path)
+            if not (isinstance(marker, dict) and _marker_fresh(marker)):
+                continue
+            for row in marker.get("participants", []):
+                if not (isinstance(row, dict) and str(row.get("role", "")).startswith("executor")):
+                    continue
+                status = idle_escalation.idle_status(marker, str(row.get("surface_uuid") or ""))
+                if status["applicable"] and status["idle_seconds"] >= idle_escalation.FIRST_SECONDS:
+                    return True
+    return False
+
+
+def _reentry_idle_block(payload: dict[str, Any]):
+    """Stop-hook reentry ends recursion except for an unanswered idle executor."""
+    for marker in _active_markers(payload):
+        ok, message = _idle_escalation_evidence(marker, payload)
+        if not ok:
+            return False, message, marker
+    return None
 
 
 def _evaluate_resolved(
@@ -599,10 +624,12 @@ def _evaluate_resolved(
     filenames, delivery markers, and block counts all pass, because none of them
     asserts a state that disk refutes.
     """
-    # End Stop-hook recursion without confirming delivery or disarming tasks.
+    # End Stop-hook recursion without confirming delivery or disarming tasks,
+    # except that an unanswered idle executor keeps pursuing its supervisor.
     if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
             and payload.get("stop_hook_active") is True):
-        return True, "Stop hook reentry; task and callback remain unconfirmed", None
+        return _reentry_idle_block(payload) or (
+            True, "Stop hook reentry; task and callback remain unconfirmed", None)
 
     markers = _active_markers(payload)
     if not markers:
@@ -657,9 +684,19 @@ def _evaluate_resolved(
 
 
 def _evaluate_with_marker(payload):
-    # Reentry must terminate even if identity discovery is currently unavailable.
+    # Reentry must terminate even if identity discovery is currently unavailable;
+    # only a positively identified unanswered idle executor is held.
     if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
             and payload.get("stop_hook_active") is True):
+        try:
+            # Discovery runs only when some armed executor is actually unanswered.
+            if _any_unanswered_executor():
+                with hook_identity.evaluation(payload):
+                    held = _reentry_idle_block(payload)
+                if held:
+                    return held
+        except Exception:
+            pass
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
         if not _has_active_markers():

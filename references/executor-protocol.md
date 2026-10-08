@@ -22,17 +22,20 @@ completion. The Stop hook rejects a finalized executor task without the receipt.
 
 ## While Waiting For Dispatch
 
-An armed executor with no finalized task pack must not wait open-ended. Once
-idle for 5 minutes, start the persistent escalation watcher in the background
-and end the turn; the Stop guard blocks turn-end without a live one:
+An armed executor with no finalized task pack must not wait open-ended. After
+60 s without a supervisor reply, the Stop guard blocks turn-end (also on
+Stop-hook reentry) until the supervisor replies. Run the foreground step it
+names, repeatedly:
 
 ```bash
-nohup python3 -B scripts/executor_idle_escalation.py watch --task-id <id> --executor-uuid <uuid> >/dev/null 2>&1 &
+python3 -B scripts/executor_idle_escalation.py pursue --task-id <id> --executor-uuid <uuid>
 ```
 
-The watcher asks again every 10 minutes until the supervisor replies, each
-time with a new marked message plus a notice file and never a resend. Commands
-and outcomes are in [executor idle escalation](executor-idle-escalation.md).
+`pursue` keeps the background `watch` sender alive. That sender asks again
+every 60 s, each time with a new marked message plus a notice file and never a
+resend. On exit 0 (reply or dispatch), end the turn at once so the handshake
+can reach you. Commands and outcomes are in
+[executor idle escalation](executor-idle-escalation.md).
 
 ## On Receipt
 

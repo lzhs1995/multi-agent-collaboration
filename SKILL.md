@@ -234,21 +234,24 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 ### Executor idle escalation (no dead-waiting)
 
-An armed executor without a finalized task pack must not dead-wait; it keeps
-asking until the supervisor replies. Past 5 idle minutes the Stop guard blocks
-turn-end unless a live `scripts/executor_idle_escalation.py watch` process
-(running pid, heartbeat at most 180 s old) covers the task. The watcher sends
-one NEW marked message through the journaled bridge plus a pull-side notice
-file as soon as it is due, then another every 10 minutes, with no cap, recording
-every transport outcome. Delivery is not a reply. Only supervisor-side activity
-stops the repeats: a handshake receipt, a draft or finalized pack, marker
-activity, or the supervisor's own `ack` (optional hold of up to 2 h). The
-watcher exits on reply, dispatch or marker expiry. Never resend an earlier
-message. See [executor idle escalation](references/executor-idle-escalation.md).
+An armed executor without a finalized task pack must not dead-wait: it asks
+again every 60 s until the supervisor replies, and its session does not end
+meanwhile. Past 60 s with no reply the Stop guard blocks turn-end, including on
+Stop-hook reentry, and names `scripts/executor_idle_escalation.py pursue`. That
+foreground step keeps the detached `watch` sender alive (running pid,
+heartbeat at most 90 s old) and returns on reply. The watcher is the only
+sender: one NEW marked message through the journaled bridge plus a pull-side
+notice file every 60 s, with no cap, recording every transport outcome.
+Delivery is not a reply. A reply is any supervisor-side activity: a handshake
+receipt, any new artifact-root file (including a preflight that failed against
+the busy executor), a pack, marker activity, or the supervisor's own `ack`
+(optional hold of up to 2 h). A reply lifts the block so the executor can go
+idle for the handshake. A user interrupt always ends the loop. Never resend an
+earlier message. See [executor idle escalation](references/executor-idle-escalation.md).
 
 ### Stop hook reentry
 
-Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before task gates to prevent recursion. This does not confirm callbacks, disarm tasks, or bypass checks on the next normal turn. See [Stop hook lifecycle](references/stop-hook-lifecycle-20261005.md).
+Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before task gates to prevent recursion, with one exception: an unanswered idle executor (above) is still held. This does not confirm callbacks, disarm tasks, or bypass checks on the next normal turn. See [Stop hook lifecycle](references/stop-hook-lifecycle-20261005.md).
 
 ### Read-only confirmation
 

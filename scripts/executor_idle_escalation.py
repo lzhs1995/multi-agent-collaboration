@@ -31,10 +31,18 @@ the executor acted; it never claims the supervisor read the message. A
 transport-confirmed escalation is not a reply; only supervisor-side activity
 stops the repeats.
 
-The executor must not depend on its own turns to keep asking: `watch` is a
-persistent local process that escalates whenever a tier is due and exits when
-the supervisor replies. Past FIRST_SECONDS of idle time the Stop guard blocks
-turn-end unless a live watcher (pid alive, fresh heartbeat) covers the task.
+Two processes, one sender. `watch` is the persistent background sender: it
+escalates whenever due, independent of the executor's turns, and keeps going
+across replies (an ack only defers it). `pursue` is the executor's foreground
+step: it (re)starts a dead watcher, then waits until the supervisor replies or
+PURSUE_MAX_SECONDS elapse. It never sends itself.
+
+The session does not end while unanswered: past FIRST_SECONDS of idle time the
+Stop guard blocks turn-end, including on Stop-hook reentry, and names the
+`pursue` command. The block lifts only on a reply (the idle clock restarts),
+dispatch, marker expiry, or a user interrupt. Supervisor writes anywhere in the
+artifact root count as a reply, so a supervisor preflight that failed against
+the busy executor still releases its turn for the retry.
 """
 from __future__ import annotations
 
@@ -48,14 +56,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Idle seconds before the first escalation, and the spacing of every repeat.
-FIRST_SECONDS = 300
-REPEAT_SECONDS = 600
+# Idle seconds before the first escalation, and the spacing of every repeat
+# (user directive 2026-10-08: ask again every 60 s until the supervisor replies).
+FIRST_SECONDS = 60
+REPEAT_SECONDS = 60
 # Record files are read contiguously; this only bounds the directory scan
-# (a 6 h ttl at REPEAT_SECONDS needs at most 37).
+# (a 6 h ttl at REPEAT_SECONDS needs at most 361).
 MAX_RECORD_SCAN = 10_000
 # A watcher heartbeat older than this is dead whatever its pid says.
-WATCHER_STALE_SECONDS = 180
+WATCHER_STALE_SECONDS = 90
+# One foreground pursue call stays under common 10-minute tool timeouts.
+PURSUE_MAX_SECONDS = 540
 ACTIVE_DIR = Path("/tmp/multi-agent-collaboration/_active")
 
 
@@ -170,9 +181,13 @@ def idle_status(marker: dict[str, Any], executor_uuid: str,
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict):
                 starts.append(_epoch(row.get("created_at")))
+    # Before dispatch only the supervisor writes the artifact root (preflight
+    # evidence, receipts, draft pack), so any new top-level file is activity,
+    # including a preflight that failed against this busy executor.
     try:
-        if pack_path.is_file():
-            starts.append(pack_path.stat().st_mtime)
+        for entry in root.iterdir():
+            if not entry.name.startswith(".") and entry.is_file():
+                starts.append(entry.stat().st_mtime)
     except OSError:
         pass
     ack = _read_json(_ack_path(marker, executor_uuid))
@@ -253,12 +268,15 @@ def escalation_text(marker: dict[str, Any], status: dict[str, Any], tag: str) ->
     return (f"{tag} | executor {executor.get('surface_ref', '?')} "
             f"({status['executor_uuid']}) is idle on armed task {marker.get('task_id')}: "
             f"no finalized task pack for {minutes} min. Escalation #{status['due_tier']} "
-            f"(new message, not a resend; repeats every {REPEAT_SECONDS // 60} min until "
+            f"(new message, not a resend; repeats every {REPEAT_SECONDS} s until "
             "you reply). Please dispatch the handshake and task pack, or reply with a new "
             "scope or cancel. To pause the repeats without dispatching, run from your "
             f"surface: python3 -B {Path(__file__).resolve()} ack --task-id "
             f"{marker.get('task_id')} --executor-uuid {status['executor_uuid']} "
-            f"[--hold-seconds N]. Notice file: {status['notice']}")
+            f"[--hold-seconds N]. If a preflight against this executor fails as busy "
+            "(COMPOSE_OCCUPIED), just retry: any write to the artifact root counts as "
+            "your reply and the executor ends its turn within seconds. "
+            f"Notice file: {status['notice']}")
 
 
 def escalate(marker: dict[str, Any], executor_uuid: str, bridge: Any,
@@ -431,6 +449,56 @@ def watch(task_id: str, executor_uuid: str, poll_seconds: float, bridge: Any = N
             path.unlink(missing_ok=True)
 
 
+def spawn_watcher(task_id: str, executor_uuid: str) -> int:
+    """Start a detached background watcher; it outlives this turn and session."""
+    import subprocess
+    log = _state_root() / "watchers" / f"{task_id}.log"
+    log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(log, "a") as handle:
+        proc = subprocess.Popen(
+            [sys.executable, "-B", str(Path(__file__).resolve()), "watch",
+             "--task-id", task_id, "--executor-uuid", executor_uuid],
+            stdin=subprocess.DEVNULL, stdout=handle, stderr=handle,
+            start_new_session=True)
+    return proc.pid
+
+
+def pursue(task_id: str, executor_uuid: str, max_seconds: float = PURSUE_MAX_SECONDS,
+           poll_seconds: float = 10, clock=time.time, sleep=time.sleep,
+           spawn=spawn_watcher) -> tuple[int, dict[str, Any]]:
+    """Foreground step: keep a watcher alive and return only on a reply.
+
+    Exit 0 = reply or dispatch (end the turn and handle it), 3 = marker gone,
+    9 = no reply within max_seconds (the Stop guard will ask for another call).
+    """
+    deadline = clock() + max(0.0, min(max_seconds, PURSUE_MAX_SECONDS))
+    marker = find_marker(task_id, executor_uuid)
+    if marker is None:
+        return 3, dict(result="NO_UNIQUE_MARKER")
+    first = idle_status(marker, executor_uuid, clock())
+    if not first["applicable"]:
+        return 0, dict(result="DISPATCH_ARRIVED_OR_NOT_APPLICABLE", reason=first["reason"])
+    clock_start, spawned = first["clock_start"], []
+    while True:
+        if not watcher_alive(marker, executor_uuid, clock())[0]:
+            spawned.append(spawn(task_id, executor_uuid))
+        status = idle_status(marker, executor_uuid, clock())
+        if not status["applicable"]:
+            return 0, dict(result="DISPATCH_ARRIVED_OR_NOT_APPLICABLE",
+                           reason=status["reason"], spawned=spawned)
+        if status["clock_start"] > clock_start:
+            return 0, dict(result="SUPERVISOR_REPLIED", clock_start=status["clock_start"],
+                           spawned=spawned)
+        now = clock()
+        if now >= deadline:
+            return 9, dict(result="NO_REPLY_YET", escalations=len(status["records"]),
+                           idle_seconds=status["idle_seconds"], spawned=spawned)
+        sleep(max(1.0, min(poll_seconds, deadline - now)))
+        marker = find_marker(task_id, executor_uuid)
+        if marker is None:
+            return 3, dict(result="MARKER_GONE_OR_EXPIRED", spawned=spawned)
+
+
 def wait(task_id: str, executor_uuid: str, max_seconds: float, poll_seconds: float,
          clock=time.time, sleep=time.sleep) -> tuple[int, dict[str, Any]]:
     """Bounded local polling that returns as soon as the executor must act."""
@@ -454,21 +522,25 @@ def wait(task_id: str, executor_uuid: str, max_seconds: float, poll_seconds: flo
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "escalate", "wait", "watch", "ack"):
+    for name in ("status", "escalate", "wait", "watch", "pursue", "ack"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--task-id", required=True)
         cmd.add_argument("--executor-uuid", default=None, required=(name == "ack"))
-        if name in ("wait", "watch"):
-            cmd.add_argument("--poll-seconds", type=float, default=30)
-        if name == "wait":
-            cmd.add_argument("--max-seconds", type=float, default=1800)
+        if name in ("wait", "watch", "pursue"):
+            cmd.add_argument("--poll-seconds", type=float,
+                             default=10 if name == "pursue" else 20)
+        if name in ("wait", "pursue"):
+            cmd.add_argument("--max-seconds", type=float,
+                             default=PURSUE_MAX_SECONDS if name == "pursue" else 1800)
         if name == "ack":
             cmd.add_argument("--hold-seconds", type=float, default=0)
     args = parser.parse_args(argv)
     executor = (args.executor_uuid or _caller_uuid()).upper()
-    if args.command in ("wait", "watch"):
+    if args.command in ("wait", "watch", "pursue"):
         if args.command == "wait":
             code, result = wait(args.task_id, executor, args.max_seconds, args.poll_seconds)
+        elif args.command == "pursue":
+            code, result = pursue(args.task_id, executor, args.max_seconds, args.poll_seconds)
         else:
             code, result = watch(args.task_id, executor, args.poll_seconds)
         print(json.dumps(result, default=str))
