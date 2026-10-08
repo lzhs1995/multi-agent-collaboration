@@ -221,6 +221,9 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'
                 attempt['error'] = str(exc)
+                # 排队待消费与卡在 compose 的处置相反（等待 vs 补一键），所以状态必须
+                # 落成结构化字段，不能只留在 error 串里让下游拿正则去猜。
+                attempt['delivery_state'] = getattr(exc, 'state', None)
                 write_json(attempt_path, attempt)
                 raise
             attempt['phase'] = 'CONFIRMED'

@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -23,6 +24,14 @@ PY = sys.executable
 
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+# 这些用例断言精确的读屏次数。guard 在 import 时就用 HOME 定出 _STATE_ROOT，而
+# 真实 HOME 的 journal 里只要有一条本机真实的未确认 attempt，stranded_attempts
+# 就会多读一次目标屏幕 —— 于是 46/24 与 70/0 随我自己刚发出的消息是否还在 900 秒
+# 窗口内来回翻（2026-10-08 实测，774 秒时稳定 46/24）。判据必须只看夹具。
+# 必须在 import guard 之前改 HOME，import 之后再改已经来不及。
+_FIXTURE_HOME = tempfile.mkdtemp(prefix="submit-guard-check-home-")
+os.environ["HOME"] = _FIXTURE_HOME
 
 import cmux_submit_confirmation_guard as guard  # noqa: E402
 
@@ -278,6 +287,7 @@ def run_guard(payload: dict, env_extra: dict | None = None) -> tuple[int, str]:
     env = dict(os.environ)
     env.pop("CMUX_SUBMIT_GUARD_DISABLE", None)
     env.pop("CMUX_SUBMIT_GUARD_ADVISORY", None)
+    env["HOME"] = _FIXTURE_HOME  # 子进程同样只看夹具
     if env_extra:
         env.update(env_extra)
     proc = subprocess.run(

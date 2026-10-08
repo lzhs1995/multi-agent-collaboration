@@ -251,6 +251,34 @@ class GuardEnforcement(unittest.TestCase):
         self.attempt.write_text(json.dumps(body), encoding="utf-8")
         self.assertEqual([i["marker"] for i in self._pending()], [MARKER])
 
+    def _with(self, **fields):
+        body = json.loads(self.attempt.read_text())
+        body.update(fields)
+        self.attempt.write_text(json.dumps(body), encoding="utf-8")
+        return self._pending()
+
+    def test_queued_at_receiver_says_wait_not_recover(self):
+        """排队与卡 compose 都是 NOT_RECEIVED，但处置相反：补键会重复投递。"""
+        items = self._with(delivery_state="DELIVERY_QUEUED_AT_RECEIVER")
+        self.assertTrue(items[0]["queued_at_receiver"])
+        text = guard._render([dict(items[0], state=nd.NOT_RECEIVED)])
+        self.assertIn("只能等", text)
+        self.assertNotIn("--recover-stranded", text)
+
+    def test_stranded_in_compose_says_recover_not_wait(self):
+        """负控：非排队态必须给出补键恢复，否则真卡住的消息永远没人救。"""
+        items = self._with(delivery_state=None, error="DISPATCH_UNCONFIRMED")
+        self.assertFalse(items[0]["queued_at_receiver"])
+        text = guard._render([dict(items[0], state=nd.NOT_RECEIVED)])
+        self.assertIn("--recover-stranded", text)
+        self.assertNotIn("只能等", text)
+
+    def test_legacy_attempt_reads_queued_state_from_error_string(self):
+        """旧 attempt 没有结构化字段，只在 error 串里带状态。"""
+        items = self._with(error="DISPATCH_UNCONFIRMED marker=x (delivery queued at "
+                                 "receiver) DELIVERY_QUEUED_AT_RECEIVER")
+        self.assertTrue(items[0]["queued_at_receiver"])
+
     def test_exit_2_when_not_received(self):
         results = guard.verify(self._pending(), wait_seconds=0.0,
                                waiter=lambda **kw: {"state": nd.NOT_RECEIVED})

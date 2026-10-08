@@ -56,6 +56,19 @@ _JOURNALS = ("message-dispatch-v1", "task-dispatch-v1")
 # 实测：我原先把它报成 NOT_RECEIVED 并建议 --recover-stranded，而那条路按构造不可用。
 _NEVER_INPUT = frozenset({"PREPARED", "NO_INPUT"})
 
+# 排队待消费 ≠ 卡在 compose。两者都是 NOT_RECEIVED，但处置相反：排队只能等，补键
+# 会造成重复投递。2026-10-08 18:2xZ 实测：我自己发给 supervisor 的消息落在接收端
+# 「Queued follow-up inputs」区，guard 却建议 --recover-stranded。
+_QUEUED_STATE = "DELIVERY_QUEUED_AT_RECEIVER"
+
+
+def _queued_at_receiver(attempt: dict[str, Any]) -> bool:
+    """只认结构化字段，其次兼容旧 attempt 的 error 串。"""
+    state = attempt.get("delivery_state")
+    if isinstance(state, str) and state:
+        return state == _QUEUED_STATE
+    return _QUEUED_STATE in str(attempt.get("error") or "")
+
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
     try:
@@ -155,6 +168,7 @@ def pending_deliveries(payload: dict[str, Any], caller: str | None,
             "journal": folder,
             "attempt": str(path),
             "marker": marker,
+            "queued_at_receiver": _queued_at_receiver(attempt),
             "since_epoch": started,
             "payload_sha256": binding.get("payload_sha256"),
             "text": binding.get("completion_callback"),
@@ -235,7 +249,13 @@ def _render(results: list[dict[str, Any]]) -> str:
             lines.append(f"    原因       = {item['reason']}")
         if item.get("state") == RECEIVED_ALTERED:
             lines.append("    接收端记录与原文空白不一致：payload 被改写，不得当成功投递。")
-        lines.append("    " + _RECOVERY.get(item["journal"], _RECOVERY["task-dispatch-v1"]))
+        if item.get("queued_at_receiver"):
+            # 补键会造成重复投递，和卡 compose 的处置正好相反。
+            lines.append("    DELIVERY_QUEUED_AT_RECEIVER：payload 在接收端排队区等它的 tool "
+                         "boundary，不在 compose 里。")
+            lines.append("    只能等：不要补键、不要重贴。稍后用下面的只读命令复查原生记录。")
+        else:
+            lines.append("    " + _RECOVERY.get(item["journal"], _RECOVERY["task-dispatch-v1"]))
     lines += [
         "",
         "  复查命令（只读，可直接跑）：",
