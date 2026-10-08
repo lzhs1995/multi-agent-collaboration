@@ -55,24 +55,8 @@ def status_path(workspace, executor):
 
 
 def _message_answered(req):
-    """An ordinary message from this supervisor to this executor after the request."""
-    root = pull.state_root() / "message-dispatch-v1"
-    if not root.is_dir():
-        return False
-    for attempt in root.glob("*/attempt-*.json"):
-        try:
-            value = json.loads(attempt.read_text())
-            ident = value["binding"]["identity"]
-            starts = [float(e["at_epoch"]) for e in value.get("events", [])
-                      if e.get("phase") == "PASTE_INTENT"]
-            if (str(ident.get("target_surface_uuid", "")).upper() == req["executor_uuid"]
-                    and str(ident.get("caller_surface_uuid", "")).upper() == req["supervisor_uuid"]
-                    and str(ident.get("workspace_uuid", "")).upper() == req["workspace_uuid"]
-                    and starts and min(starts) > float(req["at_epoch"])):
-                return True
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return False
+    """A CONFIRMED ordinary message from this supervisor to this executor after the request."""
+    return pull.journal_answered("message-dispatch-v1", req)
 
 
 def current(workspace, executor):

@@ -8,9 +8,10 @@ cannot lose it and it cannot overwrite a draft. The supervisor's Stop hook
 refuses to end a turn while a request is pending, so Codex being busy delays the
 next dispatch instead of silently ending the collaboration.
 
-A request is settled by either a new task dispatch attempt from that supervisor
-to that executor after the request time, or an explicit supervisor ack with a
-reason (e.g. WAITING_DEPENDENCY). The ack is bound to the exact request sha.
+A request is settled by either a CONFIRMED task dispatch from that supervisor
+to that executor started after the request time, or an explicit supervisor ack
+with a reason (e.g. WAITING_DEPENDENCY). The ack is bound to the exact request
+sha and is written only when the live CLI caller is the addressed supervisor.
 
 Recording also starts cmux_idle_push, which re-asks the supervisor with new
 marked STATUS messages on a non-decreasing ladder until it answers; the
@@ -37,10 +38,6 @@ def state_root():
 
 def inbox_root():
     return state_root() / "idle-requests-v1"
-
-
-def dispatch_root():
-    return state_root() / "task-dispatch-v1"
 
 
 def _uuid(value):
@@ -145,23 +142,40 @@ def time_now(now=None):
     return float(now) if now is not None else time.time()
 
 
-def _dispatched_after(req):
-    """A task dispatch attempt from this supervisor to this executor after the request."""
-    root = dispatch_root()
+def _attempt_started(value):
+    """Task attempts carry started_at_epoch; message attempts only their first paste."""
+    if "started_at_epoch" in value:
+        return float(value["started_at_epoch"])
+    return min(float(e["at_epoch"]) for e in value["events"] if e.get("phase") == "PASTE_INTENT")
+
+
+def journal_answered(folder, req):
+    """A CONFIRMED journaled delivery from this supervisor to this executor after the request.
+
+    Unconfirmed attempts (NO_INPUT, POST_ENTER_OBSERVATION) may never have reached
+    the executor, so they leave the request pending; the journal promotes a late
+    delivery to CONFIRMED on reconcile.
+    """
+    root = state_root() / folder
     if not root.is_dir():
         return False
     for attempt in root.glob("*/attempt-*.json"):
         try:
             value = json.loads(attempt.read_text())
             ident = value["binding"]["identity"]
-            if (str(ident.get("target_surface_uuid", "")).upper() == req["executor_uuid"]
+            if (value.get("phase") == "CONFIRMED"
+                    and str(ident.get("target_surface_uuid", "")).upper() == req["executor_uuid"]
                     and str(ident.get("caller_surface_uuid", "")).upper() == req["supervisor_uuid"]
                     and str(ident.get("workspace_uuid", "")).upper() == req["workspace_uuid"]
-                    and float(value["started_at_epoch"]) > float(req["at_epoch"])):
+                    and _attempt_started(value) > float(req["at_epoch"])):
                 return True
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return False
+
+
+def _dispatched_after(req):
+    return journal_answered("task-dispatch-v1", req)
 
 
 def pending(workspace, supervisor):
@@ -240,6 +254,21 @@ def supervisor_message(waiting):
     return "\n".join(lines)
 
 
+def _authenticated_caller(executor):
+    """Live (workspace, surface) of the CLI caller, resolved like bridge transport.
+
+    The executor is the binding target, so the caller must be another terminal in
+    the same workspace; CLI arguments never supply identity.
+    """
+    import cmux_workspace_guard as guard
+    try:
+        identity, tree, env, _proof = guard.caller_snapshot()
+        binding = guard.resolve_snapshot(identity, tree, _uuid(executor), env=env)
+    except guard.WorkspaceScopeError as exc:
+        raise ValueError("ACK_CALLER_UNRESOLVED: " + str(exc)) from exc
+    return binding["workspace_uuid"], binding["caller_surface_uuid"]
+
+
 def ack(workspace, supervisor, executor, reason, now=None):
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("ack reason required")
@@ -248,6 +277,9 @@ def ack(workspace, supervisor, executor, reason, now=None):
     req = json.loads(raw)
     if _uuid(req["supervisor_uuid"]) != _uuid(supervisor):
         raise ValueError("request is addressed to another supervisor")
+    # Only the addressed supervisor's own surface may clear its Stop gate.
+    if _authenticated_caller(executor) != (_uuid(req["workspace_uuid"]), _uuid(req["supervisor_uuid"])):
+        raise ValueError("ACK_CALLER_MISMATCH: caller is not the addressed supervisor")
     at = time_now(now)
     value = dict(request_sha256=_sha(raw), supervisor_uuid=_uuid(supervisor), reason=reason.strip(),
                  at_epoch=at, at=dt.datetime.fromtimestamp(at, dt.timezone.utc).isoformat())

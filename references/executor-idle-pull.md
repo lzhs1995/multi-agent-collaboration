@@ -20,8 +20,8 @@
    - 拦截提示里会直接给出这条命令。
 3. **Stop 守卫（执行者侧）**：精确的 REPORT_READY 行仍然只是交接，不算送达。但现在必须先存在一份与当前冻结报告（task_id + report_sha256）绑定的 idle 请求，否则返回 `EXECUTOR_IDLE_PULL_REQUIRED`，并给出命令。
 4. **Stop 守卫（主管侧）**：只要 inbox 里有发给本主管的未结请求，就返回 `EXECUTOR_IDLE_REQUEST_PENDING`，不准结束本轮。结清方式二选一：
-   - 用 `submit_task_pack` 派发下一包。之后出现一次「本主管→该执行者、晚于请求时间」的 task-dispatch attempt，即自动结清。
-   - `cmux_idle_pull.py --ack <executor> --workspace <ws> --supervisor <me> --reason "WAITING_DEPENDENCY: …"`。ack 绑定请求的 sha，执行者发出新请求后会重新打开。空 reason 和他人代 ack 都会被拒。
+   - 用 `submit_task_pack` 派发下一包。之后出现一次「本主管→该执行者、晚于请求时间」且 `phase=CONFIRMED` 的 task-dispatch attempt，即自动结清。`NO_INPUT`/`POST_ENTER_OBSERVATION`（排队、未确认送达）不算，请求保持 pending；journal 核收后转 CONFIRMED 才算。
+   - `cmux_idle_pull.py --ack <executor> --workspace <ws> --supervisor <me> --reason "WAITING_DEPENDENCY: …"`。ack 绑定请求的 sha，执行者发出新请求后会重新打开。空 reason 和他人代 ack 都会被拒：身份取自现役调用方（`caller_snapshot`+`resolve_snapshot`，与 bridge 发送同一套），必须同工作区且 surface 正是请求里的主管，`--supervisor` 参数不提供身份。不符报 `ACK_CALLER_MISMATCH`，解析失败报 `ACK_CALLER_UNRESOLVED`，都不落 ack。
 
 请求格式损坏时一律视为未结（只给路径，不删除）。`stop_hook_active=true` 时照常放行，不会无限递归。
 
@@ -33,8 +33,8 @@
 - **不叠加**：主管输入框里还留着上一条时，bridge 返回 COMPOSE_OCCUPIED，不输入任何内容。这次的结果记账，下一个 60 秒用新 marker 再试。投递异常只记账，不终止催办。
 - **停止条件 = 主管回复**，满足任一即停：
   - 带理由的 `--ack`，且绑定当前请求 sha；
-  - 晚于请求的 task-dispatch，方向是本主管→本执行者；
-  - 晚于请求的普通消息，同为本主管→本执行者（message-dispatch journal 首个 PASTE_INTENT 时刻）。
+  - 晚于请求且 CONFIRMED 的 task-dispatch，方向是本主管→本执行者；
+  - 晚于请求且 CONFIRMED 的普通消息，同为本主管→本执行者（message-dispatch journal 首个 PASTE_INTENT 时刻）。未确认送达的消息不算回复，继续每 60 秒催。
 - **到 24 小时**：记 `EXHAUSTED`。执行者下一次交付时会写新请求，重新开始。
 - **新请求**（下一任务交付）：同一个催办器发现请求 sha 变了，就从第 1 次重新开始，不会出现新请求无人催办的情况。
 - **状态**：`~/.local/state/multi-agent-collaboration/idle-push-v1/<ws>/<executor>/status.json`（pid、每次的 marker/时刻/结果、ANSWERED/EXHAUSTED），日志写在同目录的 `push.log`。
