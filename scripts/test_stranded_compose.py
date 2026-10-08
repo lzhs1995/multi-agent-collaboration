@@ -115,6 +115,28 @@ class PrePasteGateTests(unittest.TestCase):
         self.assertEqual([c.args[1] for c in key.call_args_list], ["enter"])
 
 
+class MidRenderTests(unittest.TestCase):
+    """r23 callback: the post-Enter read showed only a prefix of the payload."""
+
+    def test_partial_render_is_reobserved_then_tab_queued(self):
+        idle = "\n".join([WORKING, " ", "› ", FOOTER])
+        partial = "\n".join([WORKING, " ", "› " + WORDS[:60], "  next_", " ", FOOTER,
+                             "  tab to queue message"])
+        consumed = "\n".join(["› " + WORDS, "• Read evidence", WORKING, " ", "› ", FOOTER])
+        self.assertTrue(b._compose_is_partial_payload(partial.replace("  next_", ""), WORDS))
+        with patch.object(b, "read_screen",
+                          side_effect=[idle, partial.replace("\n  next_", ""), screen(WORKING), consumed]), \
+                patch.object(b, "send_text"), patch.object(b, "send_key") as key, \
+                patch.object(b.time, "sleep"):
+            result = b._submit_text_once("peer", WORDS, marker=MARKER)
+        self.assertEqual([c.args[1] for c in key.call_args_list], ["enter", "tab"])
+        self.assertTrue(result["confirmed"])
+
+    def test_full_or_foreign_compose_is_not_partial(self):
+        self.assertFalse(b._compose_is_partial_payload(screen(WORKING), WORDS))
+        self.assertFalse(b._compose_is_partial_payload(screen(WORKING, text="other draft"), WORDS))
+
+
 class RecoverStrandedTests(unittest.TestCase):
     BEFORE = "\n".join([WORKING, " ", "› ", FOOTER])
 

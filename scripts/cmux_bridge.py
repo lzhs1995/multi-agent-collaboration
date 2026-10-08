@@ -1055,6 +1055,26 @@ def receiver_cannot_submit_now(screen):
     return bool(_RECEIVER_UNSUBMITTABLE_RE.search(_current_status_region(screen)))
 
 
+def _compose_is_partial_payload(screen, text):
+    """The composer shows a strict prefix of our payload: still rendering.
+
+    Only decides whether to re-read (never authorizes a key), so the draft is
+    taken as the rows from the last prompt glyph up to the first blank row.
+    """
+    rows = screen.splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    if start is None:
+        return False
+    draft = [re.sub(r"^\s*[›❯][  ]?", "", rows[start], count=1)]
+    for row in rows[start + 1:]:
+        if not row.strip():
+            break
+        draft.append(row)
+    shown, full = "".join("".join(draft).split()), "".join(text.split())
+    return bool(shown) and shown != full and full.startswith(shown)
+
+
 def _codex_tab_queue_allowed(screen, text):
     """Only the measured Codex busy composer with its explicit queue key."""
     return bool(
@@ -1410,6 +1430,16 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
             "(marker not visible after submit)",
             state=DELIVERY_UNVERIFIED_BY_DETECTOR,
         )
+    # Measured 2026-10-08 (r23 callback): the post-Enter read caught the
+    # composer mid-render (only a prefix of our payload), so the exact check
+    # failed and no Tab was sent. Re-observe, read only and bounded.
+    settle = int(os.environ.get("CMUX_AGENT_RENDER_SETTLE_READS", "4"))
+    while settle > 0 and _compose_is_partial_payload(screen, text):
+        settle -= 1
+        time.sleep(1.0)
+        screen = read_screen(surface, lines=confirm_lines)
+        if delivery_observer:
+            delivery_observer("POST_ENTER_OBSERVATION", screen)
     # Enter does not queue a message in the measured busy Codex UI. Only
     # its exact, displayed Tab action and our unchanged full payload authorize
     # one queue key. Never paste again, press on compaction, or call it consumed.
