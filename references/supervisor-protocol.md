@@ -336,3 +336,4 @@ record the direct recovery with `--recovery-confirmed` instead of inventing a
   audited with a read-only postcondition check, not retried after clearing state.
 - Other executor blockers require classification and preserved evidence. Continue independent authorized work; use the same controlled solo transition when applicable. A blocked executor is not an instruction to abandon the user's task. See [availability and shared resources](availability-and-resources.md).
 - Apply the incident regressions in `sentinel-and-compaction-incidents.md`; in particular, a spinner-only Claude task line is ACTIVE, while the first observed idle prompt is immediately actionable.
+- Treat each `EXECUTOR_READY` message as an action item at the next tool boundary: dispatch the next pack after the executor's turn ends, or reply `WAITING_DEPENDENCY`/`SOLO` with the trigger. A running executor turn makes the bridge-test pre-read refuse; see [executor idle](executor-idle-ready.md).

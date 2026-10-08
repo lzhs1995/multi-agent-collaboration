@@ -210,6 +210,11 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   checks configuration and benign execution. Installation is not proof that an
   already-running client reloaded its configuration. Run harness `guard-check`
   after client settings changes and at task close.
+- A disarmed executor must not wait silently: the Stop guard
+  `cmux_executor_idle_guard.py` requires one journaled `executor_ready.py
+  request` to the bound supervisor, with finite reminders and reentry pass.
+  Supervisors answer each `EXECUTOR_READY` with a pack or
+  `WAITING_DEPENDENCY`/`SOLO`. See [executor idle](references/executor-idle-ready.md).
 - Require semantic positive and negative tests through real hook entrypoints,
   not only helper definitions or source-string counts. Missing/null/boolean-as-
   count, stale evidence, changed pins and malformed receipts must fail closed.

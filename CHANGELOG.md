@@ -1,3 +1,7 @@
+## Unreleased — 2026-10-08
+
+Add the executor idle Stop guard and `executor_ready.py`: a disarmed executor sends one journaled ready request to its bound supervisor instead of waiting silently; finite reminders, reentry pass, fail-open identity. Not installed into running clients by this change.
+
 ## 0.1.1 — 2026-09-26
 
 Check current agent input before sending, preserve user drafts and queued work, and distinguish unmarked submission from confirmed consumption. Preserve original sessions and late-delivery evidence.
