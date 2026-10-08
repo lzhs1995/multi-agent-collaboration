@@ -117,6 +117,11 @@ attempt has returned. Stop permits its exact honest REPORT_READY handoff without
 manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
 remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
+After verified acceptance/disarm, the supervisor owns
+[closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
+A normal task boundary is not an API failure or a permanent session stop. Use
+current evidence for authorized follow-up; never ask the user to relay to a bound peer.
+
 ### Fast handshake and verified delivery in both directions
 
 - Bridge cleanup must observe an empty compose, not merely the absence of the

@@ -24,6 +24,10 @@ def _evaluate_resolved(payload):
                 'Do not add tests, memories, watchers, retries, or other tool calls. '
                 'End this turn now. The supervisor owns receipt reconciliation and '
                 'acceptance/disarm before another task. This is not product acceptance. '
+                'This task boundary is not evidence of an API failure. Do not ask the '
+                'user to relay status to the already-bound supervisor. After verified '
+                'disarm, authorized follow-up uses current receipts and disposition, '
+                'not an old recap; this is not a permanent session stop. '
                 'If delivery is not independently confirmed, use exactly:\n'
                 + handoff_line(evidence))
     return True, ''
