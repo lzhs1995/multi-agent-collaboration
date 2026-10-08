@@ -24,6 +24,8 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.active = self.root / 'active'
         self.active.mkdir()
+        # 真实 ~/.local 里的待派请求不能渗进 Stop 发现次数断言
+        self.stack.enter_context(patch.dict(os.environ, {'HOME': str(self.root)}))
         self.registry = self.root / 'registry'
         self.registry.mkdir()
         for mod in (stop, lease):

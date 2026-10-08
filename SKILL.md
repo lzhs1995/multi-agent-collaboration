@@ -117,6 +117,27 @@ attempt has returned. Stop permits its exact honest REPORT_READY handoff without
 manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
 remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
+**No silent wait (hook-enforced).** See [executor idle pull](references/executor-idle-pull.md).
+After its original callback returns, the executor runs one exact file-only
+command, `scripts/cmux_idle_pull.py --task-pack <pack>`, before its REPORT_READY
+handoff. The closeout guard admits only that command, and the Stop guard refuses
+the handoff until a request bound to the frozen report exists. On the supervisor
+side, the Stop guard refuses turn-end while that request is pending. The request
+is settled by a newer task dispatch to that executor, or by `--ack` with a reason
+such as `WAITING_DEPENDENCY`. A busy supervisor delays the next task, but it
+cannot silently strand an executor. The request itself sends no terminal input.
+The same command also starts one detached `scripts/cmux_idle_push.py`. It re-asks
+the supervisor every 60 s, each time with a new marked `STATUS:` message through
+the journaled bridge; an occupied compose gets zero input. It keeps asking for up
+to 24 h, until an ack, a newer task dispatch, or an ordinary message from that
+supervisor arrives. The executor Stop admits the handoff only while that pusher
+holds its lock or the request is already answered.
+Any other wait for the supervisor goes through `cmux_idle_pull.py --request`, which
+only the addressed executor may file. While that request is unanswered, the
+executor's Stop is refused with `EXECUTOR_AWAITING_SUPERVISOR`, even on hook
+reentry. The only admitted tool is the exact foreground `cmux_idle_pull.py --wait`.
+It returns ANSWERED, or WAITING after it re-spawns a dead pusher.
+
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
 A normal task boundary is not an API failure or a permanent session stop. Use

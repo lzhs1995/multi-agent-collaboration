@@ -35,6 +35,7 @@ import re
 import stat
 import sys
 from executor_closeout import terminal_report, handoff_line
+import cmux_idle_pull as idle_pull
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -585,7 +586,14 @@ def _evaluate_resolved(
         surface = _surface_key(payload)
         terminal = terminal_report(marker, _workspace_key(payload), surface)
         if terminal and final.strip() == handoff_line(terminal):
-            # Honest report handoff is turn-end, never callback confirmation.
+            # Honest report handoff is turn-end, never callback confirmation,
+            # and never a silent wait: an idle request for this report must exist.
+            if not idle_pull.ready_for(terminal, _workspace_key(payload), surface):
+                return False, ("EXECUTOR_IDLE_PULL_REQUIRED: before handing off, request the "
+                               "next task with exactly this one command (records the request "
+                               "and starts the pusher that re-asks the supervisor until it answers):\n"
+                               + idle_pull.command_for(Path(marker["artifact_root"]) / "task-pack.json")
+                               + "\nthen end with exactly:\n" + handoff_line(terminal)), marker
             continue
         callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
         if not callback_ok:
@@ -619,9 +627,26 @@ def _evaluate_resolved(
 
 
 def _evaluate_with_marker(payload):
-    # Reentry must terminate even if identity discovery is currently unavailable.
-    if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
-            and payload.get("stop_hook_active") is True):
+    reentry = (payload.get("hook_event_name") in ("Stop", "SubagentStop")
+               and payload.get("stop_hook_active") is True)
+    # One caller snapshot serves both inbox checks. Executor side: its own
+    # unanswered request keeps the session alive even on reentry (the user
+    # requires asking until the supervisor answers). Supervisor side: a pending
+    # request must be dispatched or acked before turn-end.
+    if idle_pull.any_requests():
+        try:
+            with hook_identity.evaluation(payload):
+                ws, me = _workspace_key(payload), _surface_key(payload) or ""
+                mine = idle_pull.own_pending(ws, me) if me else None
+                waiting = [] if reentry else idle_pull.pending(ws, me)
+        except (hook_identity.ERRORS + (ValueError, OSError)):
+            mine, waiting = None, []  # unresolved caller never wedges unrelated sessions here
+        if mine:
+            return False, idle_pull.executor_wait_message(mine), None
+        if waiting:
+            return False, idle_pull.supervisor_message(waiting), None
+    # Otherwise reentry must terminate even if identity discovery is unavailable.
+    if reentry:
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
         if not _has_active_markers():

@@ -16,6 +16,7 @@ import cmux_consensus_stop_guard as stop
 import cmux_executor_closeout_guard as closeout
 import cmux_lease_guard as lease
 import test_executor_closeout as closeout_tests
+import idle_push_fixture
 
 
 class HookIdentityTests(unittest.TestCase):
@@ -25,6 +26,8 @@ class HookIdentityTests(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.active = self.root / 'active'
         self.active.mkdir()
+        # 真实 ~/.local 里的待派请求不能渗进 Stop 发现次数断言
+        self.stack.enter_context(patch.dict(os.environ, {'HOME': str(self.root)}))
         for mod in (stop, lease):
             self.stack.enter_context(patch.object(mod, 'ACTIVE_DIR', self.active))
         self.stack.enter_context(patch.dict(os.environ, {
@@ -143,11 +146,35 @@ class HookIdentityTests(unittest.TestCase):
             self.snapshot.return_value = ({}, {}, {'CMUX_WORKSPACE_ID': fixture.workspace,
                                                   'CMUX_SURFACE_ID': fixture.surface}, {})
             self.write(self.active / (fixture.workspace + '.json'), fixture.marker)
+            # 空闲请求写入私有 HOME，不碰真实 ~/.local/state
+            self.stack.enter_context(patch.dict(os.environ, {
+                'HOME': str(fixture.home),
+                'CMUX_IDLE_PUSH_BRIDGE': fixture.env['CMUX_IDLE_PUSH_BRIDGE']}))
+            self.stack.enter_context(patch.object(stop.idle_pull, 'ACTIVE_DIR', self.active))
             before = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
             self.assertFalse(closeout.evaluate(dict(hook_event_name='PreToolUse'))[0])
+            ok, msg = stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))
+            self.assertFalse(ok)
+            self.assertIn('EXECUTOR_IDLE_PULL_REQUIRED', msg)
+            self.assertEqual(before, {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()})
+            req = stop.idle_pull.record(fixture.pack_path)
+            # 只有请求、没有在跑的催办器 → 仍拒交接
+            self.assertFalse(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
+            import cmux_idle_push
+            self.assertEqual(cmux_idle_push.spawn(req['workspace_uuid'], req['executor_uuid']), 'STARTED')
+            # 主管未回复前仍拒结束；回复后放行
+            ok, msg = stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))
+            self.assertFalse(ok)
+            self.assertIn('EXECUTOR_AWAITING_SUPERVISOR', msg)
+            idle_push_fixture.supervisor_answers(fixture.home)
             self.assertTrue(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
             self.assertFalse(fixture.receipt.exists())
-            self.assertEqual(before, {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()})
+            after = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
+            # 只新增空闲请求文件，报告/回执/原 attempt 不变
+            self.assertEqual(before, {p: v for p, v in after.items()
+                                      if p.name not in ('executor-idle-request.json',
+                                                        'fake_bridge.calls.jsonl')
+                                      and fixture.home not in p.parents})
         finally:
             fixture.doCleanups()
 

@@ -27,7 +27,8 @@ def hook_environment(active_dir):
         daemon = importlib.import_module('cmux_daemon_identity')
         stack.enter_context(patch.object(daemon, 'process', side_effect=ordinary_process))
         for name in ('cmux_consensus_stop_guard', 'cmux_lease_guard',
-                     'cmux_consensus_round_guard', 'cmux_handshake_receipt_guard'):
+                     'cmux_consensus_round_guard', 'cmux_handshake_receipt_guard',
+                     'cmux_idle_pull'):
             module = importlib.import_module(name)
             for attribute, value in (('ACTIVE_DIR', active_dir), ('REGISTRY_DIR', registry_dir)):
                 if hasattr(module, attribute):
