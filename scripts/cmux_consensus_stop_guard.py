@@ -35,6 +35,7 @@ import re
 import stat
 import sys
 from executor_closeout import terminal_report, handoff_line
+import executor_idle_escalation as idle_escalation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -548,6 +549,65 @@ def _completion_callback_evidence(
     return True, "confirmed completion callback receipt matches pack and report"
 
 
+def _idle_escalation_evidence(
+    marker: dict[str, Any], payload: dict[str, Any]
+) -> tuple[bool, str]:
+    """An unanswered armed executor may not end its session (user directive 2026-10-08).
+
+    Past FIRST_SECONDS without supervisor activity the turn-end is blocked, also
+    on Stop-hook reentry, until the supervisor replies: the executor keeps
+    running the foreground `pursue` step while the background watcher asks
+    again every REPEAT_SECONDS. A reply restarts the idle clock, which lifts the
+    block so the executor can go idle for the supervisor's preflight.
+    """
+    executor = _surface_key(payload) or ""
+    if not _current_participant_is_executor(marker, payload):
+        return True, "current participant is not this task's executor"
+    status = idle_escalation.idle_status(marker, executor)
+    if not status["applicable"] or status["idle_seconds"] < idle_escalation.FIRST_SECONDS:
+        return True, "no executor idle escalation is due"
+    _alive, why = idle_escalation.watcher_alive(marker, executor)
+    script = Path(__file__).with_name("executor_idle_escalation.py")
+    return False, (
+        f"executor idle escalation due: task {marker.get('task_id')} has no supervisor "
+        f"reply for {int(status['idle_seconds'])} s ({len(status['records'])} escalations "
+        f"recorded; watcher: {why}). The session must not end until the supervisor "
+        "replies. Run in the foreground (it restarts a dead background watcher, which "
+        f"asks again every {idle_escalation.REPEAT_SECONDS} s, and returns on reply):\n"
+        f"  python3 -B {script} pursue --task-id {marker.get('task_id')} "
+        f"--executor-uuid {executor}\n"
+        "Exit 0 = supervisor replied or dispatched: end the turn at once so its "
+        "handshake can reach you. Exit 9 = no reply yet: run it again. Never resend "
+        "an earlier message by hand; a user interrupt always ends the loop.")
+
+
+def _any_unanswered_executor() -> bool:
+    """Identity-free precheck across all fresh markers (same scan as _has_active_markers)."""
+    for pattern in ("*.json", "*/*.json"):
+        for path in ACTIVE_DIR.glob(pattern):
+            if path.name.startswith("."):
+                continue
+            marker = _read_json(path)
+            if not (isinstance(marker, dict) and _marker_fresh(marker)):
+                continue
+            for row in marker.get("participants", []):
+                if not (isinstance(row, dict) and str(row.get("role", "")).startswith("executor")):
+                    continue
+                status = idle_escalation.idle_status(marker, str(row.get("surface_uuid") or ""))
+                if status["applicable"] and status["idle_seconds"] >= idle_escalation.FIRST_SECONDS:
+                    return True
+    return False
+
+
+def _reentry_idle_block(payload: dict[str, Any]):
+    """Stop-hook reentry ends recursion except for an unanswered idle executor."""
+    for marker in _active_markers(payload):
+        ok, message = _idle_escalation_evidence(marker, payload)
+        if not ok:
+            return False, message, marker
+    return None
+
+
 def _evaluate_resolved(
     payload: dict[str, Any],
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -564,10 +624,12 @@ def _evaluate_resolved(
     filenames, delivery markers, and block counts all pass, because none of them
     asserts a state that disk refutes.
     """
-    # End Stop-hook recursion without confirming delivery or disarming tasks.
+    # End Stop-hook recursion without confirming delivery or disarming tasks,
+    # except that an unanswered idle executor keeps pursuing its supervisor.
     if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
             and payload.get("stop_hook_active") is True):
-        return True, "Stop hook reentry; task and callback remain unconfirmed", None
+        return _reentry_idle_block(payload) or (
+            True, "Stop hook reentry; task and callback remain unconfirmed", None)
 
     markers = _active_markers(payload)
     if not markers:
@@ -593,6 +655,9 @@ def _evaluate_resolved(
                 callback_msg += ("; original attempt returned. End without more tools "
                                  "using exactly:\n" + handoff_line(terminal))
             return False, callback_msg, marker
+        idle_ok, idle_msg = _idle_escalation_evidence(marker, payload)
+        if not idle_ok:
+            return False, idle_msg, marker
 
     claims = _positive_evidence_claims(final)
     if not claims:
@@ -619,9 +684,19 @@ def _evaluate_resolved(
 
 
 def _evaluate_with_marker(payload):
-    # Reentry must terminate even if identity discovery is currently unavailable.
+    # Reentry must terminate even if identity discovery is currently unavailable;
+    # only a positively identified unanswered idle executor is held.
     if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
             and payload.get("stop_hook_active") is True):
+        try:
+            # Discovery runs only when some armed executor is actually unanswered.
+            if _any_unanswered_executor():
+                with hook_identity.evaluation(payload):
+                    held = _reentry_idle_block(payload)
+                if held:
+                    return held
+        except Exception:
+            pass
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
         if not _has_active_markers():
@@ -648,6 +723,15 @@ def _block(message: str, marker_hint: str) -> int:
             "report, and callback evidence. The supervisor must diagnose caller "
             "identity resolution before retrying this gate. This result does "
             "not judge the final message or confirm callback delivery.\n"
+        )
+        return 2
+    if message.startswith("executor idle escalation due:"):
+        sys.stderr.write(
+            "cmux executor idle Stop guard blocked turn-end.\n"
+            f"{message}\n"
+            "This is not a consensus or callback failure and needs no handshake, "
+            "disarm or resend of an earlier message.\n"
+            f"  (armed marker: {marker_hint})\n"
         )
         return 2
     # Callback transport failures are not failed plan-consensus rounds.

@@ -232,9 +232,26 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 执行[高效握手、多执行者与双向投递](references/efficient-bidirectional-collaboration-20261004.md)：每次Enter后读回；输入框残留、排队与消费分别记录；可能已发送的回调仅只读核收，禁止重贴。
 
+### Executor idle escalation (no dead-waiting)
+
+An armed executor without a finalized task pack must not dead-wait: it asks
+again every 60 s until the supervisor replies, and its session does not end
+meanwhile. Past 60 s with no reply the Stop guard blocks turn-end, including on
+Stop-hook reentry, and names `scripts/executor_idle_escalation.py pursue`. That
+foreground step keeps the detached `watch` sender alive (running pid,
+heartbeat at most 90 s old) and returns on reply. The watcher is the only
+sender: one NEW marked message through the journaled bridge plus a pull-side
+notice file every 60 s, with no cap, recording every transport outcome.
+Delivery is not a reply. A reply is any supervisor-side activity: a handshake
+receipt, any new artifact-root file (including a preflight that failed against
+the busy executor), a pack, marker activity, or the supervisor's own `ack`
+(optional hold of up to 2 h). A reply lifts the block so the executor can go
+idle for the handshake. A user interrupt always ends the loop. Never resend an
+earlier message. See [executor idle escalation](references/executor-idle-escalation.md).
+
 ### Stop hook reentry
 
-Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before task gates to prevent recursion. This does not confirm callbacks, disarm tasks, or bypass checks on the next normal turn. See [Stop hook lifecycle](references/stop-hook-lifecycle-20261005.md).
+Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before task gates to prevent recursion, with one exception: an unanswered idle executor (above) is still held. This does not confirm callbacks, disarm tasks, or bypass checks on the next normal turn. See [Stop hook lifecycle](references/stop-hook-lifecycle-20261005.md).
 
 ### Read-only confirmation
 

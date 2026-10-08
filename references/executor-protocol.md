@@ -20,6 +20,23 @@ completion receipt. Do not merely print the callback on the executor surface,
 and do not use raw `cmux send`, `cmux-agent ask`, or `submit_text` for terminal
 completion. The Stop hook rejects a finalized executor task without the receipt.
 
+## While Waiting For Dispatch
+
+An armed executor with no finalized task pack must not wait open-ended. After
+60 s without a supervisor reply, the Stop guard blocks turn-end (also on
+Stop-hook reentry) until the supervisor replies. Run the foreground step it
+names, repeatedly:
+
+```bash
+python3 -B scripts/executor_idle_escalation.py pursue --task-id <id> --executor-uuid <uuid>
+```
+
+`pursue` keeps the background `watch` sender alive. That sender asks again
+every 60 s, each time with a new marked message plus a notice file and never a
+resend. On exit 0 (reply or dispatch), end the turn at once so the handshake
+can reach you. Commands and outcomes are in
+[executor idle escalation](executor-idle-escalation.md).
+
 ## On Receipt
 
 1. Acknowledge the `TASK_ID`.
