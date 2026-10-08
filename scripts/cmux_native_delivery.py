@@ -22,9 +22,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 RECEIVED = "RECEIVED"
@@ -32,6 +33,7 @@ RECEIVED_ALTERED = "RECEIVED_ALTERED"
 NOT_RECEIVED = "NOT_RECEIVED"
 
 TAIL_BYTES = 16 * 1024 * 1024
+MAX_TAIL_BYTES = 1024 * 1024 * 1024
 
 
 def _sha(text):
@@ -99,20 +101,20 @@ def _matches(record_text, text=None, payload_sha256=None):
 
 
 def candidate_transcripts(since_epoch, home=None):
-    """Receiver transcripts written since the attempt; newest first."""
+    """Receiver transcripts written since the attempt; newest first.
+
+    A Codex rollout lives under the date its session STARTED and keeps growing
+    there. Measured 2026-10-08: ROOT's live session is
+    sessions/2026/09/29/rollout-*.jsonl, so a date-directory window found
+    nothing and every delivery to ROOT read NOT_RECEIVED. Select by mtime over
+    the whole tree instead (~21k files, ~0.1 s).
+    """
     home = Path(home or Path.home())
-    roots = []
-    sessions = home / ".codex" / "sessions"
-    start = datetime.fromtimestamp(since_epoch, timezone.utc) - timedelta(days=1)
-    day = start.date()
-    today = (datetime.now(timezone.utc) + timedelta(days=1)).date()
-    while day <= today:
-        roots.append(sessions / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}")
-        day += timedelta(days=1)
     found = []
-    for root in roots:
-        if root.is_dir():
-            found.extend(root.glob("rollout-*.jsonl"))
+    sessions = home / ".codex" / "sessions"
+    for root, _dirs, files in os.walk(sessions):
+        found.extend(Path(root) / f for f in files
+                     if f.startswith("rollout-") and f.endswith(".jsonl"))
     projects = home / ".claude" / "projects"
     if projects.is_dir():
         found.extend(projects.glob("*/*.jsonl"))
@@ -127,12 +129,30 @@ def candidate_transcripts(since_epoch, home=None):
     return [p for _, p in sorted(out, reverse=True)]
 
 
-def _tail_records(path):
+_TS_RE = re.compile(rb'"timestamp":"([^"]+)"')
+
+
+def _tail_records(path, since_epoch=None):
+    """Records from the end back to since_epoch (bounded by MAX_TAIL_BYTES).
+
+    A fixed 16 MB tail covered only ~48 min of ROOT's 3 GB rollout (compaction
+    records are large), so a check made later missed a real delivery. Grow the
+    window until its first record predates the attempt.
+    """
     with path.open("rb") as f:
         size = f.seek(0, os.SEEK_END)
-        start = max(0, size - TAIL_BYTES)
-        f.seek(start)
-        data = f.read()
+        window = min(size, TAIL_BYTES)
+        while True:
+            start = size - window
+            f.seek(start)
+            data = f.read(window)
+            first = data.split(b"\n", 2)[1 if start else 0] if b"\n" in data else data
+            stamp = _TS_RE.search(first)
+            first_at = _epoch(stamp.group(1).decode()) if stamp else None
+            if (start == 0 or since_epoch is None or window >= MAX_TAIL_BYTES
+                    or (first_at is not None and first_at < since_epoch - 2)):
+                break
+            window = min(size, window * 4, MAX_TAIL_BYTES)
     lines = data.split(b"\n")
     if start:
         lines = lines[1:]
@@ -152,7 +172,7 @@ def find_native_user_record(*, marker, since_epoch, text=None, payload_sha256=No
     altered = None
     for path in candidate_transcripts(since_epoch, home):
         try:
-            records = list(_tail_records(path))
+            records = list(_tail_records(path, since_epoch))
         except OSError:
             continue
         for event, raw in records:
