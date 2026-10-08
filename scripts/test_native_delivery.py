@@ -231,6 +231,14 @@ class GuardEnforcement(unittest.TestCase):
         self.assertEqual(self._pending(caller="ZZZZ"), [])
         self.assertEqual(self._pending(window_seconds=60.0, now=time.time() + 10_000), [])
 
+    def test_attempt_that_never_sent_input_is_not_pending(self):
+        """实测 17:55Z：接收端 compacting → bridge NO_INPUT、零事件，guard 却叫人补键。"""
+        for phase in ("NO_INPUT", "PREPARED"):
+            data = json.loads(self.attempt.read_text(encoding="utf-8"))
+            data["phase"] = phase
+            self.attempt.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(self._pending(), [], phase)
+
     def test_exit_2_when_not_received(self):
         results = guard.verify(self._pending(), wait_seconds=0.0,
                                waiter=lambda **kw: {"state": nd.NOT_RECEIVED})
