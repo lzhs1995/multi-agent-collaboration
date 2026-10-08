@@ -9,7 +9,13 @@ import hashlib
 import json
 import math
 import os
+import time
+from datetime import datetime
 from pathlib import Path
+
+# The user's own completion sentence. Only the executor may append it, alone on
+# the line after the exact handoff, when its bounded task is genuinely complete.
+COMPLETION_SENTENCE = '完成，建议检查 usage: /context'
 
 
 def _number(value):
@@ -155,7 +161,9 @@ def terminal_report(marker, workspace, surface):
                     or any(p.read_bytes() != raw for p, raw in pins.items())):
                 return None
             return dict(task_id=pack['task_id'], report=str(report),
-                        attempt=str(attempts[-1]), report_sha256=expected['report_sha256'])
+                        attempt=str(attempts[-1]), report_sha256=expected['report_sha256'],
+                        artifact_root=str(root), ended_at_epoch=effective_end,
+                        supervisor_uuid=supervisor.get('surface_uuid'))
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
@@ -165,3 +173,73 @@ def handoff_line(evidence):
     return ('STATUS: REPORT_READY TASK_ID=' + evidence['task_id']
             + ' CALLBACK_UNCONFIRMED REPORT=' + evidence['report']
             + ' supervisor_reconciliation_required')
+
+
+def honest_closeout(final, evidence):
+    """Only the two exact turn-ends; neither confirms delivery or acceptance.
+
+    The completion sentence is the executor's own statement that its bounded
+    task is complete. Nothing here derives it from a report or a returned call.
+    """
+    line = handoff_line(evidence)
+    return final.strip().split('\n') in ([line], [line, COMPLETION_SENTENCE])
+
+
+def closeout_instructions(evidence):
+    # Shared by PreToolUse and Stop so the hint is exactly what Stop accepts.
+    return ('If delivery is not independently confirmed, end the turn with exactly '
+            'this line:\n' + handoff_line(evidence) + '\n'
+            'Only if your own bounded task is genuinely complete, you may put "'
+            + COMPLETION_SENTENCE + '" alone on the very next line (no blank line). '
+            'The hook never adds it; it is neither callback confirmation nor '
+            'supervisor acceptance. If work is incomplete or BLOCKED, use the single '
+            'line only; no other text is accepted.')
+
+
+def _epoch(stamp):
+    """POSIX seconds for an offset-aware ISO-8601 stamp, else None."""
+    try:
+        moment = datetime.fromisoformat(stamp)
+        return moment.timestamp() if moment.utcoffset() is not None else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def superseded(evidence, markers, workspace, surface, now=None):
+    """True once this supervisor armed a later, different task for this executor.
+
+    Free text cannot unseal a frozen closeout: a user's new request and an
+    automatic continuation prompt look the same to a hook. The protected signal
+    is a fresh marker whose workspace, executor, supervisor, task, root and
+    arming time (strictly after the original attempt, including queue-only
+    continuation, ended) all match. Recheck TTL here: malformed legacy marker
+    dates may remain visible to the caller, but never prove a new task boundary.
+    This only moves tool/Stop scope; it never settles the original callback.
+    """
+    now = time.time() if now is None else now
+    ended = evidence.get('ended_at_epoch')
+    supervisor = evidence.get('supervisor_uuid')
+    if not surface or not supervisor or not _number(ended) or not _number(now):
+        return False
+    for marker in markers:
+        try:
+            peers = [p for p in marker['participants'] if isinstance(p, dict)]
+            executors = [p for p in peers if p.get('surface_uuid') == surface
+                         and str(p.get('role', '')).startswith('executor')]
+            supervisors = [p for p in peers if p.get('role') == 'supervisor']
+            armed = _epoch(marker.get('armed_at'))
+            ttl = marker.get('ttl_seconds')
+            root, task = marker.get('artifact_root'), marker.get('task_id')
+            if (marker.get('workspace_uuid') == workspace
+                    and len(executors) == 1 and len(supervisors) == 1
+                    and supervisors[0].get('surface_uuid') == supervisor
+                    and isinstance(task, str) and task and task != evidence['task_id']
+                    and isinstance(root, str) and Path(root).is_absolute()
+                    and not Path(root).is_symlink()
+                    and Path(root).resolve() != Path(evidence['artifact_root']).resolve()
+                    and _number(armed) and ended < armed <= now
+                    and _number(ttl) and ttl > 0 and now - armed <= ttl):
+                return True
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return False

@@ -211,7 +211,9 @@ class StopDispatchLifecycleTests(unittest.TestCase):
         self.assertEqual(self.stop(final=line).returncode, 0)
         r = self.stop(final=line + ' extra')
         self.assertEqual(r.returncode, 2)
-        self.assertIn('End without more tools using exactly', r.stderr)
+        self.assertIn('EXECUTOR_CLOSEOUT:', r.stderr)
+        self.assertIn('End without more tools.', r.stderr)
+        self.assertIn(line, r.stderr)
 
     def test_stop_hook_active_reentry_only_for_boolean_true(self):
         self.assertEqual(self.stop(stop_hook_active=True).returncode, 0)

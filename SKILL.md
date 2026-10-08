@@ -97,7 +97,9 @@ not an OS sandbox against arbitrary self-written socket clients.
 5. Completion is report-first, callback-second. The executor must actively call
    `cmux_bridge.submit_completion_callback` to send the pack-bound task id,
    nonce and report hash. A written report, screen DONE, prompt echo, or helper
-   exit code is not completion. Missing/mismatched receipts remain unconfirmed.
+   exit code is not callback confirmation or supervisor acceptance. Record report
+   readiness, callback confirmation and bounded business completion separately.
+   Missing/mismatched receipts remain unconfirmed.
    After the original callback returns, use the bounded closeout path below;
    do not turn receipt reconciliation into unlimited executor work.
 6. Independently read raw artifacts before accepting a result. Check current
@@ -113,9 +115,15 @@ attribute delivery failures, and close accepted work without repeated reviews.
 
 Use [executor closeout enforcement](references/executor-closeout-enforcement.md):
 the PreToolUse guard blocks additional tools after a bound report's callback
-attempt has returned. Stop permits its exact honest REPORT_READY handoff without
-manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
-remain separate. Missing/in-flight/changed evidence cannot use this exception.
+attempt has returned. Stop permits its exact honest REPORT_READY handoff, optionally
+followed on the next line by “完成，建议检查 usage: /context” only when the executor's
+bounded task is truly complete. The hook never adds that sentence or confirms
+delivery. Supervisor reconciliation and task acceptance remain separate.
+Missing/in-flight/changed evidence cannot use this exception. Apply the
+[joint completion checks](references/executor-closeout-enforcement.md#报告交接与任务完成不能互相代替)
+to the hook and continuation runner together: REPORT_READY is not a permanent
+completion latch, and a sealed unfinished task belongs to supervisor resolution,
+not repeated continuation prompts. Preserve unknown delivery without resending.
 
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).

@@ -34,7 +34,9 @@ import cmux_hook_identity as hook_identity
 import re
 import stat
 import sys
-from executor_closeout import terminal_report, handoff_line
+from executor_closeout import (
+    terminal_report, honest_closeout, closeout_instructions, superseded,
+)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -581,17 +583,24 @@ def _evaluate_resolved(
     )
     if protocol_ack:
         return True, "fresh bound protocol ACK; this does not complete the task", None
+    workspace, surface = _workspace_key(payload), _surface_key(payload)
+    current_markers = []
     for marker in markers:
-        surface = _surface_key(payload)
-        terminal = terminal_report(marker, _workspace_key(payload), surface)
-        if terminal and final.strip() == handoff_line(terminal):
+        terminal = terminal_report(marker, workspace, surface)
+        if terminal and superseded(terminal, markers, workspace, surface):
+            # The later task owns both callback and evidence-claim checks; the
+            # old report/receipt remain unchanged and unconfirmed.
+            continue
+        current_markers.append(marker)
+        if terminal and honest_closeout(final, terminal):
             # Honest report handoff is turn-end, never callback confirmation.
             continue
         callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
         if not callback_ok:
             if terminal:
-                callback_msg += ("; original attempt returned. End without more tools "
-                                 "using exactly:\n" + handoff_line(terminal))
+                callback_msg = ("EXECUTOR_CLOSEOUT: " + callback_msg
+                                + "; original attempt returned. End without more "
+                                "tools. " + closeout_instructions(terminal))
             return False, callback_msg, marker
 
     claims = _positive_evidence_claims(final)
@@ -604,7 +613,7 @@ def _evaluate_resolved(
     # With concurrent collaborations, block when ANY armed artifact tree
     # contradicts the claim; allow only when every armed task's evidence holds.
     last_msg = ""
-    for marker in markers:
+    for marker in current_markers:
         contradicted, why = _contradicts_disk(marker, claims)
         if contradicted:
             return False, why, marker
@@ -648,6 +657,19 @@ def _block(message: str, marker_hint: str) -> int:
             "report, and callback evidence. The supervisor must diagnose caller "
             "identity resolution before retrying this gate. This result does "
             "not judge the final message or confirm callback delivery.\n"
+        )
+        return 2
+    # A returned original attempt: transport recovery advice would contradict
+    # the PreToolUse seal and invite a duplicate callback.
+    if message.startswith("EXECUTOR_CLOSEOUT:"):
+        sys.stderr.write(
+            "cmux executor closeout Stop guard blocked turn-end.\n"
+            f"{message}\n\n"
+            "The report is frozen and the original callback attempt returned. "
+            "Do not resend, reconcile, test, edit, or call more tools; the "
+            "supervisor reconciles that original attempt. This block is not "
+            "callback confirmation and does not complete the task.\n"
+            f"  (armed marker: {marker_hint})\n"
         )
         return 2
     # Callback transport failures are not failed plan-consensus rounds.
