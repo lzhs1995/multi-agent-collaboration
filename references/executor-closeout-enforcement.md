@@ -27,6 +27,13 @@ STATUS: REPORT_READY TASK_ID=<原task_id> CALLBACK_UNCONFIRMED REPORT=<原报告
 原尝试。下一任务前先安全结案/disarm；不能为绕过封口重写报告或另造 marker。
 如果工作尚未完成，不要提前发完成回调；需要补充工作，由主管给明确的新范围。
 
+封口只作用于仍 armed 的当前任务，不证明 API 失败，也不永久禁止后续授权工作。
+核收及 disarm 后，主管沿原 bridge 同步结论、下一动作/依赖及负责人；通知待核
+不改变已经 confirmed 的原回调。新用户询问时以实际新证据回答，不重复旧 recap、
+不让用户替已有主管通道转话。具体交接见
+[核收后反馈规则](efficiency-and-closeout.md#核收后把结论和下一步交回执行者)。
+本次 hook 只补充收口指引；精确交接模板、返回码、证据门槛及 disarm 权限不变。
+
 ## 握手和派单不再拖住主线
 
 使用原健康会话。首次挑战只含身份、固定 skill 和 pending receipt 路径；
