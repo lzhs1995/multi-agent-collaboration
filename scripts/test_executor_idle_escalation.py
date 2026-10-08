@@ -88,12 +88,28 @@ class IdleEscalationTests(unittest.TestCase):
         (directory / f'tier-{tier}.json').write_text(json.dumps(dict(
             tier=tier, recorded_at=recorded_at, outcome='NO_INPUT')))
 
+    def watcher(self, pid=None, beat_ago=0):
+        path = idle._watcher_path(self.marker, self.executor)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(dict(pid=os.getppid() if pid is None else pid,
+                                        heartbeat_at=time.time() - beat_ago)))
+        return path
+
     # --- ladder shape -------------------------------------------------------
-    def test_ladder_is_increasing_with_non_decreasing_gaps(self):
-        self.assertTrue(all(a < b for a, b in zip(idle.LADDER_SECONDS, idle.LADDER_SECONDS[1:])))
-        g = idle.gaps()
-        self.assertTrue(all(a <= b for a, b in zip(g, g[1:])), g)
-        self.assertEqual(sum(g), idle.LADDER_SECONDS[-1])
+    def test_repeats_are_never_tighter_than_the_first_gap(self):
+        self.assertGreaterEqual(idle.REPEAT_SECONDS, idle.FIRST_SECONDS)
+        self.assertEqual(idle.gap(1), idle.FIRST_SECONDS)
+        self.assertEqual({idle.gap(n) for n in range(2, 60)}, {idle.REPEAT_SECONDS})
+        self.assertLess(idle.WATCHER_STALE_SECONDS, idle.FIRST_SECONDS)
+
+    def test_no_tier_cap_repeats_until_reply(self):
+        self.arm(9000)
+        base = time.time() - 50 * idle.REPEAT_SECONDS - 10
+        for tier in range(1, 51):
+            self.record(tier, base + (tier - 1) * idle.REPEAT_SECONDS)
+        status = idle.idle_status(self.marker, self.executor)
+        self.assertEqual(status['due_tier'], 51)
+        self.assertNotIn('exhausted', status)
 
     # --- Stop hook ----------------------------------------------------------
     def test_fresh_arm_allows_turn_end(self):
@@ -101,41 +117,46 @@ class IdleEscalationTests(unittest.TestCase):
         r = self.hook()
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_idle_past_first_tier_blocks_with_escalate_command(self):
+    def test_idle_without_watcher_blocks_with_watch_command(self):
         r = self.hook()
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn('executor idle escalation due', r.stderr)
-        self.assertIn('tier 1/3', r.stderr)
-        self.assertIn('executor_idle_escalation.py escalate --task-id idle-task', r.stderr)
+        self.assertIn('executor_idle_escalation.py watch --task-id idle-task', r.stderr)
+        self.assertIn('nohup', r.stderr)
+        self.assertIn('no watcher record', r.stderr)
         self.assertNotIn('Produce real evidence', r.stderr)
 
-    def test_recorded_tier_allows_until_next_gap(self):
-        self.record(1, time.time())
+    def test_live_watcher_allows_turn_end(self):
+        self.watcher()
         r = self.hook()
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_second_tier_blocks_after_its_gap(self):
-        self.arm(2400)
-        self.record(1, time.time() - 1800)
+    def test_stale_watcher_heartbeat_blocks(self):
+        self.watcher(beat_ago=idle.WATCHER_STALE_SECONDS + 30)
         r = self.hook()
         self.assertEqual(r.returncode, 2, r.stderr)
-        self.assertIn('tier 2/3', r.stderr)
+        self.assertIn('heartbeat is stale', r.stderr)
 
-    def test_late_first_record_cannot_cascade(self):
-        """Idle 70 min but tier 1 just recorded: tier 2 waits its own gap."""
+    def test_dead_watcher_pid_blocks(self):
+        proc = subprocess.Popen(['true'])
+        proc.wait()
+        self.watcher(pid=proc.pid)
+        r = self.hook()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn('is not running', r.stderr)
+
+    def test_recorded_escalation_without_watcher_still_blocks(self):
+        """A one-off escalate is not enough: nothing would ask again after this turn."""
+        self.record(1, time.time())
+        self.assertEqual(self.hook().returncode, 2)
+
+    def test_late_record_cannot_cascade(self):
+        """Idle 70 min but tier 1 just recorded: tier 2 waits a full repeat gap."""
         self.arm(4200)
         self.record(1, time.time())
-        self.assertEqual(self.hook().returncode, 0)
         status = idle.idle_status(self.marker, self.executor)
-        self.assertGreaterEqual(status['next_due_at'], time.time() + idle.gaps()[1] - 5)
-
-    def test_exhausted_ladder_allows_turn_end(self):
-        self.arm(9000)
-        for tier in (1, 2, 3):
-            self.record(tier, time.time() - 5000 + tier)
-        r = self.hook()
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(idle.idle_status(self.marker, self.executor)['exhausted'])
+        self.assertIsNone(status['due_tier'])
+        self.assertGreaterEqual(status['next_due_at'], time.time() + idle.REPEAT_SECONDS - 5)
 
     def test_supervisor_is_not_subject_to_executor_idle_rule(self):
         self.assertEqual(self.hook(surface=self.supervisor).returncode, 0)
@@ -246,6 +267,67 @@ class IdleEscalationTests(unittest.TestCase):
             code, result = idle.wait('idle-task', self.executor, 150, 50,
                                      clock=clock, sleep=lambda s: None)
         self.assertIn(code, (6, 7), result)
+
+    # --- supervisor ack ------------------------------------------------------
+    def test_supervisor_ack_restarts_the_clock(self):
+        result = idle.ack(self.marker, self.executor, self.supervisor)
+        self.assertEqual(result['result'], 'ACKED')
+        self.assertEqual(self.hook().returncode, 0)
+        self.assertIsNone(idle.idle_status(self.marker, self.executor)['due_tier'])
+
+    def test_ack_hold_defers_and_is_capped(self):
+        idle.ack(self.marker, self.executor, self.supervisor, hold_seconds=10**9)
+        status = idle.idle_status(self.marker, self.executor)
+        self.assertLessEqual(status['clock_start'], time.time() + idle.MAX_HOLD_SECONDS + 1)
+        self.assertGreater(status['next_due_at'], time.time() + idle.MAX_HOLD_SECONDS)
+
+    def test_executor_cannot_ack_itself(self):
+        result = idle.ack(self.marker, self.executor, self.executor)
+        self.assertEqual(result['result'], 'REFUSED')
+        self.assertFalse(idle._ack_path(self.marker, self.executor).exists())
+        self.assertEqual(self.hook().returncode, 2)
+
+    # --- watch ---------------------------------------------------------------
+    def test_watch_escalates_then_exits_when_dispatch_arrives(self):
+        bridge = FakeBridge(self.supervisor)
+        def arrive(_seconds):
+            self.assertTrue(idle.watcher_alive(self.marker, self.executor)[0])
+            (self.artifacts / 'task-pack.json').write_text(json.dumps(dict(draft=False)))
+        with mock.patch.object(idle, 'ACTIVE_DIR', self.active):
+            code, result = idle.watch('idle-task', self.executor, 30, bridge, sleep=arrive)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(bridge.sent), 1)
+        self.assertEqual(result['escalations'][0]['result'], 'ESCALATED')
+        self.assertFalse(idle._watcher_path(self.marker, self.executor).exists())
+
+    def test_watch_repeats_every_gap_until_reply(self):
+        bridge = FakeBridge(self.supervisor)
+        now = [time.time()]
+        def sleep(seconds):
+            now[0] += seconds
+        with mock.patch.object(idle, 'ACTIVE_DIR', self.active):
+            code, result = idle.watch('idle-task', self.executor, 60, bridge,
+                                      clock=lambda: now[0], sleep=sleep,
+                                      max_iterations=25)
+        self.assertEqual(code, 7, result)
+        tags = [tag for _, _, tag in bridge.sent]
+        self.assertEqual(len(tags), 3, tags)  # t=0, +600, +1200 of 1500 s simulated
+        self.assertEqual(len(set(tags)), 3)
+        self.assertEqual([r['tier'] for r in result['escalations']], [1, 2, 3])
+
+    def test_second_watcher_exits_instead_of_doubling(self):
+        self.watcher()
+        bridge = FakeBridge(self.supervisor)
+        with mock.patch.object(idle, 'ACTIVE_DIR', self.active):
+            code, result = idle.watch('idle-task', self.executor, 30, bridge,
+                                      sleep=lambda s: None, max_iterations=1)
+        self.assertEqual((code, result['result']), (8, 'ALREADY_WATCHING'))
+        self.assertEqual(bridge.sent, [])
+
+    def test_watch_without_marker_exits(self):
+        with mock.patch.object(idle, 'ACTIVE_DIR', self.root / 'empty'):
+            code, _ = idle.watch('idle-task', self.executor, 30, FakeBridge(self.supervisor))
+        self.assertEqual(code, 3)
 
 
 if __name__ == '__main__':

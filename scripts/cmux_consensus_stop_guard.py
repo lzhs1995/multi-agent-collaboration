@@ -552,26 +552,35 @@ def _completion_callback_evidence(
 def _idle_escalation_evidence(
     marker: dict[str, Any], payload: dict[str, Any]
 ) -> tuple[bool, str]:
-    """An armed executor awaiting dispatch may not end a turn past a due tier."""
+    """An armed executor awaiting dispatch may not end a turn without a live watcher.
+
+    Past FIRST_SECONDS of idle time something must keep asking the supervisor
+    after this turn ends; a turn-scoped ladder would stop exactly when the
+    executor goes quiet.
+    """
     executor = _surface_key(payload) or ""
     if not _current_participant_is_executor(marker, payload):
         return True, "current participant is not this task's executor"
     status = idle_escalation.idle_status(marker, executor)
-    if not status["applicable"] or status["due_tier"] is None:
+    if not status["applicable"] or status["idle_seconds"] < idle_escalation.FIRST_SECONDS:
         return True, "no executor idle escalation is due"
-    tier = status["due_tier"]
+    alive, why = idle_escalation.watcher_alive(marker, executor)
+    if alive:
+        return True, f"executor idle escalation watcher active ({why})"
     script = Path(__file__).with_name("executor_idle_escalation.py")
+    command = (f"python3 -B {script} watch --task-id {marker.get('task_id')} "
+               f"--executor-uuid {executor}")
     return False, (
         f"executor idle escalation due: task {marker.get('task_id')} has had no finalized "
-        f"task pack for {int(status['idle_seconds'] // 60)} min (tier "
-        f"{tier}/{idle_escalation.MAX_TIERS}, {len(status['records'])} recorded). "
-        "Do not dead-wait. Send exactly one new escalation for this tier:\n"
-        f"  python3 -B {script} escalate --task-id {marker.get('task_id')} "
-        f"--executor-uuid {executor}\n"
-        "It journals a new marked message to the supervisor and writes a notice file; "
-        "any transport outcome counts. Never resend an earlier message by hand. Between "
-        "tiers, bounded waiting uses the same script's `wait` command. After the last "
-        "tier, report the block to the user instead of sending more.")
+        f"task pack for {int(status['idle_seconds'] // 60)} min "
+        f"({len(status['records'])} escalations recorded) and no live escalation "
+        f"watcher ({why}). Do not dead-wait. Start the persistent watcher in the "
+        "background, then end the turn:\n"
+        f"  nohup {command} >/dev/null 2>&1 &\n"
+        "It sends a new marked message plus a notice file now and again every "
+        f"{idle_escalation.REPEAT_SECONDS // 60} min until the supervisor replies "
+        "(handshake, pack, marker activity or supervisor `ack`), then exits. Never "
+        "resend an earlier message by hand.")
 
 
 def _evaluate_resolved(

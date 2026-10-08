@@ -17,15 +17,24 @@ message with its own marker sent through the journaled bridge (never a resend
 of an earlier message) plus a notice file in the escalation state directory,
 so a supervisor whose input is unavailable can still pull it.
 
-Bounds: tiers fire at 10/30/60 minutes of idle time, with non-decreasing gaps
-(10, 20, 30 minutes) and at most three escalations per idle clock. A tier is
-never due earlier than its gap after the previous record, so a late first
-escalation cannot cascade into a burst. After the last tier the guard allows
-turn-end; the executor reports the block to the user instead of sending more.
+Repeat until the supervisor replies (user directive 2026-10-08): the first
+escalation is due after FIRST_SECONDS of idle time and every later one
+REPEAT_SECONDS after the previous record. There is no tier cap; the ladder
+ends only when the supervisor replies (handshake receipt, draft or finalized
+pack, marker activity, or an explicit `ack` from the supervisor surface) or
+the marker expires (ttl). A tier is never due earlier than REPEAT_SECONDS after
+the previous record, so a late escalation cannot cascade into a burst.
 
 Escalations are recorded whatever the transport outcome (CONFIRMED,
 SUBMITTED_UNCONFIRMED, NO_INPUT, TRANSPORT_ERROR). The record documents that
-the executor acted; it never claims the supervisor read the message.
+the executor acted; it never claims the supervisor read the message. A
+transport-confirmed escalation is not a reply; only supervisor-side activity
+stops the repeats.
+
+The executor must not depend on its own turns to keep asking: `watch` is a
+persistent local process that escalates whenever a tier is due and exits when
+the supervisor replies. Past FIRST_SECONDS of idle time the Stop guard blocks
+turn-end unless a live watcher (pid alive, fresh heartbeat) covers the task.
 """
 from __future__ import annotations
 
@@ -39,19 +48,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Cumulative idle seconds at which tier 1, 2, 3 become due.
-LADDER_SECONDS = (600, 1800, 3600)
-MAX_TIERS = len(LADDER_SECONDS)
+# Idle seconds before the first escalation, and the spacing of every repeat.
+FIRST_SECONDS = 300
+REPEAT_SECONDS = 600
+# Record files are read contiguously; this only bounds the directory scan
+# (a 6 h ttl at REPEAT_SECONDS needs at most 37).
+MAX_RECORD_SCAN = 10_000
+# A watcher heartbeat older than this is dead whatever its pid says.
+WATCHER_STALE_SECONDS = 180
 ACTIVE_DIR = Path("/tmp/multi-agent-collaboration/_active")
 
 
-def gaps(ladder=LADDER_SECONDS) -> tuple[int, ...]:
-    """Minimum spacing before each tier; the first gap is its own threshold."""
-    return tuple(b - a for a, b in zip((0,) + tuple(ladder), ladder))
+def gap(tier: int) -> int:
+    """Minimum idle/record spacing before ``tier`` (1-based)."""
+    return FIRST_SECONDS if tier == 1 else REPEAT_SECONDS
 
 
 def _state_root() -> Path:
     return Path.home() / ".local/state/multi-agent-collaboration/executor-idle-escalation-v1"
+
+
+def _task_key(marker: dict[str, Any], executor_uuid: str) -> str:
+    """Stable across idle clocks: names the watcher and supervisor ack files."""
+    return hashlib.sha256(json.dumps([
+        str(marker.get("task_id") or ""), str(marker.get("collaboration_id") or ""),
+        executor_uuid.upper()]).encode()).hexdigest()
+
+
+def _ack_path(marker: dict[str, Any], executor_uuid: str) -> Path:
+    return _state_root() / "ack" / f"{_task_key(marker, executor_uuid)}.json"
+
+
+def _watcher_path(marker: dict[str, Any], executor_uuid: str) -> Path:
+    return _state_root() / "watchers" / f"{_task_key(marker, executor_uuid)}.json"
 
 
 def _read_json(path: Path) -> Any:
@@ -108,7 +137,7 @@ def _record_dir(marker: dict[str, Any], executor_uuid: str, clock_start: float) 
 def _records(directory: Path) -> list[dict[str, Any]]:
     """Contiguous tier records 1..k; a gap ends the ladder read (fail closed)."""
     out: list[dict[str, Any]] = []
-    for tier in range(1, MAX_TIERS + 1):
+    for tier in range(1, MAX_RECORD_SCAN + 1):
         value = _read_json(directory / f"tier-{tier}.json")
         if not isinstance(value, dict) or value.get("tier") != tier \
                 or type(value.get("recorded_at")) not in (int, float):
@@ -146,6 +175,10 @@ def idle_status(marker: dict[str, Any], executor_uuid: str,
             starts.append(pack_path.stat().st_mtime)
     except OSError:
         pass
+    ack = _read_json(_ack_path(marker, executor_uuid))
+    if isinstance(ack, dict) and type(ack.get("acked_at")) in (int, float):
+        # A supervisor reply restarts the clock; an optional hold defers it.
+        starts.append(float(ack["acked_at"]) + float(ack.get("hold_seconds") or 0))
     starts = [s for s in starts if s is not None]
     if not starts:
         return dict(status, reason="no timezone-aware supervisor activity timestamp")
@@ -154,15 +187,12 @@ def idle_status(marker: dict[str, Any], executor_uuid: str,
     records = _records(directory)
     status.update(applicable=True, reason="armed executor awaiting dispatch",
                   clock_start=clock_start, idle_seconds=max(0.0, now - clock_start),
-                  record_dir=str(directory), records=records, exhausted=False,
-                  due_tier=None, next_due_at=None)
-    if len(records) >= MAX_TIERS:
-        status["exhausted"] = True
-        return status
+                  record_dir=str(directory), records=records, due_tier=None,
+                  next_due_at=None)
     tier = len(records) + 1
-    due_at = clock_start + LADDER_SECONDS[tier - 1]
+    due_at = clock_start + FIRST_SECONDS
     if records:
-        due_at = max(due_at, float(records[-1]["recorded_at"]) + gaps()[tier - 1])
+        due_at = max(due_at, float(records[-1]["recorded_at"]) + gap(tier))
     status["next_due_at"] = due_at
     if now >= due_at:
         status["due_tier"] = tier
@@ -222,10 +252,13 @@ def escalation_text(marker: dict[str, Any], status: dict[str, Any], tag: str) ->
     minutes = int(status["idle_seconds"] // 60)
     return (f"{tag} | executor {executor.get('surface_ref', '?')} "
             f"({status['executor_uuid']}) is idle on armed task {marker.get('task_id')}: "
-            f"no finalized task pack for {minutes} min. Escalation tier "
-            f"{status['due_tier']}/{MAX_TIERS} (new message, not a resend). Please either "
-            "dispatch the handshake and task pack, or reply with a new scope or cancel. "
-            f"Notice file: {status['notice']}")
+            f"no finalized task pack for {minutes} min. Escalation #{status['due_tier']} "
+            f"(new message, not a resend; repeats every {REPEAT_SECONDS // 60} min until "
+            "you reply). Please dispatch the handshake and task pack, or reply with a new "
+            "scope or cancel. To pause the repeats without dispatching, run from your "
+            f"surface: python3 -B {Path(__file__).resolve()} ack --task-id "
+            f"{marker.get('task_id')} --executor-uuid {status['executor_uuid']} "
+            f"[--hold-seconds N]. Notice file: {status['notice']}")
 
 
 def escalate(marker: dict[str, Any], executor_uuid: str, bridge: Any,
@@ -234,8 +267,6 @@ def escalate(marker: dict[str, Any], executor_uuid: str, bridge: Any,
     status = idle_status(marker, executor_uuid, now)
     if not status["applicable"]:
         return dict(result="NOT_APPLICABLE", reason=status["reason"])
-    if status["exhausted"]:
-        return dict(result="EXHAUSTED", records=len(status["records"]))
     if status["due_tier"] is None:
         return dict(result="NOT_DUE", next_due_at=status["next_due_at"])
     tier = status["due_tier"]
@@ -249,7 +280,8 @@ def escalate(marker: dict[str, Any], executor_uuid: str, bridge: Any,
     record = dict(tier=tier, marker=tag, task_id=marker.get("task_id"),
                   collaboration_id=marker.get("collaboration_id"),
                   executor_uuid=executor_uuid, clock_start=status["clock_start"],
-                  idle_seconds=status["idle_seconds"], recorded_at=time.time(),
+                  idle_seconds=status["idle_seconds"],
+                  recorded_at=time.time() if now is None else now,
                   outcome="SENDING", notice=str(notice))
     # The record is the dispatch lock: it exists before any terminal input, so
     # a crash or a concurrent caller can never produce a second send for a tier.
@@ -292,6 +324,113 @@ def _load_bridge() -> Any:
     return cmux_bridge
 
 
+MAX_HOLD_SECONDS = 7200
+
+
+def ack(marker: dict[str, Any], executor_uuid: str, caller_uuid: str,
+        hold_seconds: float = 0, now: float | None = None) -> dict[str, Any]:
+    """Supervisor reply: restart the executor's idle clock (optionally later).
+
+    Only the marker's supervisor surface may ack; an executor cannot silence
+    its own repeats by declaring that the supervisor answered.
+    """
+    supervisor = _supervisor_row(marker)
+    if supervisor is None or str(supervisor["surface_uuid"]).upper() != caller_uuid.upper():
+        return dict(result="REFUSED", reason="only the marker's supervisor surface may ack")
+    if _executor_row(marker, executor_uuid) is None:
+        return dict(result="REFUSED", reason="executor is not a participant of this marker")
+    hold = max(0.0, min(float(hold_seconds), MAX_HOLD_SECONDS))
+    value = dict(task_id=marker.get("task_id"), executor_uuid=executor_uuid.upper(),
+                 supervisor_uuid=caller_uuid.upper(),
+                 acked_at=time.time() if now is None else now, hold_seconds=hold)
+    path = _ack_path(marker, executor_uuid)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _replace(path, value)
+    return dict(result="ACKED", path=str(path), **value)
+
+
+def _pid_alive(pid: Any) -> bool:
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def watcher_alive(marker: dict[str, Any], executor_uuid: str,
+                  now: float | None = None) -> tuple[bool, str]:
+    """A live watcher has a running pid and a heartbeat newer than the stale bound."""
+    now = time.time() if now is None else now
+    value = _read_json(_watcher_path(marker, executor_uuid))
+    if not isinstance(value, dict):
+        return False, "no watcher record"
+    beat = value.get("heartbeat_at")
+    if type(beat) not in (int, float) or now - beat > WATCHER_STALE_SECONDS:
+        return False, "watcher heartbeat is stale"
+    if not _pid_alive(value.get("pid")):
+        return False, f"watcher pid {value.get('pid')} is not running"
+    return True, f"watcher pid {value['pid']} alive"
+
+
+def watch(task_id: str, executor_uuid: str, poll_seconds: float, bridge: Any = None,
+          clock=time.time, sleep=time.sleep,
+          max_iterations: int | None = None) -> tuple[int, dict[str, Any]]:
+    """Persistent loop: escalate whenever due, exit when the supervisor replies.
+
+    Bounded by the marker ttl (find_marker drops an expired marker). A second
+    watcher for the same task exits immediately instead of doubling sends.
+    """
+    marker = find_marker(task_id, executor_uuid)
+    if marker is None:
+        return 3, dict(result="NO_UNIQUE_MARKER")
+    path = _watcher_path(marker, executor_uuid)
+    alive, _ = watcher_alive(marker, executor_uuid, clock())
+    if alive and (_read_json(path) or {}).get("pid") != os.getpid():
+        return 8, dict(result="ALREADY_WATCHING", watcher=str(path))
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    started = clock()
+    sent: list[dict[str, Any]] = []
+    iterations = 0
+    bridge = _load_bridge() if bridge is None else bridge
+    try:
+        while True:
+            _replace(path, dict(pid=os.getpid(), task_id=task_id,
+                                executor_uuid=executor_uuid.upper(),
+                                started_at=started, heartbeat_at=clock(),
+                                escalations=len(sent)))
+            marker = find_marker(task_id, executor_uuid)
+            if marker is None:
+                return 3, dict(result="MARKER_GONE_OR_EXPIRED", escalations=sent)
+            status = idle_status(marker, executor_uuid, clock())
+            if not status["applicable"]:
+                return 0, dict(result="DISPATCH_ARRIVED_OR_NOT_APPLICABLE",
+                               reason=status["reason"], escalations=sent)
+            if status["due_tier"] is not None:
+                try:
+                    result = escalate(marker, executor_uuid, bridge, clock())
+                except FileExistsError:  # a concurrent escalate owns this tier
+                    result = dict(result="TIER_LOCKED", tier=status["due_tier"])
+                sent.append({k: result.get(k) for k in ("result", "tier", "marker", "outcome")})
+                if result["result"] == "ESCALATED":
+                    continue
+                # Locked or unreadable tier: back off a full poll, never spin.
+                sleep(max(1.0, poll_seconds))
+                continue
+            iterations += 1
+            if max_iterations is not None and iterations >= max_iterations:
+                return 7, dict(result="ITERATIONS_ELAPSED", escalations=sent)
+            # Heartbeat stays well inside WATCHER_STALE_SECONDS.
+            sleep(max(1.0, min(poll_seconds, WATCHER_STALE_SECONDS / 3,
+                               status["next_due_at"] - clock())))
+    finally:
+        if (_read_json(path) or {}).get("pid") == os.getpid():
+            path.unlink(missing_ok=True)
+
+
 def wait(task_id: str, executor_uuid: str, max_seconds: float, poll_seconds: float,
          clock=time.time, sleep=time.sleep) -> tuple[int, dict[str, Any]]:
     """Bounded local polling that returns as soon as the executor must act."""
@@ -303,8 +442,6 @@ def wait(task_id: str, executor_uuid: str, max_seconds: float, poll_seconds: flo
         status = idle_status(marker, executor_uuid, clock())
         if not status["applicable"]:
             return 0, dict(result="DISPATCH_ARRIVED_OR_NOT_APPLICABLE", reason=status["reason"])
-        if status["exhausted"]:
-            return 5, dict(result="EXHAUSTED_REPORT_BLOCKED_TO_USER")
         if status["due_tier"] is not None:
             return 6, dict(result="ESCALATION_DUE", tier=status["due_tier"])
         now = clock()
@@ -317,17 +454,23 @@ def wait(task_id: str, executor_uuid: str, max_seconds: float, poll_seconds: flo
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "escalate", "wait"):
+    for name in ("status", "escalate", "wait", "watch", "ack"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--task-id", required=True)
-        cmd.add_argument("--executor-uuid", default=None)
+        cmd.add_argument("--executor-uuid", default=None, required=(name == "ack"))
+        if name in ("wait", "watch"):
+            cmd.add_argument("--poll-seconds", type=float, default=30)
         if name == "wait":
             cmd.add_argument("--max-seconds", type=float, default=1800)
-            cmd.add_argument("--poll-seconds", type=float, default=30)
+        if name == "ack":
+            cmd.add_argument("--hold-seconds", type=float, default=0)
     args = parser.parse_args(argv)
     executor = (args.executor_uuid or _caller_uuid()).upper()
-    if args.command == "wait":
-        code, result = wait(args.task_id, executor, args.max_seconds, args.poll_seconds)
+    if args.command in ("wait", "watch"):
+        if args.command == "wait":
+            code, result = wait(args.task_id, executor, args.max_seconds, args.poll_seconds)
+        else:
+            code, result = watch(args.task_id, executor, args.poll_seconds)
         print(json.dumps(result, default=str))
         return code
     marker = find_marker(args.task_id, executor)
@@ -336,11 +479,17 @@ def main(argv: list[str] | None = None) -> int:
                               executor_uuid=executor)))
         return 3
     if args.command == "status":
-        print(json.dumps(idle_status(marker, executor), indent=2, default=str))
+        status = idle_status(marker, executor)
+        status["watcher"] = watcher_alive(marker, executor)[1]
+        print(json.dumps(status, indent=2, default=str))
         return 0
+    if args.command == "ack":
+        result = ack(marker, executor, _caller_uuid(), args.hold_seconds)
+        print(json.dumps(result, indent=2, default=str))
+        return 0 if result["result"] == "ACKED" else 4
     result = escalate(marker, executor, _load_bridge())
     print(json.dumps(result, indent=2, default=str))
-    return 0 if result["result"] in ("ESCALATED", "EXHAUSTED") else 4
+    return 0 if result["result"] == "ESCALATED" else 4
 
 
 if __name__ == "__main__":

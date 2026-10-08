@@ -234,12 +234,16 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 ### Executor idle escalation (no dead-waiting)
 
-An armed executor without a finalized task pack must not dead-wait. After 10,
-30 and 60 idle minutes the Stop guard blocks turn-end until the executor runs
-`scripts/executor_idle_escalation.py escalate` for the due tier: one NEW marked
-message through the journaled bridge plus a pull-side notice file, recorded
-whatever the transport outcome. Between tiers use its bounded `wait`. After
-tier 3, report the block to the user and stop sending. Never resend an earlier
+An armed executor without a finalized task pack must not dead-wait; it keeps
+asking until the supervisor replies. Past 5 idle minutes the Stop guard blocks
+turn-end unless a live `scripts/executor_idle_escalation.py watch` process
+(running pid, heartbeat at most 180 s old) covers the task. The watcher sends
+one NEW marked message through the journaled bridge plus a pull-side notice
+file as soon as it is due, then another every 10 minutes, with no cap, recording
+every transport outcome. Delivery is not a reply. Only supervisor-side activity
+stops the repeats: a handshake receipt, a draft or finalized pack, marker
+activity, or the supervisor's own `ack` (optional hold of up to 2 h). The
+watcher exits on reply, dispatch or marker expiry. Never resend an earlier
 message. See [executor idle escalation](references/executor-idle-escalation.md).
 
 ### Stop hook reentry

@@ -22,12 +22,17 @@ completion. The Stop hook rejects a finalized executor task without the receipt.
 
 ## While Waiting For Dispatch
 
-An armed executor with no finalized task pack escalates on a bounded ladder
-(10/30/60 idle minutes) instead of waiting open-ended. The Stop guard enforces
-it; the command and outcomes are in
-[executor idle escalation](executor-idle-escalation.md). Each tier is a new
-marked message plus a notice file, never a resend. After tier 3, report the
-block to the user.
+An armed executor with no finalized task pack must not wait open-ended. Once
+idle for 5 minutes, start the persistent escalation watcher in the background
+and end the turn; the Stop guard blocks turn-end without a live one:
+
+```bash
+nohup python3 -B scripts/executor_idle_escalation.py watch --task-id <id> --executor-uuid <uuid> >/dev/null 2>&1 &
+```
+
+The watcher asks again every 10 minutes until the supervisor replies, each
+time with a new marked message plus a notice file and never a resend. Commands
+and outcomes are in [executor idle escalation](executor-idle-escalation.md).
 
 ## On Receipt
 

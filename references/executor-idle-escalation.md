@@ -23,22 +23,35 @@ the latest supervisor-side activity: marker `armed_at` / `last_activity_at`,
 any `handshake-receipt.json` executor `created_at`, and the draft
 `task-pack.json` mtime. Bare (timezone-less) timestamps are ignored.
 
-| tier | due at idle | min gap after previous record |
-|------|-------------|-------------------------------|
-| 1 | 10 min | 10 min |
-| 2 | 30 min | 20 min |
-| 3 | 60 min | 30 min |
+A supervisor `ack` (below) also counts as activity.
 
-Gaps are non-decreasing; a tier is never due earlier than its gap after the
-previous record, so a late first escalation cannot cascade into a burst.
+Keep asking until the supervisor replies (user directive, 2026-10-08):
 
-When a tier is due, the Stop guard blocks turn-end with the exact command:
+| escalation | due |
+|------------|-----|
+| #1 | 5 min idle |
+| #2, #3, … | 10 min after the previous record, no cap |
+
+An escalation is never due earlier than 10 minutes after the previous record,
+so a late one cannot cascade into a burst. The marker ttl bounds the total
+(6 h ttl gives at most 37).
+
+Asking must not depend on the executor's own turns. Past 5 idle minutes the
+Stop guard blocks turn-end unless a live watcher covers the task (watcher
+record pid running and heartbeat at most 180 s old). The block gives the exact
+command:
 
 ```bash
-python3 -B scripts/executor_idle_escalation.py escalate --task-id <id> --executor-uuid <uuid>
+nohup python3 -B scripts/executor_idle_escalation.py watch --task-id <id> --executor-uuid <uuid> >/dev/null 2>&1 &
 ```
 
-`escalate` sends exactly one escalation for the due tier:
+`watch` loops: heartbeat, re-read the marker, escalate when due, sleep at most
+60 s. It exits 0 when a reply or dispatch arrives, 3 when the marker is gone or
+expired, and 8 immediately if another live watcher already covers the task.
+A recorded one-off `escalate` without a watcher still blocks: nothing would ask
+again after the turn ends.
+
+Each escalation (`escalate`, also callable by hand):
 
 1. Creates `tier-N.json` with `O_EXCL` before any terminal input (the dispatch
    lock; a concurrent or repeated call cannot send twice).
@@ -55,18 +68,29 @@ supervisor read the message. State lives under
 by task, collaboration, executor and idle clock start; new supervisor activity
 opens a fresh ladder.
 
-Between tiers use bounded waiting, not open-ended polling of the supervisor:
+A confirmed delivery is not a reply; the repeats continue until
+supervisor-side activity appears. While the supervisor's input is still
+occupied by an earlier unconfirmed message, later pushes may record
+`NO_INPUT`; the notice files carry them regardless.
+
+## Supervisor reply without dispatch
+
+When the supervisor has seen the request but cannot dispatch yet, it stops the
+repeats from its own surface (the caller must be the marker's supervisor; an
+executor cannot ack itself):
 
 ```bash
-python3 -B scripts/executor_idle_escalation.py wait --task-id <id> --executor-uuid <uuid> --max-seconds 1800
+python3 -B scripts/executor_idle_escalation.py ack --task-id <id> --executor-uuid <executor-uuid> [--hold-seconds 1800]
 ```
 
-Exit 0 = dispatch arrived, 6 = escalation due, 5 = ladder exhausted,
-7 = wait window elapsed, 3 = no unique armed marker.
+The ack restarts the idle clock at `acked_at + hold` (hold capped at 2 h), so
+asking resumes 5 minutes after the hold if nothing else happens.
 
-After tier 3 the guard allows turn-end. The executor reports the block to the
-user (task id, idle minutes, three outcomes, notice paths) and sends nothing
-more for that idle clock.
+## Other commands
+
+`status` prints the idle clock, records, next due time and watcher liveness.
+`wait` is the bounded in-turn poll (exit 0 = dispatch arrived, 6 = escalation
+due, 7 = window elapsed, 3 = no unique armed marker).
 
 ## Boundaries
 
