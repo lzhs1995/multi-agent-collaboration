@@ -132,6 +132,11 @@ the journaled bridge; an occupied compose gets zero input. It keeps asking for u
 to 24 h, until an ack, a newer task dispatch, or an ordinary message from that
 supervisor arrives. The executor Stop admits the handoff only while that pusher
 holds its lock or the request is already answered.
+Any other wait for the supervisor goes through `cmux_idle_pull.py --request`, which
+only the addressed executor may file. While that request is unanswered, the
+executor's Stop is refused with `EXECUTOR_AWAITING_SUPERVISOR`, even on hook
+reentry. The only admitted tool is the exact foreground `cmux_idle_pull.py --wait`.
+It returns ANSWERED, or WAITING after it re-spawns a dead pusher.
 
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).

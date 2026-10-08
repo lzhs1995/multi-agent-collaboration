@@ -9,7 +9,7 @@ from cmux_consensus_stop_guard import (
 )
 from executor_closeout import terminal_report, handoff_line
 from cmux_callback_queue_resume import allowed as queue_resume_allowed
-from cmux_idle_pull import command_for as idle_command_for
+from cmux_idle_pull import command_for as idle_command_for, wait_command as idle_wait_command
 
 
 def idle_pull_allowed(payload, marker):
@@ -23,6 +23,16 @@ def idle_pull_allowed(payload, marker):
         return False
 
 
+def idle_wait_allowed(payload, workspace, surface):
+    """The exact foreground wait the Stop guard demands while the supervisor is silent."""
+    try:
+        tool = payload.get('tool_input', {})
+        return (payload.get('tool_name') == 'Bash' and not tool.get('run_in_background')
+                and tool.get('command') == idle_wait_command(workspace, surface))
+    except (TypeError, KeyError, AttributeError, ValueError):
+        return False
+
+
 def _evaluate_resolved(payload):
     if payload.get('hook_event_name') != 'PreToolUse':
         return True, ''
@@ -33,6 +43,8 @@ def _evaluate_resolved(payload):
             if queue_resume_allowed(payload, marker, evidence):
                 continue
             if idle_pull_allowed(payload, marker):
+                continue
+            if idle_wait_allowed(payload, _workspace_key(payload), surface):
                 continue
             return False, (
                 'EXECUTOR_CLOSEOUT: report frozen; original callback attempt returned. '

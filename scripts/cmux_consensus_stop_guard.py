@@ -627,20 +627,27 @@ def _evaluate_resolved(
 
 
 def _evaluate_with_marker(payload):
-    # Reentry must terminate even if identity discovery is currently unavailable.
-    if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
-            and payload.get("stop_hook_active") is True):
-        return True, "Stop hook reentry; task and callback remain unconfirmed", None
-    # Supervisor side: a pending executor idle request must be dispatched or
-    # explicitly acked before turn-end, so a busy supervisor cannot strand it.
+    reentry = (payload.get("hook_event_name") in ("Stop", "SubagentStop")
+               and payload.get("stop_hook_active") is True)
+    # One caller snapshot serves both inbox checks. Executor side: its own
+    # unanswered request keeps the session alive even on reentry (the user
+    # requires asking until the supervisor answers). Supervisor side: a pending
+    # request must be dispatched or acked before turn-end.
     if idle_pull.any_requests():
         try:
             with hook_identity.evaluation(payload):
-                waiting = idle_pull.pending(_workspace_key(payload), _surface_key(payload) or "")
+                ws, me = _workspace_key(payload), _surface_key(payload) or ""
+                mine = idle_pull.own_pending(ws, me) if me else None
+                waiting = [] if reentry else idle_pull.pending(ws, me)
         except (hook_identity.ERRORS + (ValueError, OSError)):
-            waiting = []  # unresolved caller never wedges unrelated sessions here
+            mine, waiting = None, []  # unresolved caller never wedges unrelated sessions here
+        if mine:
+            return False, idle_pull.executor_wait_message(mine), None
         if waiting:
             return False, idle_pull.supervisor_message(waiting), None
+    # Otherwise reentry must terminate even if identity discovery is unavailable.
+    if reentry:
+        return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
         if not _has_active_markers():
             return True, "no armed multi-agent task — pass through", None

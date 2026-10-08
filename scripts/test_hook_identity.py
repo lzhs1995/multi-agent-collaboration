@@ -16,6 +16,7 @@ import cmux_consensus_stop_guard as stop
 import cmux_executor_closeout_guard as closeout
 import cmux_lease_guard as lease
 import test_executor_closeout as closeout_tests
+import idle_push_fixture
 
 
 class HookIdentityTests(unittest.TestCase):
@@ -161,6 +162,11 @@ class HookIdentityTests(unittest.TestCase):
             self.assertFalse(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
             import cmux_idle_push
             self.assertEqual(cmux_idle_push.spawn(req['workspace_uuid'], req['executor_uuid']), 'STARTED')
+            # 主管未回复前仍拒结束；回复后放行
+            ok, msg = stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))
+            self.assertFalse(ok)
+            self.assertIn('EXECUTOR_AWAITING_SUPERVISOR', msg)
+            idle_push_fixture.supervisor_answers(fixture.home)
             self.assertTrue(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
             self.assertFalse(fixture.receipt.exists())
             after = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}

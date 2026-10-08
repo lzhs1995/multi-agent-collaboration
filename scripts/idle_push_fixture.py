@@ -38,6 +38,18 @@ def calls(log, wait=5.0, count=1):
     return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
 
 
+def supervisor_answers(home):
+    """Stand in for the authenticated supervisor ack (its auth is tested in test_idle_pull)."""
+    import hashlib
+    root = Path(home) / '.local/state/multi-agent-collaboration/idle-requests-v1'
+    for req in root.glob('*/*.json'):
+        if req.name.endswith('.ack.json'):
+            continue
+        sha = hashlib.sha256(req.read_bytes()).hexdigest()
+        req.with_name(req.stem + '.ack.json').write_text(json.dumps(dict(
+            request_sha256=sha, supervisor_uuid='TEST', reason='WAITING_DEPENDENCY: test')))
+
+
 def kill_pushers(home):
     """Terminate every pusher recorded under a private HOME."""
     root = Path(home) / '.local/state/multi-agent-collaboration/idle-push-v1'

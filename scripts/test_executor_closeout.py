@@ -77,10 +77,11 @@ class CloseoutTests(unittest.TestCase):
     def evidence(self):
         return closeout.terminal_report(self.marker, self.workspace, self.surface)
 
-    def hook(self, name, event, final=None, env=None):
+    def hook(self, name, event, final=None, env=None, **extra):
         data = dict(hook_event_name=event, tool_name='Bash',
                     tool_input=dict(command='touch MUST_NOT_RUN'),
                     last_assistant_message=final or self.line, stop_hook_active=False)
+        data.update(extra)
         return subprocess.run(offline_test_hook.command(Path(__file__).with_name(name), self.active),
                               input=json.dumps(data), text=True, capture_output=True,
                               env=env or self.env, timeout=5)
@@ -116,6 +117,16 @@ class CloseoutTests(unittest.TestCase):
         self.assertTrue(self.marker_path.exists())
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
         self.assertEqual(self.idle_pull().returncode, 0)
+        # 主管未回复：不准结束 session，只放行那一条前台等待命令
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('EXECUTOR_AWAITING_SUPERVISOR', r.stderr)
+        wait = idle_pull_mod.wait_command(self.workspace, self.surface)
+        self.assertIn(wait, r.stderr)
+        self.assertEqual(self.pre(tool_input=dict(command=wait)).returncode, 0)
+        self.assertEqual(self.pre(tool_input=dict(command=wait + ' ; true')).returncode, 2)
+        self.assertEqual(self.stop(stop_hook_active=True).returncode, 2)
+        idle_push_fixture.supervisor_answers(self.home)
         self.assertEqual(self.stop().returncode, 0)
         self.assertFalse(self.receipt.exists())
 
@@ -129,6 +140,8 @@ class CloseoutTests(unittest.TestCase):
         self.write(self.attempt_path, self.attempt)
         self.assertEqual(self.stop().returncode, 2)
         self.assertEqual(self.idle_pull().returncode, 0)
+        self.assertEqual(self.stop().returncode, 2)
+        idle_push_fixture.supervisor_answers(self.home)
         self.assertEqual(self.stop().returncode, 0)
         self.assertEqual(self.pre().returncode, 2)
 

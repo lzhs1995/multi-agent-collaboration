@@ -219,6 +219,8 @@ class StopDispatchLifecycleTests(unittest.TestCase):
                                                        '--task-pack', self.pack_path),
                              text=True, capture_output=True, env=self.env, timeout=10)
         self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(self.stop(final=line).returncode, 2)
+        idle_push_fixture.supervisor_answers(self.home)
         self.assertEqual(self.stop(final=line).returncode, 0)
         r = self.stop(final=line + ' extra')
         self.assertEqual(r.returncode, 2)

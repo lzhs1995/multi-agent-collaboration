@@ -178,6 +178,12 @@ class IdlePullTests(unittest.TestCase):
         self.cli('--task-pack', self.pack)
         os.unlink(self.active / self.workspace / 'm.json')  # isolate the inbox rule
         self.assertEqual(self.sup_stop(surface=str(uuid.uuid4()).upper()).returncode, 0)
+        # 执行者自己的请求未获回复：它本人不准停（含重入）
+        r = self.sup_stop(surface=self.executor)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('EXECUTOR_AWAITING_SUPERVISOR', r.stderr)
+        self.assertEqual(self.sup_stop(surface=self.executor, stop_hook_active=True).returncode, 2)
+        self.assertEqual(self.ack_as(self.supervisor), 0, self.last_ack_error)
         self.assertEqual(self.sup_stop(surface=self.executor).returncode, 0)
 
     def test_malformed_request_stays_pending_and_reentry_passes(self):
@@ -219,6 +225,50 @@ class IdlePullTests(unittest.TestCase):
         self.assertFalse(ack.exists())
         self.assertEqual(self.ack_as(self.supervisor), 0, self.last_ack_error)
         self.assertEqual(self.sup_stop().returncode, 0)
+
+    # generic reply request + foreground wait -------------------------------------
+    def request_as(self, surface):
+        env = {k: v for k, v in self.env(surface).items() if k != 'CODEX_THREAD_ID'}
+        others = [x for x in (self.supervisor, self.executor, self.intruder) if x != surface]
+        self.report.write_text('fix ready for review\n')
+        with patch.dict(os.environ, env, clear=True), fake_cmux(self.workspace, [surface] + others, surface), \
+                patch('sys.stdout', new_callable=__import__('io').StringIO) as out, \
+                patch('sys.stderr', new_callable=__import__('io').StringIO) as err:
+            code = idle.main(['--request', '--workspace', self.workspace, '--executor', self.executor,
+                              '--supervisor', self.supervisor, '--supervisor-ref', 'surface:1',
+                              '--report', str(self.report), '--reason', 'MC22 fix ready; please review'])
+        self.last_ack_error = err.getvalue()
+        return code, out.getvalue()
+
+    def test_request_any_time_starts_pusher_and_only_executor_may_file_it(self):
+        self.assertEqual(self.request_as(self.intruder)[0], 2)
+        self.assertIn('REQUEST_CALLER_MISMATCH', self.last_ack_error)
+        self.assertFalse((self.inbox() / (self.executor + '.json')).exists())
+        code, out = self.request_as(self.executor)
+        self.assertEqual(code, 0, self.last_ack_error)
+        self.assertEqual(json.loads(out)['pusher'], 'STARTED')
+        rows = idle_push_fixture.calls(self.calls_log)
+        self.assertEqual(rows[0]['surface'], 'surface:1')
+        os.unlink(self.active / self.workspace / 'm.json')  # isolate the inbox rule
+        # 未回复：执行者不准停；回复后放行
+        self.assertEqual(self.sup_stop(surface=self.executor).returncode, 2)
+        self.assertEqual(self.ack_as(self.supervisor), 0, self.last_ack_error)
+        self.assertEqual(self.sup_stop(surface=self.executor).returncode, 0)
+
+    def test_wait_returns_answer_or_waiting_and_keeps_a_pusher(self):
+        self.callback_attempted()
+        self.cli('--task-pack', self.pack)
+        t = [0.0]
+        with patch.dict(os.environ, {'HOME': str(self.home)}):
+            idle_push_fixture.kill_pushers(self.home)
+            with patch.object(push, 'spawn', return_value='STARTED') as spawn:
+                r = idle.wait(self.workspace, self.executor, seconds=30, poll=10,
+                              clock=lambda: t[0], sleep=lambda x: t.__setitem__(0, t[0] + x))
+            self.assertEqual(r['state'], 'WAITING')
+            self.assertIn(idle.wait_command(self.workspace, self.executor), r['next'])
+            self.assertTrue(spawn.called)  # 催办器死了就重起
+            idle_push_fixture.supervisor_answers(self.home)
+            self.assertEqual(idle.wait(self.workspace, self.executor, seconds=0)['state'], 'ANSWERED')
 
     # detached pusher (real spawn, fake bridge) -------------------------------
     def test_record_spawns_pusher_that_asks_now_and_stops_on_ack(self):

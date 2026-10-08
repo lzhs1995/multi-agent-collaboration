@@ -23,7 +23,7 @@
    - 用 `submit_task_pack` 派发下一包。之后出现一次「本主管→该执行者、晚于请求时间」且 `phase=CONFIRMED` 的 task-dispatch attempt，即自动结清。`NO_INPUT`/`POST_ENTER_OBSERVATION`（排队、未确认送达）不算，请求保持 pending；journal 核收后转 CONFIRMED 才算。
    - `cmux_idle_pull.py --ack <executor> --workspace <ws> --supervisor <me> --reason "WAITING_DEPENDENCY: …"`。ack 绑定请求的 sha，执行者发出新请求后会重新打开。空 reason 和他人代 ack 都会被拒：身份取自现役调用方（`caller_snapshot`+`resolve_snapshot`，与 bridge 发送同一套），必须同工作区且 surface 正是请求里的主管，`--supervisor` 参数不提供身份。不符报 `ACK_CALLER_MISMATCH`，解析失败报 `ACK_CALLER_UNRESOLVED`，都不落 ack。
 
-请求格式损坏时一律视为未结（只给路径，不删除）。`stop_hook_active=true` 时照常放行，不会无限递归。
+请求格式损坏时一律视为未结（只给路径，不删除）。`stop_hook_active=true` 时，主管侧的提醒照常放行，不会无限递归；执行者自己的未回复请求例外，见下文。
 
 ## 反复问直到主管回复（cmux_idle_push）
 
@@ -39,7 +39,26 @@
 - **新请求**（下一任务交付）：同一个催办器发现请求 sha 变了，就从第 1 次重新开始，不会出现新请求无人催办的情况。
 - **状态**：`~/.local/state/multi-agent-collaboration/idle-push-v1/<ws>/<executor>/status.json`（pid、每次的 marker/时刻/结果、ANSWERED/EXHAUSTED），日志写在同目录的 `push.log`。
 - **执行者 Stop**：放行精确 REPORT_READY 行需要同时满足两点：请求与冻结报告绑定，且催办器持有锁或请求已被回复（`ready_for`）。只写了请求、催办器没起来，照样拦截。
-- **测试**：只能通过 `CMUX_IDLE_PUSH_BRIDGE=<假 bridge .py>` 注入。测试用的 `idle_push_fixture.py` 只把调用写进 JSONL，结束时杀掉催办器。
+- **测试**：只能通过 `CMUX_IDLE_PUSH_BRIDGE=<假 bridge .py>` 注入。测试用的 `idle_push_fixture.py` 只把调用写进 JSONL，结束时杀掉催办器。`supervisor_answers(home)` 替主管写绑定 sha 的 ack，仅供测试。
+
+## 任何时候等主管：`--request` 和前台 `--wait`
+
+交接不是唯一需要主管回话的时刻。执行者在任务途中需要主管决定，或者通知在 COMPOSE_OCCUPIED 后没被看到，都不准停下等。规则是：**任何等待都必须走 `--request`**。
+
+1. **登记**：`cmux_idle_pull.py --request --workspace WS --executor EX --supervisor SUP --supervisor-ref <surface> --report <绝对路径> --reason <在等什么>`。
+   - 只认真实调用者：live CLI 解析出的工作区和 surface 必须正好是 `WS`/`EX`，否则报 `REQUEST_CALLER_MISMATCH`。
+   - 写完请求后，启动同一个 60 秒催办器。
+2. **执行者 Stop 一直拦**：只要本执行者还有未回复的请求，Stop 就返回 `EXECUTOR_AWAITING_SUPERVISOR`，并给出唯一一条前台等待命令。
+   - Stop hook 重入（`stop_hook_active`）**照样拦**。
+   - 不受 24 小时上限影响，只有主管回复才放行。
+   - 主管侧的提醒在重入时仍然跳过。
+3. **前台等待**：`rtk proxy <release>/scripts/cmux_idle_pull.py --wait --workspace WS --executor EX`。每次最多等约 100 秒，结果有两种：
+   - 主管已回复：打印 `ANSWERED` 和回复内容。
+   - 尚未回复：打印 `WAITING`，提示原样重跑。如果催办器已经不在跑，会先把它重新拉起。
+
+   封口守卫只放行这条命令本身：必须是前台 Bash，不能后台跑，也不能加 `; true` 之类的尾巴。
+
+这样主管忙只会拖慢回复，不会让会话停下。执行者要么在前台等，要么被 Stop 拦回来；催办器同时每 60 秒再问一次。
 
 ## 边界
 

@@ -254,16 +254,17 @@ def supervisor_message(waiting):
     return "\n".join(lines)
 
 
-def _authenticated_caller(executor):
+def _authenticated_caller(peer):
     """Live (workspace, surface) of the CLI caller, resolved like bridge transport.
 
-    The executor is the binding target, so the caller must be another terminal in
-    the same workspace; CLI arguments never supply identity.
+    The peer (executor for an ack, supervisor for a request) is the binding target,
+    so the caller must be another terminal in the same workspace; CLI arguments
+    never supply identity.
     """
     import cmux_workspace_guard as guard
     try:
         identity, tree, env, _proof = guard.caller_snapshot()
-        binding = guard.resolve_snapshot(identity, tree, _uuid(executor), env=env)
+        binding = guard.resolve_snapshot(identity, tree, _uuid(peer), env=env)
     except guard.WorkspaceScopeError as exc:
         raise ValueError("ACK_CALLER_UNRESOLVED: " + str(exc)) from exc
     return binding["workspace_uuid"], binding["caller_surface_uuid"]
@@ -287,6 +288,85 @@ def ack(workspace, supervisor, executor, reason, now=None):
     return value
 
 
+def request(workspace, executor, supervisor, supervisor_ref, report, reason, now=None):
+    """Executor asks for a reply at any point (idle, fix ready for review, blocked).
+
+    Not bound to a task pack; the live caller must be this executor in the
+    supervisor's workspace. A new request replaces the old one, so an old ack no
+    longer answers it.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("request reason required")
+    report = Path(report)
+    if not report.is_absolute() or not report.is_file() or not report.read_bytes().strip():
+        raise ValueError("absolute non-empty report required")
+    ws, ex, sup = _uuid(workspace), _uuid(executor), _uuid(supervisor)
+    if _authenticated_caller(sup) != (ws, ex):
+        raise ValueError("REQUEST_CALLER_MISMATCH: caller is not this executor")
+    at = time_now(now)
+    value = dict(
+        kind="EXECUTOR_REPLY_REQUEST", schema=1, at_epoch=at,
+        at=dt.datetime.fromtimestamp(at, dt.timezone.utc).isoformat(),
+        workspace_uuid=ws, executor_uuid=ex, supervisor_uuid=sup, supervisor_ref=supervisor_ref,
+        last_task_id=reason.strip()[:200], reason=reason.strip(),
+        report=str(report), report_sha256=_sha(report.read_bytes()),
+        request="Executor waiting; dispatch the next bounded task pack, message, or ack with a reason.",
+        terminal_input_sent=False)
+    path = request_path(ws, ex)
+    _atomic(path, value)
+    return dict(value, path=str(path))
+
+
+def own_pending(workspace, executor):
+    """Executor Stop side: this executor's own request is still unanswered.
+
+    No horizon: the user requires the session to keep asking until the supervisor
+    answers (ack, CONFIRMED dispatch or CONFIRMED message).
+    """
+    import cmux_idle_push as push
+    try:
+        req, _sha, answer = push.current(_uuid(workspace), _uuid(executor))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return None if answer else req
+
+
+def wait_command(workspace, executor):
+    """The one exact foreground wait the Stop and closeout guards admit."""
+    return shlex.join(["rtk", "proxy", str(Path(__file__).resolve()), "--wait",
+                       "--workspace", _uuid(workspace), "--executor", _uuid(executor)])
+
+
+def wait(workspace, executor, seconds=100, poll=5, clock=None, sleep=None):
+    """Wait in the foreground for an answer; keep (or restart) the 60 s pusher meanwhile.
+
+    100 s fits the default 2-minute shell timeout; the Stop guard sends the
+    executor back here until the supervisor answers.
+    """
+    import time
+    import cmux_idle_push as push
+    clock, sleep = clock or time.time, sleep or time.sleep
+    ws, ex = _uuid(workspace), _uuid(executor)
+    deadline = clock() + seconds
+    while True:
+        _req, sha, answer = push.current(ws, ex)
+        if answer:
+            return dict(state="ANSWERED", answer=answer, request_sha256=sha)
+        pusher = "RUNNING" if push.alive(ws, ex) else push.spawn(ws, ex)
+        if clock() >= deadline:
+            return dict(state="WAITING", pusher=pusher, request_sha256=sha,
+                        next="still unanswered; run again: " + wait_command(ws, ex))
+        sleep(poll)
+
+
+def executor_wait_message(req):
+    return ("EXECUTOR_AWAITING_SUPERVISOR: your request to supervisor %s (%s) is unanswered; "
+            "the pusher re-asks it every 60 s. Do not end the session and do not resend by "
+            "hand. Run exactly this foreground wait, and repeat it until it prints ANSWERED:\n%s"
+            % (req.get("supervisor_ref"), req.get("supervisor_uuid"),
+               wait_command(req["workspace_uuid"], req["executor_uuid"])))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--task-pack")
@@ -295,6 +375,11 @@ def main(argv=None):
     p.add_argument("--workspace")
     p.add_argument("--supervisor")
     p.add_argument("--reason")
+    p.add_argument("--request", action="store_true")
+    p.add_argument("--wait", action="store_true")
+    p.add_argument("--executor")
+    p.add_argument("--supervisor-ref")
+    p.add_argument("--report")
     a = p.parse_args(argv)
     try:
         if a.task_pack:
@@ -302,12 +387,18 @@ def main(argv=None):
             # 文件请求之外再起后台催办器：反复问主管，直到派发/消息/ack
             import cmux_idle_push
             result["pusher"] = cmux_idle_push.spawn(result["workspace_uuid"], result["executor_uuid"])
+        elif a.request:
+            result = request(a.workspace, a.executor, a.supervisor, a.supervisor_ref, a.report, a.reason)
+            import cmux_idle_push
+            result["pusher"] = cmux_idle_push.spawn(result["workspace_uuid"], result["executor_uuid"])
+        elif a.wait:
+            result = wait(a.workspace, a.executor)
         elif a.list:
             result = pending(a.workspace, a.supervisor)
         elif a.ack:
             result = ack(a.workspace, a.supervisor, a.ack, a.reason)
         else:
-            p.error("choose --task-pack, --list or --ack")
+            p.error("choose --task-pack, --request, --wait, --list or --ack")
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, KeyError, TypeError) as exc:
