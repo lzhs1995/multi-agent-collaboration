@@ -41,6 +41,7 @@ class HookIdentityTests(unittest.TestCase):
             dict(role='executor', surface_uuid='native-surface')])
         self.write(self.active / 'native.json', self.marker)
         self.write(self.task / 'task-pack.json', dict(draft=False,
+                   report=str(self.task / 'executor-report.md'),
                    completion_receipt=str(self.task / 'receipt.json')))
         self.payload = dict(hook_event_name='Stop', final_message='Report pending')
 

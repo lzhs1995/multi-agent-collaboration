@@ -41,9 +41,11 @@ TTY and live cmux UUID checks, including the process reread after the last tree.
 Tool-shell callers keep their separate matching-thread ancestry requirement.
 
 For ordinary macOS terminals, a root-owned /usr/bin/login can terminate ancestry
-discovery only after exact kernel path, protected file owner/mode and repeated
-PID/birth/path checks. It is a boundary, never a caller; arbitrary foreign
-processes remain errors. Hook resolution shares one 2.5-second monotonic budget
+discovery after exact kernel path, protected file owner/mode and repeated
+PID/birth/path checks. If the initial full BSD read is permission-denied, the
+[stable-child boundary](root-login-permission-boundary.md) permits only this
+protected login using public short BSD reads and its pinned, still-live child.
+Neither form supplies caller identity; arbitrary foreign processes remain errors. Hook resolution shares one 2.5-second monotonic budget
 under the registered five-second Stop timeout. Nested reads cannot extend it,
 and results returned after the deadline are rejected.
 

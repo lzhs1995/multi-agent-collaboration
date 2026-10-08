@@ -117,6 +117,11 @@ attempt has returned. Stop permits its exact honest REPORT_READY handoff without
 manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
 remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
+After verified acceptance/disarm, the supervisor owns
+[closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
+A normal task boundary is not an API failure or a permanent session stop. Use
+current evidence for authorized follow-up; never ask the user to relay to a bound peer.
+
 ### Fast handshake and verified delivery in both directions
 
 - Bridge cleanup must observe an empty compose, not merely the absence of the
@@ -256,3 +261,8 @@ rows cannot veto it. The selected UUID row must still match its actual TTY and
 workspace. Report caller-resolution failures as such, never as Claude identity
 failures. Keep the bridge test bounded to the test token and verify compose is
 clear; keep prompt/callback Enter checks and original-attempt recovery intact.
+
+For an ordinary-terminal Hook stopped by a root login permission denial, use the
+[narrow login boundary](references/root-login-permission-boundary.md). Preserve
+the original session and task; a source fix or process probe is not proof that
+the original executor has resumed.

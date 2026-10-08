@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 import time
 from pathlib import Path
 from cmux_callback_journal import write_json
@@ -104,8 +105,17 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
     key = digest(json.dumps([identity['caller_surface_uuid'], pack['task_id']]))
     journal = root / key
     journal.mkdir(exist_ok=True, mode=0o700)
+    lock_pins = []
+
+    def check_locks():
+        for path, held in lock_pins:
+            current = path.lstat()
+            if (not stat.S_ISREG(current.st_mode)
+                    or (current.st_dev, current.st_ino) != held):
+                raise bridge.TaskPackContractError('DISPATCH_ORIGINAL_LOCK_CHANGED')
 
     def recheck():
+        check_locks()
         current = bridge.pin_workspace(surface)
         if any(current.get(k) != v for k, v in identity.items()):
             raise bridge.TaskPackContractError('DISPATCH_IDENTITY_CHANGED')
@@ -119,11 +129,18 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         for path in (target_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      journal / 'delivery.lock'):
-            lock = stack.enter_context(path.open('a+b'))
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            lock = stack.enter_context(os.fdopen(fd, 'a+b'))
+            held = os.fstat(lock.fileno())
+            if not stat.S_ISREG(held.st_mode):
+                raise bridge.TaskPackContractError('DISPATCH_LOCK_NOT_REGULAR')
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise bridge.TaskPackContractError('DISPATCH_IN_PROGRESS') from exc
+            lock_pins.append((path, (held.st_dev, held.st_ino)))
+        check_locks()
+        delivery_lock_identity = dict(device=held.st_dev, inode=held.st_ino)
         # Never steal a delivery10 attempt or reinterpret its historical state.
         old_key = digest(json.dumps([identity['caller_surface_uuid'], marker], sort_keys=True))
         legacy = root.parent / 'deliveries-v1' / (old_key + '.json')
@@ -133,6 +150,9 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         old = json.loads(attempts[-1].read_text()) if attempts else None
         if old and old.get('binding') != binding:
             raise bridge.TaskPackContractError('DISPATCH_BINDING_CHANGED: preserve original attempt')
+        if (old and old.get('delivery_lock_identity') is not None
+                and old['delivery_lock_identity'] != delivery_lock_identity):
+            raise bridge.TaskPackContractError('DISPATCH_ORIGINAL_LOCK_CHANGED')
         receipt = journal / 'receipt.json'
         if receipt.exists():
             raise bridge.TaskPackContractError('DISPATCH_RECEIPT_EXISTS: no duplicate task')
@@ -155,7 +175,8 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
             if len(attempts) >= 2:
                 raise bridge.TaskPackContractError('DISPATCH_RETRY_BUDGET_EXHAUSTED')
             attempt_path = journal / ('attempt-%04d.json' % (len(attempts) + 1))
-            attempt = dict(binding=binding, phase='PREPARED', events=[], started_at_epoch=time.time())
+            attempt = dict(binding=binding, phase='PREPARED', events=[], started_at_epoch=time.time(),
+                           delivery_lock_identity=delivery_lock_identity)
             write_json(attempt_path, attempt)
 
             def observe(phase, screen=None):
