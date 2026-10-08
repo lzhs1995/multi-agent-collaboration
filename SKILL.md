@@ -142,6 +142,31 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   A marker still in compose is not delivered. A queued marker is pending, not
   failed and not confirmed. Only real receiver activity after the marker can
   confirm delivery; a prompt echo or unrelated activity cannot.
+- **An Enter that arrives during the paste burst becomes a newline.** Measured
+  2026-10-08 (r23 attempt-0001): paste at 0.085 s, Enter at 0.424 s, and at
+  1.329 s the composer still held only a partial prefix. The key was accepted
+  and inserted, so every "I pressed Enter" claim was true and the payload was
+  still undelivered. Settle BEFORE Enter: wait read-only until the compose block
+  stops changing and is not a partial prefix of the payload
+  (`_settle_paste_before_enter`; `CMUX_AGENT_PASTE_SETTLE_READS`,
+  `CMUX_AGENT_PASTE_QUIET_SECONDS`). A settle placed after Enter cannot prevent
+  anything.
+- **The only proof of delivery is the receiver's own transcript.** Screen shape
+  guesses on a busy receiver; a return code, an ACK, a visible nonce and an
+  empty compose are all compatible with a lost payload. Require a genuine user
+  turn whose WHOLE text equals the payload:
+  - Codex `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — `response_item` /
+    `message` / `role=user` with a single `input_text`
+  - Claude `~/.claude/projects/*/*.jsonl` — `type=user` with `message.role=user`,
+    or a `queued_command` attachment when the receiver was mid-turn
+  Verify with `scripts/cmux_native_delivery.py --marker <marker> --since-epoch
+  <attempt started_at_epoch> --payload-sha256 <binding.payload_sha256> --wait 30`
+  (exit 0 RECEIVED, 3 NOT_RECEIVED, 4 RECEIVED_ALTERED). A substring, a quoted
+  marker inside someone else's message, tool output, an assistant echo and a
+  record older than the attempt are all NOT delivery. `cmux_native_delivery_guard.py`
+  runs this on PostToolUse and exits 2 with the recovery path; recovery is one
+  `--recover-stranded` key for messages and `resume_queue_only=True` for
+  callbacks, never a repaste and never a new nonce.
 - `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
   A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
