@@ -1078,6 +1078,39 @@ def _compose_is_partial_payload(screen, text):
     return bool(shown) and shown != full and full.startswith(shown)
 
 
+def _settle_paste_before_enter(surface, text, confirm_lines=200):
+    """Read-only wait until our paste has finished rendering; never sends input.
+
+    Enter is a submit only after the receiver has left its paste burst. The
+    composer must read identically twice and must not be a strict prefix of the
+    payload; then a quiet gap is kept before the caller presses Enter. Bounded:
+    CMUX_AGENT_PASTE_SETTLE_READS reads (default 10, 0 disables) at 0.5 s.
+    Returns the number of reads used.
+    """
+    try:
+        budget = int(os.environ.get("CMUX_AGENT_PASTE_SETTLE_READS", "10"))
+    except ValueError:
+        budget = 10
+    budget = max(0, min(40, budget))
+    previous, used = None, 0
+    while used < budget:
+        time.sleep(0.5)
+        screen = read_screen(surface, lines=confirm_lines)
+        used += 1
+        current = compose_block_text(screen)
+        if (current is not None and current == previous
+                and not _compose_is_partial_payload(screen, text)):
+            break
+        previous = current
+    if budget:
+        try:
+            quiet = float(os.environ.get("CMUX_AGENT_PASTE_QUIET_SECONDS", "0.6"))
+        except ValueError:
+            quiet = 0.6
+        time.sleep(max(0.0, min(3.0, quiet)) if math.isfinite(quiet) else 0.6)
+    return used
+
+
 def _codex_tab_queue_allowed(screen, text):
     """The measured Codex busy composer owning our exact, unchanged payload.
 
@@ -1447,6 +1480,11 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
     if delivery_observer:
         delivery_observer("PASTED")
     time.sleep(float(os.environ.get("CMUX_AGENT_SUBMIT_DELAY", "0.25")))
+    # Measured 2026-10-08 (r23 attempt-0001): Enter left 0.34 s after paste
+    # while Codex was still ingesting it (1.3 s later only "…next_" showed).
+    # An Enter inside the paste burst is inserted as a newline, not a submit.
+    # Wait read-only until the composer stops changing, then a quiet gap.
+    _settle_paste_before_enter(surface, text, confirm_lines)
     if delivery_observer:
         delivery_observer("ENTER_INTENT")
     send_key(surface, "enter")

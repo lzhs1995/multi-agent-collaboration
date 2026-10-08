@@ -209,8 +209,14 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
             before = next(e['screen'] for e in events if e['phase'] == 'PASTE_INTENT')
             if not bridge._delivery_confirmed(before, after, pack['completion_nonce'], pack['completion_callback']):
                 raise bridge.DispatchUnconfirmed('QUEUE_ACTION_UNCONFIRMED: observe original; no more input')
+            # 补过 Tab 也一样要原生记录：队列动作本身不是送达。
+            import cmux_native_gate as gate
+            _, native = gate.require(bridge, pack['completion_nonce'],
+                                     pack['completion_callback'],
+                                     old.get('started_at_epoch') or 0, recoverable=False)
             result = {'confirmed': True, 'retries': 0, 'queue_key': 'tab'}
-            old.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time())
+            old.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time(),
+                       native_delivery=gate.stamp(native, old.get('started_at_epoch') or 0))
             write_json(attempt_path, old)
             evidence = {'reconciled_read_only': False, 'attempt': str(attempt_path)}
         elif reconcile_only:
@@ -273,6 +279,13 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                     delivery_observer=observe)
                 if result.get('confirmed') is not True:
                     raise bridge.DispatchUnconfirmed('callback not confirmed')
+                # 回调不得重发、不得换 nonce，所以这里不自动补键：未在接收端原生记录
+                # 中出现就抛错，后续只能 resume_queue_only 补一次 Tab 再复核。
+                import cmux_native_gate as gate
+                _, native = gate.require(bridge, pack['completion_nonce'],
+                                         pack['completion_callback'],
+                                         attempt['started_at_epoch'], recoverable=False)
+                attempt['native_delivery'] = gate.stamp(native, attempt['started_at_epoch'])
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'

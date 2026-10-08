@@ -193,6 +193,14 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
                                             task_pack_path=task_pack_path, delivery_observer=observe)
                 if result.get('confirmed') is not True:
                     raise bridge.DispatchUnconfirmed('DISPATCH_NOT_CONFIRMED')
+                # 任务包不得重贴、不得换 nonce，所以这里不自动补键：未在接收端原生
+                # 记录中出现就抛错，由原发送器只读核收或向主管报 BLOCKED。
+                import cmux_native_gate as gate
+                _, evidence = gate.require(bridge, marker, text,
+                                           attempt['started_at_epoch'],
+                                           payload_sha256=binding['payload_sha256'],
+                                           recoverable=False)
+                attempt['native_delivery'] = gate.stamp(evidence, attempt['started_at_epoch'])
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'

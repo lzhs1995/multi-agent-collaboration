@@ -2,6 +2,7 @@
 """Offline test entrypoint; capture fixture chatter without hiding failures."""
 import contextlib
 import io
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -23,12 +24,34 @@ class OfflineResult(unittest.TextTestResult):
             "executable": "/offline/test-client", "env": {},
         })
         self.ancestry.start()
+        # Offline fixtures have no live receiver, so the native-delivery gate
+        # cannot be satisfied and is declared OFF for them -- explicitly, so a
+        # fixture pass is never mistaken for proven delivery. NativeGate's own
+        # cases manage this variable themselves and must not be overridden.
+        self.gate = None
+        if type(test).__name__ != "NativeGate":
+            self.gate = patch.dict(os.environ, {"CMUX_NATIVE_GATE": "off"})
+            self.gate.start()
+        # Scripted read_screen sequences predate the pre-Enter paste settle, so
+        # the settle's own reads would consume their side_effect lists. Stub it
+        # for those, but NEVER for the suite that tests the settle itself: a
+        # mock over the method under test makes its assertions vacuous.
+        self.settle = None
+        if type(test).__name__ != "SettleBeforeEnter":
+            import cmux_bridge
+            self.settle = patch.object(cmux_bridge, "_settle_paste_before_enter",
+                                       return_value=0)
+            self.settle.start()
         super().startTest(test)
 
     def stopTest(self, test):
         try:
             super().stopTest(test)
         finally:
+            if self.gate is not None:
+                self.gate.stop()
+            if self.settle is not None:
+                self.settle.stop()
             self.ancestry.stop()
 
 if __name__ == "__main__":
