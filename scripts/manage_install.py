@@ -21,6 +21,7 @@ GUARDS = {
     "cmux_consensus_round_guard": "PreToolUse",
     "cmux_lease_guard": "PreToolUse",
     "cmux_consensus_stop_guard": "Stop",
+    "cmux_executor_idle_guard": "Stop",
     "cmux_submit_confirmation_guard": "PostToolUse",
 }
 
