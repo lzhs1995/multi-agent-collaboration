@@ -1,3 +1,7 @@
+## Unreleased — executor idle pull (2026-10-08)
+
+Executors no longer wait silently after a callback. Before the honest handoff the Stop guard requires one file-only idle request (`scripts/cmux_idle_pull.py --task-pack`), which the closeout guard admits as the single exact command. The supervisor's Stop is blocked while an addressed request is neither followed by a newer task dispatch nor acknowledged with a reason. No terminal input is sent, so a busy supervisor cannot lose the request. See `references/executor-idle-pull.md`.
+
 ## 0.1.1 — 2026-09-26
 
 Check current agent input before sending, preserve user drafts and queued work, and distinguish unmarked submission from confirmed consumption. Preserve original sessions and late-delivery evidence.

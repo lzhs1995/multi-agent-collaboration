@@ -208,6 +208,13 @@ class StopDispatchLifecycleTests(unittest.TestCase):
             phase='NO_INPUT', events=[], started_at_epoch=1.0, ended_at_epoch=2.0,
             error='COMPOSE_OCCUPIED'))
         line = closeout.handoff_line(dict(task_id='life-task', report=str(self.report)))
+        r = self.stop(final=line)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('EXECUTOR_IDLE_PULL_REQUIRED', r.stderr)
+        run = subprocess.run(offline_test_hook.command(HOOK.with_name('cmux_idle_pull.py'), self.active,
+                                                       '--task-pack', self.pack_path),
+                             text=True, capture_output=True, env=self.env, timeout=10)
+        self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(self.stop(final=line).returncode, 0)
         r = self.stop(final=line + ' extra')
         self.assertEqual(r.returncode, 2)

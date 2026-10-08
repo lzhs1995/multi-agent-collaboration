@@ -143,11 +143,23 @@ class HookIdentityTests(unittest.TestCase):
             self.snapshot.return_value = ({}, {}, {'CMUX_WORKSPACE_ID': fixture.workspace,
                                                   'CMUX_SURFACE_ID': fixture.surface}, {})
             self.write(self.active / (fixture.workspace + '.json'), fixture.marker)
+            # 空闲请求写入私有 HOME，不碰真实 ~/.local/state
+            self.stack.enter_context(patch.dict(os.environ, {'HOME': str(fixture.home)}))
+            self.stack.enter_context(patch.object(stop.idle_pull, 'ACTIVE_DIR', self.active))
             before = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
             self.assertFalse(closeout.evaluate(dict(hook_event_name='PreToolUse'))[0])
+            ok, msg = stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))
+            self.assertFalse(ok)
+            self.assertIn('EXECUTOR_IDLE_PULL_REQUIRED', msg)
+            self.assertEqual(before, {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()})
+            stop.idle_pull.record(fixture.pack_path)
             self.assertTrue(stop.evaluate(dict(hook_event_name='Stop', final_message=fixture.line))[0])
             self.assertFalse(fixture.receipt.exists())
-            self.assertEqual(before, {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()})
+            after = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
+            # 只新增空闲请求文件，报告/回执/原 attempt 不变
+            self.assertEqual(before, {p: v for p, v in after.items()
+                                      if p.name != 'executor-idle-request.json'
+                                      and fixture.home not in p.parents})
         finally:
             fixture.doCleanups()
 

@@ -35,6 +35,7 @@ import re
 import stat
 import sys
 from executor_closeout import terminal_report, handoff_line
+import cmux_idle_pull as idle_pull
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -585,7 +586,13 @@ def _evaluate_resolved(
         surface = _surface_key(payload)
         terminal = terminal_report(marker, _workspace_key(payload), surface)
         if terminal and final.strip() == handoff_line(terminal):
-            # Honest report handoff is turn-end, never callback confirmation.
+            # Honest report handoff is turn-end, never callback confirmation,
+            # and never a silent wait: an idle request for this report must exist.
+            if not idle_pull.fresh_for(terminal, _workspace_key(payload), surface):
+                return False, ("EXECUTOR_IDLE_PULL_REQUIRED: before handing off, request the "
+                               "next task with exactly this one command (file-only):\n"
+                               + idle_pull.command_for(Path(marker["artifact_root"]) / "task-pack.json")
+                               + "\nthen end with exactly:\n" + handoff_line(terminal)), marker
             continue
         callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
         if not callback_ok:
@@ -623,6 +630,16 @@ def _evaluate_with_marker(payload):
     if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
             and payload.get("stop_hook_active") is True):
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
+    # Supervisor side: a pending executor idle request must be dispatched or
+    # explicitly acked before turn-end, so a busy supervisor cannot strand it.
+    if idle_pull.any_requests():
+        try:
+            with hook_identity.evaluation(payload):
+                waiting = idle_pull.pending(_workspace_key(payload), _surface_key(payload) or "")
+        except (hook_identity.ERRORS + (ValueError, OSError)):
+            waiting = []  # unresolved caller never wedges unrelated sessions here
+        if waiting:
+            return False, idle_pull.supervisor_message(waiting), None
     try:
         if not _has_active_markers():
             return True, "no armed multi-agent task — pass through", None

@@ -12,6 +12,7 @@ import unittest
 import uuid
 
 import executor_closeout as closeout
+import cmux_idle_pull as idle_pull_mod
 import offline_test_hook
 
 
@@ -57,7 +58,10 @@ class CloseoutTests(unittest.TestCase):
                     dict(phase='POST_ENTER_OBSERVATION', at_epoch=2.0)],
             error='delivery detector unconfirmed', delivery_state='QUEUED')
         self.write(self.attempt_path, self.attempt)
-        self.env = dict(os.environ, CMUX_WORKSPACE_ID=self.workspace, CMUX_SURFACE_ID=self.surface)
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        self.env = dict(os.environ, HOME=str(self.home), CMUX_WORKSPACE_ID=self.workspace,
+                        CMUX_SURFACE_ID=self.surface)
         self.line = closeout.handoff_line(dict(task_id='test-task', report=str(self.report)))
 
     def write(self, path, value):
@@ -77,6 +81,18 @@ class CloseoutTests(unittest.TestCase):
                               input=json.dumps(data), text=True, capture_output=True,
                               env=env or self.env, timeout=5)
 
+    def idle_pull(self):
+        # The exact command the closeout guard admits, run through the real
+        # PreToolUse guard first, then executed with the same private HOME.
+        cmd = idle_pull_mod.command_for(self.pack_path)
+        data = dict(hook_event_name='PreToolUse', tool_name='Bash', tool_input=dict(command=cmd))
+        gate = subprocess.run(offline_test_hook.command(Path(__file__).with_name('cmux_executor_closeout_guard.py'), self.active),
+                              input=json.dumps(data), text=True, capture_output=True, env=self.env, timeout=5)
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+        return subprocess.run(offline_test_hook.command(Path(__file__).with_name('cmux_idle_pull.py'), self.active,
+                                                        '--task-pack', self.pack_path),
+                              text=True, capture_output=True, env=self.env, timeout=5)
+
     def pre(self, **kwargs):
         return self.hook('cmux_executor_closeout_guard.py', 'PreToolUse', **kwargs)
 
@@ -88,10 +104,16 @@ class CloseoutTests(unittest.TestCase):
         self.assertIsNotNone(self.evidence())
         self.assertEqual(self.pre().returncode, 2)
         self.assertIn('EXECUTOR_CLOSEOUT', self.pre().stderr)
-        self.assertEqual(self.stop().returncode, 0)
+        # No silent wait: the honest handoff first requires a file-only idle request.
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('EXECUTOR_IDLE_PULL_REQUIRED', r.stderr)
         self.assertFalse(self.receipt.exists())
         self.assertTrue(self.marker_path.exists())
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        self.assertEqual(self.idle_pull().returncode, 0)
+        self.assertEqual(self.stop().returncode, 0)
+        self.assertFalse(self.receipt.exists())
 
     def test_unknown_cannot_claim_delivery_or_consensus(self):
         for text in ('DONE|test-task|nonce', 'callback confirmed', self.line + ' consensus-validation PASS'):
@@ -101,6 +123,8 @@ class CloseoutTests(unittest.TestCase):
     def test_no_input_return_can_handoff_without_mandatory_retry(self):
         self.attempt.update(phase='NO_INPUT', events=[])
         self.write(self.attempt_path, self.attempt)
+        self.assertEqual(self.stop().returncode, 2)
+        self.assertEqual(self.idle_pull().returncode, 0)
         self.assertEqual(self.stop().returncode, 0)
         self.assertEqual(self.pre().returncode, 2)
 

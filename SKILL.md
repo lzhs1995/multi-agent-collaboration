@@ -117,6 +117,16 @@ attempt has returned. Stop permits its exact honest REPORT_READY handoff without
 manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
 remain separate. Missing/in-flight/changed evidence cannot use this exception.
 
+**No silent wait (hook-enforced).** See [executor idle pull](references/executor-idle-pull.md).
+After its original callback returns, the executor runs one exact file-only
+command, `scripts/cmux_idle_pull.py --task-pack <pack>`, before its REPORT_READY
+handoff. The closeout guard admits only that command, and the Stop guard refuses
+the handoff until a request bound to the frozen report exists. On the supervisor
+side, the Stop guard refuses turn-end while that request is pending. The request
+is settled by a newer task dispatch to that executor, or by `--ack` with a reason
+such as `WAITING_DEPENDENCY`. A busy supervisor delays the next task, but it
+cannot silently strand an executor. The request sends no terminal input.
+
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
 A normal task boundary is not an API failure or a permanent session stop. Use
