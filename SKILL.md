@@ -163,14 +163,29 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
     `message` / `role=user` with a single `input_text`
   - Claude `~/.claude/projects/*/*.jsonl` — `type=user` with `message.role=user`,
     or a `queued_command` attachment when the receiver was mid-turn
+  Select Codex rollouts by mtime over the whole tree: a long-lived session
+  stays under the date it STARTED, so a date-window scan reports NOT_RECEIVED
+  for every delivery to a weeks-old supervisor session.
   Verify with `scripts/cmux_native_delivery.py --marker <marker> --since-epoch
   <attempt started_at_epoch> --payload-sha256 <binding.payload_sha256> --wait 30`
   (exit 0 RECEIVED, 3 NOT_RECEIVED, 4 RECEIVED_ALTERED). A substring, a quoted
   marker inside someone else's message, tool output, an assistant echo and a
-  record older than the attempt are all NOT delivery. `cmux_native_delivery_guard.py`
-  runs this on PostToolUse and exits 2 with the recovery path; recovery is one
-  `--recover-stranded` key for messages and `resume_queue_only=True` for
-  callbacks, never a repaste and never a new nonce.
+  record older than the attempt are all NOT delivery.
+- **No sender may write CONFIRMED without that proof.** All three senders call
+  `cmux_native_gate.require()` before the CONFIRMED phase and the receipt; it
+  raises `DispatchUnconfirmed` when the record is absent, so an unproven
+  delivery leaves no receipt. Disabling it requires `CMUX_NATIVE_GATE=off`,
+  which is stamped into the journal as explicitly NOT proven.
+- **Two kinds of NOT_RECEIVED need opposite handling.** `delivery_state ==
+  DELIVERY_QUEUED_AT_RECEIVER` means the payload sits in the receiver's queued
+  area awaiting its tool boundary: wait and re-verify, because a recovery key
+  would deliver it twice. Only a payload genuinely stranded in compose gets one
+  key (`--recover-stranded`, or `resume_queue_only=True` for callbacks), never a
+  repaste and never a new nonce. `PREPARED`/`NO_INPUT` means the paste was
+  refused before any mutation (receiver compacting), so there is no Enter to
+  recover. Older attempts carry this state only as prose in `error`; match the
+  sender's own wording, not the constant name. `cmux_native_delivery_guard.py`
+  (PostToolUse) and `cmux_send_proof_stop_guard.py` (Stop) enforce this.
 - `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
   A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
