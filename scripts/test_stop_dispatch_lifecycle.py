@@ -64,7 +64,10 @@ class StopDispatchLifecycleTests(unittest.TestCase):
                      identity=dict(workspace_uuid=self.workspace, caller_surface_uuid=self.supervisor,
                                    target_surface_uuid=self.surface, target_pane_uuid='pane'))
         value.update(binding)
+        lock_stat = (self.dispatch / 'delivery.lock').stat()
         self.write(self.dispatch / name, dict(binding=value, phase=phase,
+                                              delivery_lock_identity=dict(device=lock_stat.st_dev,
+                                                                          inode=lock_stat.st_ino),
                                               events=[dict(phase=e, at_epoch=1.0) for e in events],
                                               started_at_epoch=1.0, ended_at_epoch=2.0,
                                               error='COMPOSE_OCCUPIED'))

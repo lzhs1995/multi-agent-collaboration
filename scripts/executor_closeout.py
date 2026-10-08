@@ -108,10 +108,34 @@ def terminal_report(marker, workspace, surface):
                       'QUEUE_TAB_INTENT', 'POST_QUEUE_TAB_OBSERVATION'}
             if not isinstance(events, list) or phase not in phases | {'NO_INPUT', 'CONFIRMED'}:
                 return None
+            effective_end = end
+            if phase in {'QUEUE_TAB_INTENT', 'POST_QUEUE_TAB_OBSERVATION'}:
+                # Older original controllers leave ended_at at the first
+                # uncertain Enter when queue-only continuation also returns
+                # uncertainly. The shared lock above excludes a live sender.
+                # Seal further tools without treating that return as delivery.
+                names = [event['phase'] for event in events]
+                tail = ['QUEUE_TAB_INTENT'] + (
+                    ['POST_QUEUE_TAB_OBSERVATION'] if phase == 'POST_QUEUE_TAB_OBSERVATION' else [])
+                if (names.count('QUEUE_TAB_INTENT') != 1
+                        or names.count('PASTE_INTENT') != 1
+                        or names.count('ENTER_INTENT') != 1
+                        or names.count('POST_ENTER_OBSERVATION') != 1
+                        or 'EXTRA_ENTER_INTENT' in names
+                        or names[-len(tail):] != tail
+                        or names[-len(tail)-1] != 'POST_ENTER_OBSERVATION'):
+                    return None
+                if any(not _number(event['at_epoch']) or event['at_epoch'] > end
+                       for event in events[:-len(tail)]):
+                    return None
+                at = events[-1]['at_epoch']
+                if not _number(at):
+                    return None
+                effective_end = max(end, at)
             previous = start
             for event in events:
                 at = event['at_epoch']
-                if not _number(at) or not previous <= at <= end or event['phase'] not in phases:
+                if not _number(at) or not previous <= at <= effective_end or event['phase'] not in phases:
                     return None
                 previous = at
                 if 'screen' in event or 'screen_sha256' in event:
@@ -141,4 +165,3 @@ def handoff_line(evidence):
     return ('STATUS: REPORT_READY TASK_ID=' + evidence['task_id']
             + ' CALLBACK_UNCONFIRMED REPORT=' + evidence['report']
             + ' supervisor_reconciliation_required')
-

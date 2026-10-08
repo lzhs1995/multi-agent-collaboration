@@ -12,7 +12,7 @@ Stop 强制回执而缺少终态出口会把通信排障变成新一轮工作。
   包括追加测试、记忆、轮询器和重复回调。主管与其他任务的执行者不受该任务封口。
 - `cmux_consensus_stop_guard.py` 允许该终态报告用下面的**精确诚实模板**
   结束 turn。这里不生成 confirmed receipt、不 disarm、不授予共识或论文通过。
-  在途锁、旧结束时间之后又发生的事件、报告/任务包漂移或错误身份均不接受：
+  在途锁、未经限定的结束后事件、报告/任务包漂移或错误身份均不接受：
 
 ```text
 STATUS: REPORT_READY TASK_ID=<原task_id> CALLBACK_UNCONFIRMED REPORT=<原报告绝对路径> supervisor_reconciliation_required
@@ -22,6 +22,21 @@ STATUS: REPORT_READY TASK_ID=<原task_id> CALLBACK_UNCONFIRMED REPORT=<原报告
 原次 NO_INPUT 返回也可交主管处理，不强迫 executor 消耗第二次重试。
 原 journal/锁缺失的旧任务不补造记录；沿原历史证据和已有 SOLO 授权安全收尾。
 已有真实回执的普通结束仍按原 Stop 判据检查。模糊 pending 或伪称送达不能替代模板。
+
+### 原次 Enter 留在输入框时的一次排队接续
+
+原 journal 已记一次粘贴和 Enter，完整原消息仍在接收端输入框、界面要求 Tab
+排队时，执行者封口不能把原控制器唯一的 queue-only 恢复入口也永久封死。
+`cmux_callback_queue_resume.py --task-pack <原绝对路径>` 仅加载原 task pack
+固定的控制器并调用 `resume_queue_only=True`，不粘贴、不 Enter、不迁移 journal。
+PreToolUse 仅放行该脚本的精确同步 `rtk proxy` 命令；环境前缀、shell 尾部、
+其他路径、后台执行、有回执或已经 Tab 的原次均不放行。真实身份、持久锁、
+完整消息和界面是否可排队仍由原控制器在每次输入前核查。
+
+旧控制器若在 queue-only 返回不确定后未更新 `ended_at_epoch`，只接受原前缀
+事件仍在旧结束时间内、尾部仅有一次 `QUEUE_TAB_INTENT` 及可选的
+`POST_QUEUE_TAB_OBSERVATION`。原锁必须已空闲。该状态只允许诚实交接并再次
+封口，不证明送达，也不许可第二次 Tab；原生入站后才由主管核收。
 
 主管在原共享目录直接读固定报告，独立判断可用结论和未决，沿原回执入口核收
 原尝试。下一任务前先安全结案/disarm；不能为绕过封口重写报告或另造 marker。
