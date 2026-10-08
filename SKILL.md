@@ -5,6 +5,20 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+Specify the executor provider on every new preflight: `--executor claude` for
+Claude Code, or a provider on every surface such as `--executor-surface surface:24=claude`.
+The harness rejects omitted providers before discovery or input; it no longer
+silently defaults to Codex. This declaration does not replace live UUID checks
+or the executor's truthful ACK. A wrong-provider challenge is a supervisor
+configuration failure, not executor unavailability: preserve the failed attempt,
+close its marker at the verified terminal boundary, then use a fresh task/nonce
+with the correct provider. Never edit an old receipt or ask the peer to claim a
+false identity. Existing healthy, correctly bound handshakes remain reusable.
+
+For the measured Codex `Queued follow-up inputs` display, see
+[queue classification and bounded recovery](references/queued-followup-inputs.md).
+Queued is pending consumption, never compose failure or confirmed completion.
+
 For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.
@@ -129,6 +143,12 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   is reread, never blindly deleted. ACK waits remain `AWAITING_EXECUTOR_ACK`,
   not terminal failures. See the executable postconditions in
   [efficiency and closeout](references/efficiency-and-closeout.md).
+
+- A clipped Claude footer is not a user draft. Recognize measured git/progress
+  truncation only below a complete bordered editor and known provider footer;
+  preserve identical text inside the editor. Recover a failed probe through
+  [original probe recovery](references/original-probe-recovery.md), retaining the
+  original evidence instead of repeating bridge-test or inventing an ACK.
 
 - Give the executor the absolute pending handshake receipt path in the initial
   challenge. It reads that file and the bound skill, then returns the exact ACK;

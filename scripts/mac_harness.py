@@ -648,7 +648,22 @@ def cmd_surface_inventory(args):
 # identity-gate
 # ---------------------------------------------------------------------------
 
+def _require_executor_provider(args):
+    """Reject an omitted provider before discovery, naming or terminal input."""
+    provider = str(getattr(args, "executor", None) or "").strip()
+    refs = getattr(args, "executor_surface", None) or []
+    if provider:
+        return
+    if refs and all(str(ref).partition("=")[2].strip() for ref in refs):
+        return
+    _fail("EXECUTOR_PROVIDER_REQUIRED — pass --executor claude (or the actual "
+          "provider), or bind every surface as surface:24=claude; no provider "
+          "is inferred from a surface number or title")
+    sys.exit(2)
+
+
 def cmd_identity_gate(args):
+    _require_executor_provider(args)
     root = _artifact_root(args)
     _ensure_root(root, args.task_id)
     me = cmux.whoami()
@@ -672,8 +687,8 @@ def cmd_identity_gate(args):
     # A ref may carry its own provider as `surface:24=claude`. Without that,
     # --executor is one provider for the whole panel, so a Codex+Claude+Grok
     # panel could not be described at all and would be armed as three of
-    # whatever --executor said. A ref with no `=` keeps the --executor default,
-    # so the single-executor command line is unchanged.
+    # whatever --executor said. A ref with no `=` requires explicit --executor;
+    # omission must not silently mislabel a context-bearing Claude as Codex.
     executor_refs = []
     provider_overrides = {}
     for raw_ref in (args.executor_surface or []):
@@ -707,7 +722,7 @@ def cmd_identity_gate(args):
         })
         sys.exit(1)
     executor_ref = executor_refs[0] if executor_refs else ""
-    executor_provider = args.executor or "codex"
+    executor_provider = args.executor or provider_overrides.get(executor_ref)
     spawned = None
 
     if args.spawn_authorized and not args.spawn:
@@ -1376,6 +1391,88 @@ def _empty_idle_agent_screen(screen):
     return (cmux.receiver_input_kind(screen) == "AGENT_TUI" and
             cmux.compose_block_is_empty(screen) and
             not cmux._queued_or_active_input(screen))
+
+
+def cmd_bridge_clear_token(args):
+    """Erase only an owned failed-test token; no paste, Enter, Tab or ACK.
+
+    The exclusive journal is created before the first key and prevents replay
+    after a crash or uncertain key result. Every key requires fresh evidence,
+    current UUIDs, idle input, and the exact expected prefix of the old token.
+    A separate bridge-clear-observe is still required before a handshake.
+    """
+    root = _artifact_root(args)
+    gate = _read(root / "identity-gate.json") or {}
+    journal = root / "bridge-token-cleanup.json"
+    stream = None
+    try:
+        if journal.exists() or journal.is_symlink():
+            raise ValueError("cleanup already attempted; preserve journal and inspect without replay")
+        if any((root / name).exists() for name in ("handshake-receipt.json", "task-pack.json")):
+            raise ValueError("handshake/task already started; do not clear its composer")
+        item, binding = _bridge_clear_binding(args, root, gate)
+        token = json.loads((root / "bridge-test-evidence.json").read_bytes()).get("token")
+        if not isinstance(token, str) or not re.fullmatch(r"B[1-9]\d*_[0-9a-f]{8}", token) or len(token) > 32:
+            raise ValueError("original probe token is invalid")
+
+        def observe(expected=None):
+            _recheck_workspace_gate(gate)
+            screen = cmux.read_screen(item["surface_ref"], lines=args.lines)
+            _recheck_workspace_gate(gate)
+            if _bridge_clear_binding(args, root, gate)[1] != binding:
+                raise ValueError("original probe binding changed; stop cleanup")
+            cmux.require_clearable_agent_input(screen, item["surface_ref"])
+            body = cmux.compose_rendered_text(screen)
+            if body is None or not token.startswith(body) or (expected is not None and body != expected):
+                raise ValueError("composer changed or contains foreign text; stop cleanup")
+            return body, screen
+
+        remaining, first_screen = observe()
+        stream = journal.open("x", encoding="utf-8")
+
+        def event(kind, **fields):
+            stream.write(json.dumps(dict(event=kind, at=_now(), **fields), ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        event("START", **binding, token=token, initial_prefix=remaining,
+              screen_sha256=hashlib.sha256(first_screen.encode("utf-8")).hexdigest())
+        if remaining:
+            keys = ["end"] + ["backspace"] * len(remaining)
+            for key in keys:
+                _, before = observe(remaining)
+                event("KEY_INTENT", key=key, expected_prefix=remaining,
+                      screen_sha256=hashlib.sha256(before.encode("utf-8")).hexdigest())
+                # Recheck again after durable intent, immediately before input.
+                observe(remaining)
+                cmux.send_key(item["surface_ref"], key)
+                event("KEY_RETURNED", key=key)
+                time.sleep(max(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS, 0.1))
+                expected = remaining[:-1] if key == "backspace" else remaining
+                # A delayed screen is reread, never another deletion guessed.
+                for attempt in range(3):
+                    body, after = observe()
+                    if body == expected:
+                        break
+                    if body != remaining or attempt == 2:
+                        raise ValueError("key result is uncertain or composer changed; no further input")
+                    time.sleep(0.15)
+                remaining = expected
+                event("KEY_OBSERVED", key=key, remaining_prefix=remaining,
+                      screen_sha256=hashlib.sha256(after.encode("utf-8")).hexdigest())
+        _, final = observe("")
+        event("EMPTY_OBSERVED", screen=final,
+              screen_sha256=hashlib.sha256(final.encode("utf-8")).hexdigest(),
+              handshake_performed=False)
+        _ok(f"owned probe cleared; original failure preserved; verify via bridge-clear-observe; journal={journal}")
+    except (OSError, ValueError, RuntimeError) as exc:
+        if stream is not None:
+            event("REFUSED", error=str(exc))
+        _fail(str(exc))
+        sys.exit(1)
+    finally:
+        if stream is not None:
+            stream.close()
 
 
 def cmd_bridge_clear_observe(args):
@@ -2113,6 +2210,31 @@ def cmd_finalize_pack(args):
         if not exists:
             problems.append(f"source path does not exist: {path_str}")
 
+    # A scaffold path is not evidence. Check these before dispatch, without
+    # manufacturing attachments for an already-dispatched task. Live identity
+    # authentication remains the responsibility of the existing UUID gates.
+    attachment_entries = []
+    for field, command in (("role_map", "map"), ("pane_inventory", "surface-inventory")):
+        value = pack.get(field)
+        try:
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                raise ValueError("must name an absolute JSON file")
+            path = Path(value)
+            raw = path.read_bytes()
+            document = json.loads(raw)
+            if not isinstance(document, dict) or document.get("task_id") != args.task_id:
+                raise ValueError("must be a JSON object bound to this task_id")
+        except (OSError, ValueError) as exc:
+            problems.append(
+                f"{field}: {exc}; generate real evidence with `{command}` "
+                "for this task and artifact root before finalize-pack"
+            )
+        else:
+            attachment_entries.append({
+                "field": field, "path": str(path),
+                "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
+            })
+
     # 4. Absolute report path, so evidence does not depend on the caller's cwd.
     report = pack.get("report")
     if isinstance(report, str) and report and not Path(report).is_absolute():
@@ -2157,6 +2279,7 @@ def cmd_finalize_pack(args):
                 save_availability(state_file, availability)
     pack["draft"] = False
     pack["source_entries"] = source_entries
+    pack["attachment_entries"] = attachment_entries
     pack["finalized_at"] = _now()
     _write(pack_path, pack)
     _ok(
@@ -3480,6 +3603,7 @@ def cmd_disarm(args):
 # ---------------------------------------------------------------------------
 
 def cmd_preflight(args):
+    _require_executor_provider(args)
     print("=== PREFLIGHT (full acceptance sequence) ===")
     cmd_setup_check(args)
     # Runs first because it is cheap, read-only, and gates the thing every later
@@ -3507,7 +3631,7 @@ def main():
     )
     p.add_argument("command", choices=[
         "doctor", "setup-check", "identity", "surface-inventory",
-        "identity-gate", "name-surfaces", "bridge-test", "bridge-clear-observe", "handshake",
+        "identity-gate", "name-surfaces", "bridge-test", "bridge-clear-token", "bridge-clear-observe", "handshake",
         "validate", "task-pack", "finalize-pack", "map", "receipt", "guard-check",
         "preflight", "helper-parity",
         "record-round", "consensus-check", "disarm",
@@ -3534,7 +3658,8 @@ def main():
     p.add_argument("--reason",        default="")
     p.add_argument("--task-id",          default=DEFAULT_TASK_ID)
     p.add_argument("--supervisor",       default="auto")
-    p.add_argument("--executor",         default="codex")
+    p.add_argument("--executor",         default=None,
+                   help="explicit executor provider; required for discovery unless every surface has =provider")
     p.add_argument("--executor-surface", action="append", default=[],
                    help="repeatable; first is EXECUTOR_1, second EXECUTOR_2, …; "
                         "optional per-ref provider as surface:24=claude")
@@ -3597,6 +3722,7 @@ def main():
         "identity-gate":    cmd_identity_gate,
         "name-surfaces":    cmd_name_surfaces,
         "bridge-test":      cmd_bridge_test,
+        "bridge-clear-token": cmd_bridge_clear_token,
         "bridge-clear-observe": cmd_bridge_clear_observe,
         "handshake":        cmd_handshake,
         "validate":         cmd_validate,

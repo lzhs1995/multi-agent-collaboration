@@ -680,6 +680,23 @@ def delivery_compose_text(screen):
 # Claude editor and its known footer before separating content from chrome.
 _CLAUDE_RUNNING_TOOL_FOOTER_RE = re.compile(r"^\s*◐\s+Bash:\s+\S[^\n]*$", re.I)
 
+# Measured narrow panes can clip the closing git parenthesis with U+2026,
+# both on a separate footer row and inline after the model. Keep this rule
+# inside the complete bordered editor; never strip arbitrary clipped drafts.
+_CLAUDE_GIT_FOOTER = r"[^\n]+\bgit:\((?:[^)\n]*\)[^\n]*|[^)\n]*…)"
+_CLAUDE_MODEL_FOOTER_RE = re.compile(
+    r"^\s*(?:\[claude-[\w.-]+(?:\[\d+m\])?\]|"
+    r"\[(?:Opus|Sonnet|Claude)\s+[^\]]+\])"
+    r"(?:\s*│\s*" + _CLAUDE_GIT_FOOTER + r")?\s*$", re.I)
+_CLAUDE_STATUS_FOOTER_RE = re.compile(
+    r"^\s*(?:" + _CLAUDE_GIT_FOOTER + r"|"
+    r"上下文\s+[^\n]+|\d+\s+CLAUDE\.md\s*\|[^\n]+|"
+    # The progress suffix can be width-clipped. This rule is only used below
+    # a verified editor bottom border; an identical draft remains user text.
+    r"✓\s+[^\n]+|▸\s+.+(?:\(\d+/\d+\)|…)|"
+    r"⏱\ufe0f?\s+\d+h\s+\d+m|◐\s+Bash:\s+[^\n]+|"
+    r"⏵⏵\s+bypass permissions on[^\n]*)\s*$")
+
 
 def _claude_bordered_compose(screen):
     lines = screen.splitlines()
@@ -695,14 +712,9 @@ def _claude_bordered_compose(screen):
     if end is None:
         return None
     footer = [line for line in lines[end + 1:] if line.strip()]
-    model = re.compile(
-        r"^\s*\[claude-[\w.-]+(?:\[\d+m\])?\]"
-        r"(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
-    if not footer or not model.fullmatch(footer[0]):
+    if not footer or not _CLAUDE_MODEL_FOOTER_RE.fullmatch(footer[0]):
         return None
-    if any(not (_COMPOSE_CHROME_RE.fullmatch(line.strip()) or
-                _CLAUDE_RUNNING_TOOL_FOOTER_RE.fullmatch(line))
-           for line in footer[1:]):
+    if any(not _CLAUDE_STATUS_FOOTER_RE.fullmatch(line) for line in footer[1:]):
         return None
     body = [_PROMPT_GLYPH_RE.sub("", lines[start], count=1),
             *lines[start + 1:end]]
@@ -739,9 +751,29 @@ def pending_queue_holds(screen, marker):
     on screen is a different state entirely.
     """
     lines = screen.splitlines()
+    # Measured Codex UI: the queue header precedes the payload, while
+    # "edit last queued message" follows it. Searching only below that footer
+    # misses a successfully queued callback. Never include the next composer.
+    compact_marker = "".join(marker.split())
+    if not compact_marker:
+        return False
+    for index, line in enumerate(lines):
+        if re.fullmatch(r"\s*• Queued follow-up inputs\s*", line):
+            region = []
+            for queued_line in lines[index + 1:]:
+                if _PROMPT_GLYPH_RE.match(queued_line):
+                    break
+                region.append(queued_line)
+            if compact_marker in "".join("\n".join(region).split()):
+                return True
     for index, line in enumerate(lines):
         if _PENDING_QUEUE_RE.search(line):
-            if "".join(marker.split()) in "".join("\n".join(lines[index:]).split()):
+            region = []
+            for queued_line in lines[index:]:
+                if _PROMPT_GLYPH_RE.match(queued_line):
+                    break
+                region.append(queued_line)
+            if compact_marker in "".join("\n".join(region).split()):
                 return True
     return False
 
@@ -1009,14 +1041,21 @@ def _exact_pending_text(screen, text):
     return True
 
 
-def _codex_tab_queue_allowed(screen, text):
-    """Only the measured Codex busy composer with its explicit queue key."""
+def _codex_extra_enter_allowed(screen, text):
+    """Permit one more Enter only for our complete, still-pending Codex input.
+
+    Enter can steer busy/compacting Codex at the next tool boundary. Tab instead
+    defers the message to the end of the whole turn. Neither is consumption.
+    Reconnecting has no measured recovery contract and remains closed.
+    """
+    prompts = [row for row in screen.splitlines() if _PROMPT_GLYPH_RE.match(row)]
+    hint_rows = [row for row in screen.splitlines() if row.lstrip().startswith("tab to ")]
     return bool(
         receiver_input_kind(screen) == "AGENT_TUI"
-        and re.search(r"(?m)^\s*tab to queue message\s*$", screen)
-        and re.search(r"(?m)^\s*›(?:\s|$)", screen)
+        and prompts and prompts[-1].lstrip().startswith("›")
+        and all(re.fullmatch(r"\s*tab to queue message\s*", row) for row in hint_rows)
         and _exact_pending_text(screen, text)
-        and not re.search(r"Compacting context|Reconnecting", screen, re.I)
+        and not re.search(r"\bReconnecting\b", screen, re.I)
         and not pending_queue_holds(screen, text)
     )
 
@@ -1062,6 +1101,26 @@ def _queued_or_active_input(screen):
         return True
     if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):
         return True
+    # A complete bordered Claude editor separates current status from history.
+    # Only its immediately preceding status line can be a live spinner. Skip
+    # the measured /goal indicator, but never search back through a new reply.
+    claude_status = screen
+    if bordered is not None:
+        lines = screen.splitlines()
+        start = max(i for i, line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line))
+        preceding = lines[:start - 1]
+        while preceding and not preceding[-1].strip():
+            preceding.pop()
+        if preceding and re.fullmatch(r"\s*◎\s+/goal\s+active\s+\([^\n()]+\)\s*", preceding[-1]):
+            preceding.pop()
+            while preceding and not preceding[-1].strip():
+                preceding.pop()
+        claude_status = preceding[-1] if preceding else ""
+    # Claude rotates spinner verbs (e.g. Forming/Catapulting). This is only
+    # an input-preservation guard, never delivery/consumption evidence. Done
+    # summaries such as "Sautéed for 44m" lack the live ellipsis.
+    if re.search(r"^[ \t]*[✻✢✳✶✽◐◑◒◓][ \t]+[^\n]*…", claude_status, re.M):
+        return True
     # Claude uses the same glyph for active and completed summaries. Restrict
     # this guard to words that identify live work; "Churned/Brewed/Cooked"
     # summaries must not strand the next prompt in compose.
@@ -1072,7 +1131,7 @@ def _queued_or_active_input(screen):
     return bool(
         re.search(
             rf"^[ \t]*(?:✻|✢|✳|✶|✽|◐|◑|◒|◓)[ \t]+.*(?:{active_words})\b",
-            screen,
+            claude_status,
             re.I | re.M,
         )
     )
@@ -1147,18 +1206,7 @@ def receiver_input_kind(screen):
         # Claude's current idle UI has a bordered editor followed by several
         # status rows. Bind this case to both borders and the complete known
         # footer; an old model banner or unknown trailing row is insufficient.
-        border = re.compile(r"^\s*─{8,}\s*$")
-        model = re.compile(r"^\s*(?:\[claude-[\w.-]+(?:\[\d+m\])?\]|\[(?:Opus|Sonnet|Claude)\s+[^\]]+\])(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
-        footer = re.compile(
-            r"^\s*(?:[^\n]+\bgit:\([^)]*\)[^\n]*|"
-            r"上下文\s+[^\n]+|\d+\s+CLAUDE\.md\s*\|[^\n]+|"
-            r"✓\s+[^\n]+|▸\s+.+\(\d+/\d+\)|"
-            r"⏱\ufe0f?\s+\d+h\s+\d+m|◐\s+Bash:\s+[^\n]+|"
-            r"⏵⏵\s+bypass permissions on[^\n]*)\s*$")
-        if (prompts[-1] > 0 and border.fullmatch(lines[prompts[-1] - 1])
-                and len(tail) >= 4 and border.fullmatch(tail[1])
-                and model.fullmatch(tail[2])
-                and all(footer.fullmatch(row) for row in tail[3:])):
+        if _claude_bordered_compose(clean) is not None:
             return "AGENT_TUI"
         # A historical footer cannot override unknown current input below it.
         # Exactly one measured exception: the provider hint row renders BELOW
@@ -1353,25 +1401,12 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
             "(marker not visible after submit)",
             state=DELIVERY_UNVERIFIED_BY_DETECTOR,
         )
-    # Enter does not queue a message in the measured busy Codex UI. Only
-    # its exact, displayed Tab action and our unchanged full payload authorize
-    # one queue key. Never paste again, press on compaction, or call it consumed.
-    if _codex_tab_queue_allowed(screen, text):
-        if delivery_observer:
-            delivery_observer("QUEUE_TAB_INTENT", screen)
-        send_key(surface, "tab")
-        time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-        screen = read_screen(surface, lines=confirm_lines)
-        if delivery_observer:
-            delivery_observer("POST_QUEUE_TAB_OBSERVATION", screen)
-        if _delivery_confirmed(before, screen, marker, text):
-            return {"confirmed": True, "retries": 0, "queue_key": "tab"}
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(one explicit Tab queue action observed; inspect original, never repaste)",
-            state=classify_submission_failure(screen, marker, submitted=True))
-
-    if _queued_or_active_input(screen):
+    # A complete original payload still in the measured Codex composer may need
+    # one more Enter, including during compaction. Never divert it to the Tab
+    # end-of-turn queue. Claude active input and reconnecting stay protected.
+    if ((_queued_or_active_input(screen)
+         or re.search(r"\bReconnecting\b", screen, re.I))
+            and not _codex_extra_enter_allowed(screen, text)):
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(queued/active input; no blind retry)",
