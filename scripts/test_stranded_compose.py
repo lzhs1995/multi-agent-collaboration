@@ -105,7 +105,9 @@ class PrePasteGateTests(unittest.TestCase):
         idle = "\n".join([WORKING, " ", "› ", FOOTER])
         # Compaction starts between the pre-read and Enter.
         stuck = screen(COMPACTING)
-        with patch.object(b, "read_screen", side_effect=[idle, stuck, stuck]), \
+        # 首读空闲，之后一直是压缩中的原稿（只读等待的读数次数不进入断言）
+        reads = iter([idle])
+        with patch.object(b, "read_screen", side_effect=lambda *a, **k: next(reads, stuck)), \
                 patch.object(b, "send_text"), patch.object(b, "send_key") as key, \
                 patch.object(b.time, "sleep"):
             with self.assertRaises(b.DispatchUnconfirmed) as caught:
@@ -118,7 +120,9 @@ class PrePasteGateTests(unittest.TestCase):
 class MidRenderTests(unittest.TestCase):
     """r23 callback: the post-Enter read showed only a prefix of the payload."""
 
-    def test_partial_render_is_reobserved_then_tab_queued(self):
+    def test_partial_render_is_settled_then_enter_steered(self):
+        # 5f0854f 实测：沉降后的忙碌 Codex 草稿用一次 Enter 引导进当前回合；
+        # Tab 只排队到回合结束（目标钩子下无上界），不再作为首选。
         idle = "\n".join([WORKING, " ", "› ", FOOTER])
         partial = "\n".join([WORKING, " ", "› " + WORDS[:60], "  next_", " ", FOOTER,
                              "  tab to queue message"])
@@ -129,7 +133,7 @@ class MidRenderTests(unittest.TestCase):
                 patch.object(b, "send_text"), patch.object(b, "send_key") as key, \
                 patch.object(b.time, "sleep"):
             result = b._submit_text_once("peer", WORDS, marker=MARKER)
-        self.assertEqual([c.args[1] for c in key.call_args_list], ["enter", "tab"])
+        self.assertEqual([c.args[1] for c in key.call_args_list], ["enter", "enter"])
         self.assertTrue(result["confirmed"])
 
     def test_full_or_foreign_compose_is_not_partial(self):

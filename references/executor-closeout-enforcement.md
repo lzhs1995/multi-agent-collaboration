@@ -38,6 +38,14 @@ PreToolUse 仅放行该脚本的精确同步 `rtk proxy` 命令；环境前缀�
 `POST_QUEUE_TAB_OBSERVATION`。原锁必须已空闲。该状态只允许诚实交接并再次
 封口，不证明送达，也不许可第二次 Tab；原生入站后才由主管核收。
 
+该恢复入口按设计仍用 Tab 排队，**排队到接收端本回合结束的等待时长无上界**
+（goal hook 下实测 72 分钟）。它是在原次已不确定后保住唯一原消息的恢复手段，
+不是现场投递的首选；现场投递由 bridge 在渲染 settle 后按一次 Enter steer。
+`resume_queue_only` 要求原 journal 只有一次 PASTE_INTENT、一次 ENTER_INTENT、
+有 POST_ENTER_OBSERVATION 且没有 TAB 或 EXTRA_ENTER_INTENT，因此 steer 失败
+后的那一次原尝试不可再走 queue-only——与原先 Tab 失败后的处置相同。bridge 的
+两段只读等待不记 observation，原次若在等待期间中断，journal 仍满足该前缀条件。
+
 主管在原共享目录直接读固定报告，独立判断可用结论和未决，沿原回执入口核收
 原尝试。下一任务前先安全结案/disarm；不能为绕过封口重写报告或另造 marker。
 如果工作尚未完成，不要提前发完成回调；需要补充工作，由主管给明确的新范围。

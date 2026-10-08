@@ -14,9 +14,12 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         consumed = glyph + ' ' + prompt + '\n' + activity + '\n' + idle
         return idle, prompt, pending, consumed
 
-    def run_case(self, glyph, screens, expected, keys):
+    def run_case(self, glyph, screens, expected, keys, env=None):
+        # The read-only settle/compaction waits re-read the same screen; bound
+        # them per case so each list of screens is exactly what the code sees.
         _, text, _, _ = self.states(glyph)
-        with patch.object(b, 'read_screen', side_effect=screens), \
+        with patch.dict(b.os.environ, env or {}), \
+                patch.object(b, 'read_screen', side_effect=screens), \
                 patch.object(b, 'send_text') as send, \
                 patch.object(b, 'send_key') as key, patch.object(b.time, 'sleep'):
             if expected:
@@ -50,7 +53,11 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         for glyph in ['›', '❯']:
             with self.subTest(glyph=glyph):
                 idle, _, pending, _ = self.states(glyph)
-                self.run_case(glyph, [idle, '• Compacting context (34s • esc to interrupt)\n'+pending], False, 1)
+                busy = '• Compacting context (34s • esc to interrupt)\n'+pending
+                # Compaction that outlives the bounded wait keeps the draft and
+                # spends no key: one poll, same screen, still unconfirmed.
+                self.run_case(glyph, [idle, busy, busy], False, 1,
+                              env={'CMUX_AGENT_COMPACTION_POLLS': '1'})
 
     def test_unrelated_new_activity_does_not_prove_delivery(self):
         for glyph in ['›', '❯']:
@@ -91,7 +98,10 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 idle, _, _, consumed = self.states(glyph)
                 self.run_case(glyph, [idle, consumed+'\nunknown interpreter'], False, 1)
 
-    def test_codex_explicit_tab_queues_exact_own_payload_once(self):
+    def test_codex_busy_exact_own_payload_gets_one_steer_enter(self):
+        # The busy composer holding our exact payload is steerable. Tab would
+        # only queue until the receiver's turn ends, which a goal hook leaves
+        # unbounded; one Enter steers into the running turn instead.
         idle, text, pending, consumed = self.states('›')
         busy = '• Working (3s • esc to interrupt)\n' + pending + '\ntab to queue message'
         queue = 'Messages to be submitted after next tool call\n' + text + '\n' + idle
@@ -104,10 +114,11 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 else:
                     with self.assertRaises(b.DispatchUnconfirmed):
                         b._submit_text_once('peer', text, marker='unique-marker-20261004')
-                self.assertEqual([c.args for c in key.call_args_list], [('peer', 'enter'), ('peer', 'tab')])
+                self.assertEqual([c.args for c in key.call_args_list],
+                                 [('peer', 'enter'), ('peer', 'enter')])
                 send.assert_called_once()
 
-    def test_tab_never_operates_on_compaction_changed_or_additional_draft(self):
+    def test_no_key_on_compaction_changed_or_additional_draft(self):
         idle, text, pending, _ = self.states('›')
         for change in ['Compacting context', 'Reconnecting', 'extra text', 'GPT-this is my draft']:
             if change in ['Compacting context', 'Reconnecting']:
@@ -116,7 +127,8 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 after = pending.replace('\nGPT-6 high', '\n' + change + '\nGPT-6 high') + '\ntab to queue message'
             after = '• Working (3s • esc to interrupt)\n' + after
             with self.subTest(change=change):
-                self.run_case('›', [idle, after], False, 1)
+                self.run_case('›', [idle, after, after], False, 1,
+                              env={'CMUX_AGENT_COMPACTION_POLLS': '1'})
 
     def test_queue_hint_must_be_exact_and_codex(self):
         for glyph in ['›', '❯']:

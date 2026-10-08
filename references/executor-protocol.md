@@ -164,3 +164,15 @@ excision may leave a second guard still firing.
 ## Blocked Criteria
 
 Use `BLOCKED` only when progress cannot continue without new user input, missing credentials, unavailable external systems, or conflicting requirements. Include the smallest needed unblock request.
+
+## Idle Criteria
+
+Idle is not blocked and not done. When your task is no longer armed and no new
+one has arrived, do not wait silently, do not ask the user to relay a message to
+the supervisor, and do not end the turn into a dead wait. Start the persistent
+ask loop (`executor_ready.py persist`), then end the turn so the supervisor can
+actually dispatch — it cannot while you are inside one. The loop re-asks every
+60 s until a reply reaches you, and the Stop guard refuses the turn while the
+obligation is open and no live loop covers it. Honour a `SOLO` or
+`WAITING_DEPENDENCY` reply's `resume_condition` rather than restarting the loop
+on a timer. See [executor idle](executor-idle-ready.md).

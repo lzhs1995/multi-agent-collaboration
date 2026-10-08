@@ -100,6 +100,12 @@ Do not wait for `supervisor busy=false` as an extra callback prerequisite. Invok
 the guarded entrypoint once and let it assess the input state. Do not manually
 add a Tab-to-queue workaround or interrupt an active command to clear compose.
 
+A busy receiver is not a reason to withhold your own single Enter. The bridge
+settles its own paste, waits out compaction read-only, and then steers on the
+exact unchanged payload. Queueing with Tab defers the message to the end of the
+receiver's turn, which a goal hook leaves unbounded (72 min measured); it is a
+deliberate recovery choice, not the default for a live submission.
+
 ## Close callback work instead of engineering indefinitely
 
 Completion has separate facts: business report accepted, original callback

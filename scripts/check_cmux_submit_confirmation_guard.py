@@ -34,6 +34,15 @@ _FIXTURE_HOME = tempfile.mkdtemp(prefix="submit-guard-check-home-")
 os.environ["HOME"] = _FIXTURE_HOME
 
 import cmux_submit_confirmation_guard as guard  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+
+# 2026-10-09 实测：本文件原先直接扫描宿主机真实 ~/.local/state/multi-agent-collaboration。
+# 01:20:47 的全量运行恰落在本会话一条真实未确认 attempt（01:15:09 写入、caller=本 surface、
+# 900s 窗口内）之后，stranded_attempts 多读一次屏 →「main nested input N」reads=2 假红；
+# 02:24 窗口过期后同一用例又转绿。测试结论不得随宿主机实时状态漂移：整份检查改用空的临时状态根；
+# 第 8 节另有正/负对照证明「一次读」确实由这个隔离根管辖。
+_HERMETIC_STATE = _tempfile.TemporaryDirectory(prefix="submit-guard-state-")
+guard._STATE_ROOT = Path(_HERMETIC_STATE.name)
 
 FAILURES: list[str] = []
 PASSES: list[str] = []
@@ -501,7 +510,7 @@ from unittest.mock import patch
 import cmux_bridge as bridge
 from cmux_delivery_evidence import digest
 
-def isolated_main(payload, screen, *, route=None, pack=None):
+def isolated_main(payload, screen, *, route=None, pack=None, env_extra=None):
     stderr = io.StringIO()
     with tempfile.TemporaryDirectory(prefix="submit-guard-main-") as temporary:
         with contextlib.ExitStack() as stack:
@@ -516,7 +525,8 @@ def isolated_main(payload, screen, *, route=None, pack=None):
             if pack is not None:
                 stack.enter_context(patch.object(bridge, "validate_task_pack_contract", return_value=pack))
             stack.enter_context(patch.dict(os.environ, {"CMUX_SUBMIT_GUARD_DISABLE": "0",
-                                                      "CMUX_SUBMIT_GUARD_ADVISORY": "0"}))
+                                                      "CMUX_SUBMIT_GUARD_ADVISORY": "0",
+                                                      **(env_extra or {})}))
             rc = guard.main()
             audit = Path(temporary) / "audit.jsonl"
             records = [json.loads(s) for s in audit.read_text().splitlines()] if audit.exists() else []
@@ -538,6 +548,31 @@ for index, payload in enumerate(input_shapes, 1):
           rc == 2 and reads == 1 and "未提交" in output
           and records[0]["surfaces"]["surface:42"] == "PENDING_UNSUBMITTED",
           f"rc={rc}, reads={reads}, output={output}")
+
+# 正/负对照：状态根里放一条「新鲜、已按 Enter、未确认」的 attempt。caller 是本 surface 时，
+# stranded_attempts 必须多读一次接收端（reads 1→2）；caller 换成别人则仍只读一次。
+# 若上面「一次读」只是因为 stranded 扫描从未执行，这一对会一起失败。
+PLANTED_CALLER = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+with tempfile.TemporaryDirectory(prefix="submit-guard-planted-") as planted:
+    planted_root = Path(planted)
+    planted_dir = planted_root / "message-dispatch-v1" / "planted"
+    planted_dir.mkdir(parents=True)
+    (planted_dir / "attempt-0001.json").write_text(json.dumps({
+        "phase": "POST_ENTER_OBSERVATION",
+        "binding": {"marker": "PLANTED_MARKER_20261009",
+                    "identity": {"caller_surface_uuid": PLANTED_CALLER,
+                                 "target_surface_uuid": "12345678-1234-1234-1234-123456789ABC"}},
+        "events": [{"phase": "PASTE_INTENT"}, {"phase": "ENTER_SENT"}]}))
+    with patch.object(guard, "_STATE_ROOT", planted_root):
+        _, _, _, own_reads, _ = isolated_main(input_shapes[0], SCREEN_PENDING_CODEX,
+                                              env_extra={"CMUX_SURFACE_ID": PLANTED_CALLER})
+        _, _, _, foreign_reads, _ = isolated_main(
+            input_shapes[0], SCREEN_PENDING_CODEX,
+            env_extra={"CMUX_SURFACE_ID": "FFFFFFFF-0000-0000-0000-000000000000"})
+check("positive control: own fresh unconfirmed attempt costs exactly one extra read",
+      own_reads == 2, f"reads={own_reads}")
+check("negative control: another caller's attempt is not scanned (still one read)",
+      foreign_reads == 1, f"reads={foreign_reads}")
 
 rc, output, records, reads, _ = isolated_main(
     {"tool_input": {"cmd": "rtk proxy pwd"}, "tool_response": {"command": delivery_command}},

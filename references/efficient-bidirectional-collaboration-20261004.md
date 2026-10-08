@@ -20,7 +20,11 @@ supervisor→executor的prompt和executor→supervisor的callback都通过受保
 
 当前bridge粘贴一次并按Enter，随后必须读同一接收端；发送命令成功本身不作送达证据。确认需要：本次新marker关联的新活动、输入框空、marker不在compose或pending queue。排队、已消费、报告已审阅分别记录。若完整待提交文字仍逐字匹配自己的payload，且没有用户新增、排队、压缩或重连，bridge至多补一次Enter，不重新粘贴。
 
-实测Codex忙时可显示`tab to queue message`：仅精确提示、Codex字形、完整自身payload均匹配且没有压缩/重连/队列时，允许一次Tab，之后再读回；进入队列仍不算消费。该路径目前有离线测试，不能称全部真实UI版本均已验证。未知多行输入按用户草稿保护，不通过force清除。
+实测Codex忙时可显示`tab to queue message`。该提示只证明接收端是实测的忙态Codex输入框，不意味着必须按Tab：**Tab只把消息排到接收端本回合结束**，而goal hook下的回合长度无上界（实测72分钟）；同一状态下一次Enter则直接steer进正在跑的回合，原生记录落在同一秒。因此bridge在该状态按Enter而非Tab；`resume_queue_only`恢复路径仍按既有严格条件用Tab（见`original-callback-resume.md`），该路径的排队等待时长同样无上界。
+
+Enter前必须先等自己的粘贴渲染完：忙态Codex分批渲染长payload，渲染中途的Enter会被渲染器吃掉（实测1.6秒后只显示5行中的3行）。bridge因此在首次Enter后做两段**只读**等待——渲染settle与压缩/重连等待（压缩文本出现在265张忙态截屏中的57张，仅1张是陈旧横幅）。两段等待不按任何键、不重新粘贴、不记delivery observation，所以journal的阶段计数不变。等待结束后按与首读相同的顺序重判：排队、已消费、marker可见。接收端忙本身不再是不发自己那一次Enter的理由。
+
+进入队列仍不算消费。该路径目前有离线测试（`scripts/test_codex_busy_settle_steer.py`，截屏取自`verification/fixtures/codex-busy-*-20261008.txt`），不能称全部真实UI版本均已验证。未知多行输入按用户草稿保护，不通过force清除。
 
 ## 回调日志与旧任务收尾
 

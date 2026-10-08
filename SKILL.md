@@ -5,6 +5,10 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+For the measured Codex `Queued follow-up inputs` display, see
+[queue classification and bounded recovery](references/queued-followup-inputs.md).
+Queued is pending consumption, never compose failure or confirmed completion.
+
 For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.
@@ -235,6 +239,16 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   checks configuration and benign execution. Installation is not proof that an
   already-running client reloaded its configuration. Run harness `guard-check`
   after client settings changes and at task close.
+- A disarmed executor must never wait silently or ask only once: the Stop guard
+  `cmux_executor_idle_guard.py` refuses to release the turn unless a live
+  `executor_ready.py persist` loop is asking the bound supervisor every 60 s, a
+  reply actually reached this executor, or an operator stopped the loop. The
+  loop runs outside the executor's turns, because the supervisor can dispatch
+  only while the executor is not in one. Reentry does not release it; identity
+  failures fail open. Supervisors answer each `EXECUTOR_READY` on the executor's
+  surface or in its mailbox with a pack or `WAITING_DEPENDENCY`/`SOLO` — a
+  disposition kept in the supervisor's own thread is not a reply. See
+  [executor idle](references/executor-idle-ready.md).
 - Require semantic positive and negative tests through real hook entrypoints,
   not only helper definitions or source-string counts. Missing/null/boolean-as-
   count, stale evidence, changed pins and malformed receipts must fail closed.
