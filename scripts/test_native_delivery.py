@@ -170,6 +170,26 @@ class NativeProofCriterion(unittest.TestCase):
         result = self._find(text=TEXT)
         self.assertEqual(result["state"], nd.RECEIVED_ALTERED)
 
+    def test_long_session_under_its_start_date_is_found(self):
+        """实测 10-08：ROOT 的会话文件在 sessions/2026/09/29/，仍在追加。"""
+        old = self.home / ".codex/sessions/2026/09/29"
+        old.mkdir(parents=True)
+        self.day = old
+        self._write(_codex(TEXT), name="rollout-2026-09-29T11-54-09-root.jsonl")
+        self.assertEqual(self._find(text=TEXT)["state"], nd.RECEIVED)
+
+    def test_delivery_older_than_fixed_tail_is_still_found(self):
+        """大 compacted 记录把投递推出固定尾窗；窗口须回溯到 since_epoch。"""
+        filler = {"type": "compacted", "timestamp": "2026-10-08T14:05:00.000Z",
+                  "payload": {"message": "x" * 4096}}
+        self._write({"type": "session_meta", "timestamp": "2026-10-08T13:00:00.000Z"},
+                    _codex(TEXT), *([filler] * 64))
+        with patch.object(nd, "TAIL_BYTES", 8192):
+            self.assertEqual(self._find(text=TEXT)["state"], nd.RECEIVED)
+            with patch.object(nd, "MAX_TAIL_BYTES", 8192):
+                self.assertEqual(self._find(text=TEXT)["state"], nd.NOT_RECEIVED,
+                                 "对照：窗口不扩时确实漏判")
+
     def test_empty_transcripts_are_not_received(self):
         self.assertEqual(self._find(text=TEXT)["state"], nd.NOT_RECEIVED)
 
