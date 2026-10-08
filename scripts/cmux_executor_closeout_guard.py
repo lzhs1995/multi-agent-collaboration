@@ -8,6 +8,7 @@ from cmux_consensus_stop_guard import (
 )
 from executor_closeout import terminal_report, handoff_line
 from cmux_callback_queue_resume import allowed as queue_resume_allowed
+from cmux_callback_reconcile import allowed as reconcile_allowed
 
 
 def _evaluate_resolved(payload):
@@ -17,7 +18,8 @@ def _evaluate_resolved(payload):
     for marker in _active_markers(payload):
         evidence = terminal_report(marker, _workspace_key(payload), surface)
         if evidence:
-            if queue_resume_allowed(payload, marker, evidence):
+            if (queue_resume_allowed(payload, marker, evidence)
+                    or reconcile_allowed(payload, marker, evidence)):
                 continue
             return False, (
                 'EXECUTOR_CLOSEOUT: report frozen; original callback attempt returned. '
@@ -28,6 +30,10 @@ def _evaluate_resolved(payload):
                 'user to relay status to the already-bound supervisor. After verified '
                 'disarm, authorized follow-up uses current receipts and disposition, '
                 'not an old recap; this is not a permanent session stop. '
+                'Only two tools stay legal, each once per turn, both read-only on the '
+                'original attempt: cmux_callback_queue_resume.py (one queue Tab) and '
+                'cmux_callback_reconcile.py (zero input). If neither confirms, do not '
+                'retry, wait or poll; end the turn. '
                 'If delivery is not independently confirmed, use exactly:\n'
                 + handoff_line(evidence))
     return True, ''
