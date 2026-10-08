@@ -20,6 +20,15 @@ completion receipt. Do not merely print the callback on the executor surface,
 and do not use raw `cmux send`, `cmux-agent ask`, or `submit_text` for terminal
 completion. The Stop hook rejects a finalized executor task without the receipt.
 
+## While Waiting For Dispatch
+
+An armed executor with no finalized task pack escalates on a bounded ladder
+(10/30/60 idle minutes) instead of waiting open-ended. The Stop guard enforces
+it; the command and outcomes are in
+[executor idle escalation](executor-idle-escalation.md). Each tier is a new
+marked message plus a notice file, never a resend. After tier 3, report the
+block to the user.
+
 ## On Receipt
 
 1. Acknowledge the `TASK_ID`.

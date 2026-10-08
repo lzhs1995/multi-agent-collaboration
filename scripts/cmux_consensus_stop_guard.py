@@ -35,6 +35,7 @@ import re
 import stat
 import sys
 from executor_closeout import terminal_report, handoff_line
+import executor_idle_escalation as idle_escalation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -548,6 +549,31 @@ def _completion_callback_evidence(
     return True, "confirmed completion callback receipt matches pack and report"
 
 
+def _idle_escalation_evidence(
+    marker: dict[str, Any], payload: dict[str, Any]
+) -> tuple[bool, str]:
+    """An armed executor awaiting dispatch may not end a turn past a due tier."""
+    executor = _surface_key(payload) or ""
+    if not _current_participant_is_executor(marker, payload):
+        return True, "current participant is not this task's executor"
+    status = idle_escalation.idle_status(marker, executor)
+    if not status["applicable"] or status["due_tier"] is None:
+        return True, "no executor idle escalation is due"
+    tier = status["due_tier"]
+    script = Path(__file__).with_name("executor_idle_escalation.py")
+    return False, (
+        f"executor idle escalation due: task {marker.get('task_id')} has had no finalized "
+        f"task pack for {int(status['idle_seconds'] // 60)} min (tier "
+        f"{tier}/{idle_escalation.MAX_TIERS}, {len(status['records'])} recorded). "
+        "Do not dead-wait. Send exactly one new escalation for this tier:\n"
+        f"  python3 -B {script} escalate --task-id {marker.get('task_id')} "
+        f"--executor-uuid {executor}\n"
+        "It journals a new marked message to the supervisor and writes a notice file; "
+        "any transport outcome counts. Never resend an earlier message by hand. Between "
+        "tiers, bounded waiting uses the same script's `wait` command. After the last "
+        "tier, report the block to the user instead of sending more.")
+
+
 def _evaluate_resolved(
     payload: dict[str, Any],
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -593,6 +619,9 @@ def _evaluate_resolved(
                 callback_msg += ("; original attempt returned. End without more tools "
                                  "using exactly:\n" + handoff_line(terminal))
             return False, callback_msg, marker
+        idle_ok, idle_msg = _idle_escalation_evidence(marker, payload)
+        if not idle_ok:
+            return False, idle_msg, marker
 
     claims = _positive_evidence_claims(final)
     if not claims:
@@ -648,6 +677,15 @@ def _block(message: str, marker_hint: str) -> int:
             "report, and callback evidence. The supervisor must diagnose caller "
             "identity resolution before retrying this gate. This result does "
             "not judge the final message or confirm callback delivery.\n"
+        )
+        return 2
+    if message.startswith("executor idle escalation due:"):
+        sys.stderr.write(
+            "cmux executor idle Stop guard blocked turn-end.\n"
+            f"{message}\n"
+            "This is not a consensus or callback failure and needs no handshake, "
+            "disarm or resend of an earlier message.\n"
+            f"  (armed marker: {marker_hint})\n"
         )
         return 2
     # Callback transport failures are not failed plan-consensus rounds.

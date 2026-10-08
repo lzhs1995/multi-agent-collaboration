@@ -232,6 +232,16 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 执行[高效握手、多执行者与双向投递](references/efficient-bidirectional-collaboration-20261004.md)：每次Enter后读回；输入框残留、排队与消费分别记录；可能已发送的回调仅只读核收，禁止重贴。
 
+### Executor idle escalation (no dead-waiting)
+
+An armed executor without a finalized task pack must not dead-wait. After 10,
+30 and 60 idle minutes the Stop guard blocks turn-end until the executor runs
+`scripts/executor_idle_escalation.py escalate` for the due tier: one NEW marked
+message through the journaled bridge plus a pull-side notice file, recorded
+whatever the transport outcome. Between tiers use its bounded `wait`. After
+tier 3, report the block to the user and stop sending. Never resend an earlier
+message. See [executor idle escalation](references/executor-idle-escalation.md).
+
 ### Stop hook reentry
 
 Stop/SubagentStop with boolean `stop_hook_active=true` exits successfully before task gates to prevent recursion. This does not confirm callbacks, disarm tasks, or bypass checks on the next normal turn. See [Stop hook lifecycle](references/stop-hook-lifecycle-20261005.md).
