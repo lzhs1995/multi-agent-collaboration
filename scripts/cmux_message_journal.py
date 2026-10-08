@@ -76,7 +76,8 @@ def verified_receipt(bridge, surface, text, marker):
         return None
 
 
-def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=False):
+def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=False,
+            recover_stranded=False):
     if not isinstance(marker, str) or not marker or marker not in text:
         raise bridge.TaskPackContractError('MESSAGE_MARKER_REQUIRED')
     if bridge._looks_like_task_dispatch(text):
@@ -122,7 +123,44 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         if (journal / 'receipt.json').exists():
             raise bridge.TaskPackContractError('MESSAGE_RECEIPT_EXISTS: no duplicate send')
         recheck()
-        if reconcile_only:
+        if recover_stranded:
+            # Enter is not delivery: an earlier attempt pasted once and pressed
+            # Enter, but the payload stayed in the receiver composer. Allow one
+            # extra key on that same attempt, never a second paste.
+            if reconcile_only or not old:
+                raise bridge.TaskPackContractError('NO_STRANDED_MESSAGE')
+            phases = [e['phase'] for e in old.get('events', [])]
+            if (phases.count('PASTE_INTENT') != 1 or 'ENTER_SENT' not in phases
+                    or old.get('phase') == 'CONFIRMED'):
+                raise bridge.TaskPackContractError('NO_STRANDED_MESSAGE')
+            if 'QUEUE_TAB_INTENT' in phases or 'EXTRA_ENTER_INTENT' in phases:
+                raise bridge.TaskPackContractError('STRANDED_RECOVERY_ALREADY_USED: reconcile_only')
+            paste = next(e for e in old['events'] if e['phase'] == 'PASTE_INTENT')
+            if paste.get('screen_sha256') != bridge.screen_hash(paste['screen']):
+                raise bridge.TaskPackContractError('MESSAGE_EVIDENCE_CHANGED')
+            attempt_path, attempt = attempts[-1], old
+
+            def observe_recovery(phase, screen=None):
+                recheck()
+                event = dict(phase=phase, at_epoch=time.time(), recovery='stranded_compose')
+                if screen is not None:
+                    event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
+                attempt['events'].append(event)
+                attempt['phase'] = phase
+                write_json(attempt_path, attempt)
+
+            try:
+                result = bridge.recover_stranded_once(surface, text, marker, paste['screen'],
+                    confirm_lines=confirm_lines, delivery_observer=observe_recovery)
+            except BaseException as exc:
+                attempt['recovery_error'] = str(exc)
+                write_json(attempt_path, attempt)
+                raise
+            if result.get('recovered') == 'already_consumed':
+                observe_recovery('POST_ENTER_OBSERVATION', result.pop('screen'))
+            attempt['phase'] = 'CONFIRMED'
+            write_json(attempt_path, attempt)
+        elif reconcile_only:
             pastes = [e for e in (old or {}).get('events', []) if e['phase'] == 'PASTE_INTENT']
             if len(pastes) != 1:
                 raise bridge.TaskPackContractError('NO_SUBMITTED_MESSAGE')

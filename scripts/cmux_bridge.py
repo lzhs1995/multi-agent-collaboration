@@ -484,6 +484,8 @@ class DispatchUnconfirmed(RuntimeError):
 SUPERVISOR_DID_NOT_SUBMIT = "SUPERVISOR_DID_NOT_SUBMIT"
 SUBMISSION_ABORTED_BUSY = "SUBMISSION_ABORTED_BUSY"
 COMPOSE_OCCUPIED = "COMPOSE_OCCUPIED"
+# Enter was sent but our exact payload is still the receiver's draft.
+STRANDED_IN_COMPOSE = "STRANDED_IN_COMPOSE"
 DELIVERY_UNVERIFIED_BY_DETECTOR = "DELIVERY_UNVERIFIED_BY_DETECTOR"
 DELIVERY_QUEUED_AT_RECEIVER = "DELIVERY_QUEUED_AT_RECEIVER"
 
@@ -865,6 +867,12 @@ def require_exact_composer(screen, surface, text):
         return _require_exact_composer_without_cursor_cell("\n".join(rows), surface, text)
 
 
+def _display_cells(value):
+    return sum(0 if unicodedata.combining(c) else
+               (2 if unicodedata.east_asian_width(c) in "WF" else 1)
+               for c in value)
+
+
 def _require_exact_composer_without_cursor_cell(screen, surface, text):
     """Require the expected visible draft, allowing known bordered hard wrapping.
 
@@ -919,20 +927,34 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
                 continue
             # Preserve every content character. Only the two-column gutter
             # and hard/soft visual row boundaries are renderer-dependent.
+            # Measured 2026-10-08 (C2596 r22 status): Codex word-wraps at a
+            # space and drops that space from both rows, so "only because"
+            # renders as "...only" / "  because...". A single " " separator is
+            # accepted only where the previous row is wide enough that the
+            # next word could not have fit on it (a real word wrap).
+            widest = max((len(row) for row in rows), default=0)
             positions = {0}
+            previous = ""
             for number, part in enumerate(parts):
                 part = part if number == 0 else part[2:]
                 next_positions = set()
+                word = re.match(r"\S+", part) if part else None
+                wrapped = bool(
+                    number and word and previous and not previous[-1].isspace()
+                    and 2 + _display_cells(previous) + 1 + _display_cells(word.group())
+                    > max(widest - 2, 40))
                 for pos in positions:
                     # Empty continuation rows are explicit blank content,
                     # never a soft wrap that can silently disappear.
                     separators = (("",) if number == 0 else
-                                  (("", "\n") if part else ("\n",)))
+                                  (("", "\n", " ") if wrapped else ("", "\n"))
+                                  if part else ("\n",))
                     for sep in separators:
                         chunk = sep + part
                         if text.startswith(chunk, pos):
                             next_positions.add(pos + len(chunk))
                 positions = next_positions
+                previous = part
             if len(text) in positions:
                 return
     if body == text:
@@ -1009,6 +1031,30 @@ def _exact_pending_text(screen, text):
     return True
 
 
+_RECEIVER_UNSUBMITTABLE_RE = re.compile(r"Compacting context|Reconnecting", re.I)
+
+
+def _current_status_region(screen):
+    """Text from the receiver's latest status bullet down to its composer.
+
+    Measured 2026-10-08: a finished "• Compacting context" block stays in
+    scrollback above later "• Working" turns. Judging the whole screen made Tab
+    permanently unavailable and stranded a pasted payload in the composer.
+    Without a status bullet the whole pre-composer screen is used (fail closed).
+    """
+    rows = screen.splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), len(rows))
+    bullet = next((i for i in range(start - 1, -1, -1)
+                   if re.match(r"^\s*•\s", rows[i])), 0)
+    return "\n".join(rows[bullet:start])
+
+
+def receiver_cannot_submit_now(screen):
+    """Codex is compacting/reconnecting: neither Enter nor Tab submits a draft."""
+    return bool(_RECEIVER_UNSUBMITTABLE_RE.search(_current_status_region(screen)))
+
+
 def _codex_tab_queue_allowed(screen, text):
     """Only the measured Codex busy composer with its explicit queue key."""
     return bool(
@@ -1016,7 +1062,7 @@ def _codex_tab_queue_allowed(screen, text):
         and re.search(r"(?m)^\s*tab to queue message\s*$", screen)
         and re.search(r"(?m)^\s*›(?:\s|$)", screen)
         and _exact_pending_text(screen, text)
-        and not re.search(r"Compacting context|Reconnecting", screen, re.I)
+        and not receiver_cannot_submit_now(screen)
         and not pending_queue_holds(screen, text)
     )
 
@@ -1199,8 +1245,11 @@ def require_clearable_agent_input(screen, surface):
 
 
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
-                force_compose=False, delivery_observer=None, *, reconcile_only=False):
+                force_compose=False, delivery_observer=None, *, reconcile_only=False,
+                recover_stranded=False):
     """Journal ordinary messages; task/callback controllers retain their journals."""
+    if recover_stranded and (task_pack_path is not None or delivery_observer is not None):
+        raise TaskPackContractError('RECOVER_STRANDED_MESSAGE_ONLY')
     if delivery_observer is not None:
         if reconcile_only:
             raise TaskPackContractError('RECONCILE_WITH_ORIGINAL_CONTROLLER')
@@ -1213,7 +1262,7 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         raise TaskPackContractError('MESSAGE_PRESERVE_COMPOSE: no forced replacement')
     from cmux_message_journal import deliver
     return deliver(sys.modules[__name__], surface, text, marker, confirm_lines,
-                   reconcile_only=reconcile_only)
+                   reconcile_only=reconcile_only, recover_stranded=recover_stranded)
 
 
 def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
@@ -1246,6 +1295,14 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
         raise DispatchUnconfirmed(
             f"COMPOSE_OCCUPIED surface={surface}; no input sent; preserve existing text",
             state=COMPOSE_OCCUPIED,
+        )
+    if receiver_cannot_submit_now(before):
+        # Measured 2026-10-08: a paste during Codex compaction cannot be
+        # submitted by Enter or Tab; it is stranded in the receiver composer.
+        # Refuse before the first mutation so the attempt stays NO_INPUT.
+        raise DispatchUnconfirmed(
+            f"RECEIVER_COMPACTING surface={surface}; no input sent; retry after compaction",
+            state=SUBMISSION_ABORTED_BUSY,
         )
     if force_compose:
         # The harness enables this supervisor-owned compose replacement by
@@ -1372,6 +1429,16 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
             state=classify_submission_failure(screen, marker, submitted=True))
 
     if _queued_or_active_input(screen):
+        # Enter was sent but our exact payload is still the receiver's draft:
+        # that is STRANDED, not queued and not delivered. Name it so callers
+        # cannot report "queued" and recover with --recover-stranded.
+        if _exact_pending_text(screen, text):
+            raise DispatchUnconfirmed(
+                f"STRANDED_IN_COMPOSE marker={marker} surface={surface} "
+                "(Enter sent but payload still in receiver composer; NOT delivered; "
+                "recover once with --recover-stranded, never repaste)",
+                state=STRANDED_IN_COMPOSE,
+            )
         raise DispatchUnconfirmed(
             f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
             "(queued/active input; no blind retry)",
@@ -1403,6 +1470,66 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
             state=classify_submission_failure(screen, marker, submitted=True),
         )
     return {"confirmed": True, "retries": 1}
+
+
+def recover_stranded_once(surface, text, marker, before, confirm_lines=200,
+                          delivery_observer=None, wait_seconds=None):
+    """Submit an already-pasted, still-pending payload with at most one key.
+
+    Paste is not submission and Enter is not delivery. This never pastes. It
+    waits (bounded) while the receiver is compacting/reconnecting, then sends
+    exactly one key: Tab when Codex shows its exact queue action, otherwise one
+    Enter only on an idle receiver. ``before`` is the original pre-paste screen.
+    """
+    if wait_seconds is None:
+        try:
+            wait_seconds = float(os.environ.get("CMUX_AGENT_STRANDED_WAIT", "300"))
+        except ValueError:
+            wait_seconds = 300.0
+    deadline = time.time() + max(0.0, min(900.0, wait_seconds))
+    while True:
+        screen = read_screen(surface, lines=confirm_lines)
+        if _delivery_confirmed(before, screen, marker, text):
+            return {"confirmed": True, "retries": 0, "recovered": "already_consumed",
+                    "screen": screen}
+        if not _exact_pending_text(screen, text):
+            raise DispatchUnconfirmed(
+                f"COMPOSE_CHANGED surface={surface}; stranded payload not owned; no key",
+                state=COMPOSE_OCCUPIED)
+        if not receiver_cannot_submit_now(screen):
+            break
+        if time.time() >= deadline:
+            raise DispatchUnconfirmed(
+                f"STRANDED_IN_COMPOSE marker={marker} surface={surface} "
+                "(receiver still compacting; no key sent)", state=STRANDED_IN_COMPOSE)
+        time.sleep(5)
+    if _codex_tab_queue_allowed(screen, text):
+        key, intent, observed = "tab", "QUEUE_TAB_INTENT", "POST_QUEUE_TAB_OBSERVATION"
+    elif not _queued_or_active_input(screen):
+        require_agent_input(screen, surface)
+        key, intent, observed = "enter", "EXTRA_ENTER_INTENT", "POST_ENTER_OBSERVATION"
+    else:
+        raise DispatchUnconfirmed(
+            f"STRANDED_IN_COMPOSE marker={marker} surface={surface} "
+            "(busy receiver without its queue action; no key sent)", state=STRANDED_IN_COMPOSE)
+    if delivery_observer:
+        delivery_observer(intent, screen)
+    send_key(surface, key)
+    time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
+    screen = read_screen(surface, lines=confirm_lines)
+    if delivery_observer:
+        delivery_observer(observed, screen)
+    if _delivery_confirmed(before, screen, marker, text):
+        return {"confirmed": True, "retries": 0, "recovered": key}
+    if pending_queue_holds(screen, marker):
+        raise DispatchUnconfirmed(
+            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+            "(recovered into receiver queue; wait for consumption, do not resend)",
+            state=DELIVERY_QUEUED_AT_RECEIVER)
+    raise DispatchUnconfirmed(
+        f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+        f"(one recovery {key} observed; inspect, never repaste)",
+        state=classify_submission_failure(screen, marker, submitted=True))
 
 
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
@@ -1638,6 +1765,9 @@ def _cli_main(argv=None):
     submit.add_argument("--marker")
     submit.add_argument("--reconcile-only", action="store_true",
                         help="observe the original ordinary message without terminal input")
+    submit.add_argument("--recover-stranded", action="store_true",
+                        help="Enter was sent but the payload is still in the receiver "
+                             "composer: send one queue/submit key, never repaste")
     submit.add_argument("--confirm-lines", type=int, default=200)
     submit.add_argument(
         "--force-compose",
@@ -1690,6 +1820,7 @@ def _cli_main(argv=None):
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
                 reconcile_only=args.reconcile_only,
+                **({"recover_stranded": True} if args.recover_stranded else {}),
             )
             result = {"command": "submit_text", "surface": args.surface, **result}
         elif args.command in {"submit-task-pack", "submit_task_pack"}:
