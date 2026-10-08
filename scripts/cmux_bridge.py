@@ -931,7 +931,10 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
             # space and drops that space from both rows, so "only because"
             # renders as "...only" / "  because...". A single " " separator is
             # accepted only where the previous row is wide enough that the
-            # next word could not have fit on it (a real word wrap).
+            # next word could not have fit on it (a real word wrap). The
+            # settle-steer fixture codex-busy-wordwrap-full-20261008.txt is
+            # the same measured geometry and must keep matching. Never more
+            # than one consumed space per boundary.
             widest = max((len(row) for row in rows), default=0)
             positions = {0}
             previous = ""
@@ -1076,15 +1079,76 @@ def _compose_is_partial_payload(screen, text):
 
 
 def _codex_tab_queue_allowed(screen, text):
-    """Only the measured Codex busy composer with its explicit queue key."""
+    """The measured Codex busy composer owning our exact, unchanged payload.
+
+    The displayed queue hint proves this receiver is the measured busy Codex
+    TUI; it does not oblige us to press Tab. Tab holds the message until the
+    receiver's turn ends, which is unbounded under a goal hook (72 min
+    measured, 2026-10-08). A settled Enter on the same state steers into the
+    running turn instead. Resume paths still queue deliberately via Tab.
+    """
     return bool(
         receiver_input_kind(screen) == "AGENT_TUI"
         and re.search(r"(?m)^\s*tab to queue message\s*$", screen)
         and re.search(r"(?m)^\s*›(?:\s|$)", screen)
         and _exact_pending_text(screen, text)
+        # 只看当前状态区：滚动区里已结束的压缩横幅不算（C2596 实测 2026-10-08）
         and not receiver_cannot_submit_now(screen)
         and not pending_queue_holds(screen, text)
     )
+
+
+def _bounded_env(name, default, low, high, cast=float):
+    """Read a tuning knob; unparseable or out-of-range values never widen it."""
+    try:
+        value = cast(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    if isinstance(value, float) and not math.isfinite(value):
+        return default
+    return max(low, min(high, value))
+
+
+def _still_rendering_own_paste(screen, text):
+    """True only while the composer shows a strict, growing prefix of our own
+    payload. A busy Codex renders a long paste in row batches; Enter pressed
+    mid-render is absorbed by the renderer (3 of 5 rows after 1.6 s, measured
+    2026-10-08). Foreign or complete text is never 'still rendering'."""
+    if receiver_input_kind(screen) != "AGENT_TUI":
+        return False
+    shown = "".join((compose_rendered_text(screen) or "").split())
+    want = "".join(text.split())
+    return bool(shown) and len(shown) < len(want) and want.startswith(shown)
+
+
+def _settle_own_paste(surface, screen, text, confirm_lines):
+    """Read-only wait until our paste finishes rendering. Sends no input and
+    records no delivery observation, so journal phase counts stay exact."""
+    polls = _bounded_env("CMUX_AGENT_SETTLE_POLLS", 8, 0, 40, int)
+    interval = _bounded_env("CMUX_AGENT_SETTLE_INTERVAL", 0.5, 0.0, 2.0)
+    for _ in range(polls):
+        if not _still_rendering_own_paste(screen, text):
+            break
+        time.sleep(interval)
+        screen = read_screen(surface, lines=confirm_lines)
+    return screen
+
+
+def _wait_out_compaction(surface, screen, text, confirm_lines):
+    """Read-only wait while the receiver compacts/reconnects over our exact
+    draft. Compaction chrome appeared on 57 of 265 busy-Codex screens
+    (2026-10-08); only 1 of 265 was a stale banner, so a bounded wait is
+    cheaper than failing an otherwise deliverable submission."""
+    polls = _bounded_env("CMUX_AGENT_COMPACTION_POLLS", 20, 0, 60, int)
+    interval = _bounded_env("CMUX_AGENT_COMPACTION_INTERVAL", 3.0, 0.0, 10.0)
+    for _ in range(polls):
+        # 与 Tab/Enter 判据同源：只看当前状态区，陈旧横幅不触发等待
+        if not (receiver_cannot_submit_now(screen)
+                and _exact_pending_text(screen, text)):
+            break
+        time.sleep(interval)
+        screen = read_screen(surface, lines=confirm_lines)
+    return screen
 
 
 def _delivery_confirmed(before, after, marker, text=None):
@@ -1430,43 +1494,48 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
             "(marker not visible after submit)",
             state=DELIVERY_UNVERIFIED_BY_DETECTOR,
         )
-    # Measured 2026-10-08 (r23 callback): the post-Enter read caught the
-    # composer mid-render (only a prefix of our payload), so the exact check
-    # failed and no Tab was sent. Re-observe, read only and bounded.
-    settle = int(os.environ.get("CMUX_AGENT_RENDER_SETTLE_READS", "4"))
-    while settle > 0 and _compose_is_partial_payload(screen, text):
-        settle -= 1
-        time.sleep(1.0)
-        screen = read_screen(surface, lines=confirm_lines)
-        if delivery_observer:
-            delivery_observer("POST_ENTER_OBSERVATION", screen)
-    # Enter does not queue a message in the measured busy Codex UI. Only
-    # its exact, displayed Tab action and our unchanged full payload authorize
-    # one queue key. Never paste again, press on compaction, or call it consumed.
-    if _codex_tab_queue_allowed(screen, text):
-        if delivery_observer:
-            delivery_observer("QUEUE_TAB_INTENT", screen)
-        send_key(surface, "tab")
-        time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-        screen = read_screen(surface, lines=confirm_lines)
-        if delivery_observer:
-            delivery_observer("POST_QUEUE_TAB_OBSERVATION", screen)
-        if _delivery_confirmed(before, screen, marker, text):
-            return {"confirmed": True, "retries": 0, "queue_key": "tab"}
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(one explicit Tab queue action observed; inspect original, never repaste)",
-            state=classify_submission_failure(screen, marker, submitted=True))
+    # Our first Enter can be absorbed by the receiver's own paste renderer or
+    # by its compaction. Both are read-only waits on our unchanged draft: no
+    # key, no repaste, no observation. Only then is the screen a verdict.
+    settled = _settle_own_paste(surface, screen, text, confirm_lines)
+    settled = _wait_out_compaction(surface, settled, text, confirm_lines)
+    if settled != screen:
+        # The wait is not a submission. Re-apply the same verdicts the first
+        # read already passed, in the same order, before acting on the draft.
+        if pending_queue_holds(settled, marker):
+            raise DispatchUnconfirmed(
+                f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+                "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
+                state=DELIVERY_QUEUED_AT_RECEIVER,
+            )
+        if _delivery_confirmed(before, settled, marker, text):
+            return {"confirmed": True, "retries": 0, "late_confirmation": True}
+        if not _prompt_block_pending(settled, marker):
+            raise DispatchUnconfirmed(
+                f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
+                "(marker not visible after settle)",
+                state=DELIVERY_UNVERIFIED_BY_DETECTOR,
+            )
+        screen = settled
 
-    if _queued_or_active_input(screen):
+    # A settled busy Codex composer holding our exact payload is steerable:
+    # one Enter interrupts into the running turn and is recorded natively in
+    # the same second (measured 2026-10-08). Tab on the same state only queues
+    # until the turn ends, which a goal hook leaves unbounded. The receiver
+    # being busy is therefore not a reason to withhold our own single Enter.
+    steer = _codex_tab_queue_allowed(screen, text)
+
+    if _queued_or_active_input(screen) and not steer:
         # Enter was sent but our exact payload is still the receiver's draft:
         # that is STRANDED, not queued and not delivered. Name it so callers
         # cannot report "queued" and recover with --recover-stranded.
+        # （保留 C2596 的命名；其中途渲染重读已由上面的只读沉降取代：不记观测，
+        #   queue-resume 的 POST_ENTER_OBSERVATION 计数仍恰为 1）
         if _exact_pending_text(screen, text):
             raise DispatchUnconfirmed(
                 f"STRANDED_IN_COMPOSE marker={marker} surface={surface} "
                 "(Enter sent but payload still in receiver composer; NOT delivered; "
-                "recover once with --recover-stranded, never repaste)",
+                "recover with --recover-stranded, never repaste)",
                 state=STRANDED_IN_COMPOSE,
             )
         raise DispatchUnconfirmed(
