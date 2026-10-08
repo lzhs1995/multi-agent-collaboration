@@ -51,6 +51,11 @@ _PROOF_DIR = _STATE_ROOT / "native-delivery-proof-v1"
 # 消息与任务包各自的 journal。callback 的 attempt 落在任务目录下，不在这里。
 _JOURNALS = ("message-dispatch-v1", "task-dispatch-v1")
 
+# 从未向终端输入过的相位。接收端 compacting 时 bridge 会在第一次改动前就拒绝粘贴
+# （NO_INPUT），这种 attempt 没有「已按过的 Enter」可补。集成方 2026-10-08 17:55Z
+# 实测：我原先把它报成 NOT_RECEIVED 并建议 --recover-stranded，而那条路按构造不可用。
+_NEVER_INPUT = frozenset({"PREPARED", "NO_INPUT"})
+
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
     try:
@@ -132,6 +137,9 @@ def pending_deliveries(payload: dict[str, Any], caller: str | None,
         except (OSError, ValueError):
             continue
         if not isinstance(attempt, dict):
+            continue
+        # 没输入过就没有可补的键，也没有「卡在 compose」的 payload。
+        if attempt.get("phase") in _NEVER_INPUT:
             continue
         binding, identity = _binding_identity(attempt)
         own = identity.get("caller_surface_uuid")

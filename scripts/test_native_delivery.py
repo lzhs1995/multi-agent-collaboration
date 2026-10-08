@@ -212,6 +212,25 @@ class GuardEnforcement(unittest.TestCase):
         self.assertEqual(self._pending(caller="ZZZZ"), [])
         self.assertEqual(self._pending(window_seconds=60.0, now=time.time() + 10_000), [])
 
+    def test_never_input_attempts_are_not_reported_as_stranded(self):
+        """接收端 compacting → bridge 在首次改动前拒绝粘贴，没有键可补。
+
+        集成方实测我原先把这种 attempt 报成 NOT_RECEIVED 并建议 --recover-stranded，
+        而那条恢复路按构造不可用。
+        """
+        body = json.loads(self.attempt.read_text())
+        for phase in ("PREPARED", "NO_INPUT"):
+            body["phase"] = phase
+            self.attempt.write_text(json.dumps(body), encoding="utf-8")
+            self.assertEqual(self._pending(), [], f"{phase} 不该被当成卡在 compose")
+
+    def test_attempts_that_did_press_enter_are_still_reported(self):
+        """负控：若上面的过滤过宽，真正卡住的投递就被放过了。"""
+        body = json.loads(self.attempt.read_text())
+        body["phase"] = "POST_ENTER_OBSERVATION"
+        self.attempt.write_text(json.dumps(body), encoding="utf-8")
+        self.assertEqual([i["marker"] for i in self._pending()], [MARKER])
+
     def test_exit_2_when_not_received(self):
         results = guard.verify(self._pending(), wait_seconds=0.0,
                                waiter=lambda **kw: {"state": nd.NOT_RECEIVED})
