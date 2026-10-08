@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import uuid
@@ -161,7 +162,35 @@ def require_same_workspace(target, *, expected=None):
     return binding
 
 
-def validate_command(command):
+def _verified_helper_command(command):
+    """只放行单条、完整同版固定路由；不接受 shell 或环境覆盖。"""
+    if any(char in command for char in ('`', '$', '\n', '\r')):
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()<>')
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        if any(token and all(char in ';&|()<>' for char in token) for token in tokens):
+            return False
+        if tokens[:1] == ['rtk']:
+            tokens = tokens[1:]
+            if tokens[:1] == ['proxy']:
+                tokens = tokens[1:]
+        if (len(tokens) < 2 or Path(tokens[0]).name != 'cmux-agent'
+                or tokens[1] not in ('ask', 'send', 'broadcast', 'reconcile')):
+            return False
+        selected = shutil.which(tokens[0]) if tokens[0] == 'cmux-agent' else tokens[0]
+        if not selected or not Path(selected).is_absolute() or not os.access(selected, os.X_OK):
+            return False
+        from cmux_evidence_io import read_bytes
+        from render_cmux_agent import verify_route
+        route = verify_route(read_bytes(selected), Path(__file__).resolve().parents[1])
+        return Path(route['python']).resolve() == Path(sys.executable).resolve()
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
+def validate_command(command, *, _allow_helper=True):
     """Block raw outbound paths; reads remain available across workspaces.
 
     Input is sent only through cmux_bridge, whose runtime rechecks every send and
@@ -169,6 +198,8 @@ def validate_command(command):
     --help, recovery authorization, or shell environment exemption.
     """
     command = str(command).replace("\\\n", "")
+    if _allow_helper and _verified_helper_command(command):
+        return True, "verified same-release helper; bridge rechecks every input"
     # Tokenize shell syntax so a quoted search pattern is not an invocation.
     # Inspect nested shell -c separately; --help never exempts a compound write.
     try:
@@ -190,7 +221,7 @@ def validate_command(command):
                     break
         if name in ("sh", "bash", "zsh") and i + 2 < len(tokens):
             if tokens[i + 1] in ("-c", "-lc", "-ic"):
-                ok, _ = validate_command(tokens[i + 2])
+                ok, _ = validate_command(tokens[i + 2], _allow_helper=False)
                 blocked = blocked or not ok
     if re.search(r"\b(?:surface|terminal)\.(?:send|send_text|send_key|write)\b", command):
         blocked = True

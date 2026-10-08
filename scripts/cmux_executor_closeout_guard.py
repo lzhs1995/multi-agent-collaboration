@@ -6,36 +6,40 @@ import sys
 from cmux_consensus_stop_guard import (
     _active_markers, _has_active_markers, _workspace_key, _surface_key,
 )
-from executor_closeout import terminal_report, handoff_line
+from executor_closeout import terminal_report, superseded, closeout_instructions
 from cmux_callback_queue_resume import allowed as queue_resume_allowed
 from cmux_callback_reconcile import allowed as reconcile_allowed
+from cmux_callback_diagnose import allowed as diagnose_allowed
 
 
 def _evaluate_resolved(payload):
     if payload.get('hook_event_name') != 'PreToolUse':
         return True, ''
-    surface = _surface_key(payload)
-    for marker in _active_markers(payload):
-        evidence = terminal_report(marker, _workspace_key(payload), surface)
-        if evidence:
+    workspace, surface = _workspace_key(payload), _surface_key(payload)
+    markers = _active_markers(payload)
+    for marker in markers:
+        evidence = terminal_report(marker, workspace, surface)
+        # Only a fresh, later task armed by the same supervisor moves scope.
+        if evidence and not superseded(evidence, markers, workspace, surface):
             if (queue_resume_allowed(payload, marker, evidence)
-                    or reconcile_allowed(payload, marker, evidence)):
+                    or reconcile_allowed(payload, marker, evidence)
+                    or diagnose_allowed(payload, marker, evidence)):
                 continue
             return False, (
                 'EXECUTOR_CLOSEOUT: report frozen; original callback attempt returned. '
-                'Do not add tests, memories, watchers, retries, or other tool calls. '
-                'End this turn now. The supervisor owns receipt reconciliation and '
-                'acceptance/disarm before another task. This is not product acceptance. '
+                'Preserve the frozen report and original callback attempt. '
+                'Only the exact task-bound cmux_callback_reconcile.py command '
+                '(zero terminal input), cmux_callback_diagnose.py, '
+                'or the existing guarded queue-resume '
+                'entrypoint is allowed; no new paste, watcher, or retry loop. '
+                'Otherwise end this turn honestly. The supervisor owns '
+                'acceptance/disarm before another task; typed text cannot lift this '
+                'seal. This is not product acceptance. '
                 'This task boundary is not evidence of an API failure. Do not ask the '
                 'user to relay status to the already-bound supervisor. After verified '
                 'disarm, authorized follow-up uses current receipts and disposition, '
                 'not an old recap; this is not a permanent session stop. '
-                'Only two tools stay legal, each once per turn, both read-only on the '
-                'original attempt: cmux_callback_queue_resume.py (one queue Tab) and '
-                'cmux_callback_reconcile.py (zero input). If neither confirms, do not '
-                'retry, wait or poll; end the turn. '
-                'If delivery is not independently confirmed, use exactly:\n'
-                + handoff_line(evidence))
+                + closeout_instructions(evidence))
     return True, ''
 
 

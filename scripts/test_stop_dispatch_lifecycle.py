@@ -12,9 +12,12 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 import executor_closeout as closeout
 import offline_test_hook
+import cmux_bridge as BRIDGE
+from native_test_support import NativeFixture, native_hook_command
 
 HOOK = Path(os.environ.get('STOP_GUARD_UNDER_TEST',
                            Path(__file__).with_name('cmux_consensus_stop_guard.py')))
@@ -25,6 +28,7 @@ class StopDispatchLifecycleTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='stop-lifecycle-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.native_state = None
         self.home = self.root / 'home'
         self.workspace, self.surface, self.supervisor = [str(uuid.uuid4()).upper() for _ in range(3)]
         self.marker = dict(task_id='life-task', workspace_uuid=self.workspace,
@@ -75,7 +79,9 @@ class StopDispatchLifecycleTests(unittest.TestCase):
     def stop(self, final='Status reply before the task arrived.', **extra):
         data = dict(hook_event_name='Stop', last_assistant_message=final, stop_hook_active=False)
         data.update(extra)
-        return subprocess.run(offline_test_hook.command(HOOK, self.active), input=json.dumps(data),
+        command = (native_hook_command(HOOK, self.active, self.native_state)
+                   if self.native_state else offline_test_hook.command(HOOK, self.active))
+        return subprocess.run(command, input=json.dumps(data),
                               text=True, capture_output=True, env=self.env, timeout=10)
 
     def snapshot(self):
@@ -87,6 +93,7 @@ class StopDispatchLifecycleTests(unittest.TestCase):
         before = self.snapshot()
         r = self.stop()
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, '')
         self.assertEqual(before, self.snapshot())
         self.assertFalse(self.receipt.exists())
 
@@ -180,19 +187,41 @@ class StopDispatchLifecycleTests(unittest.TestCase):
         self.assertIn('CALLBACK_ATTEMPTED', r.stderr)
 
     def test_legal_confirmed_completion_receipt_allows(self):
+        nonce = 'life-native-001'
+        self.pack.update(completion_nonce=nonce,
+                         completion_callback=f'DONE|life-task|{nonce}|REPORT={self.report}',
+                         required_skill=str(BRIDGE.COLLABORATION_SKILL_PATH),
+                         completion_delivery=dict(transport='cmux_bridge.submit_completion_callback',
+                                                  require_confirmed=True))
+        self.write(self.pack_path, self.pack)
         self.dispatch_attempt('POST_ENTER_OBSERVATION', ['PASTE_INTENT'])
         self.report.write_text('done\n')
-        receipt = {k: self.pack[k] for k in ('task_id', 'completion_nonce',
-                                              'completion_callback', 'callback_target')}
-        receipt.update(report=str(self.report), report_sha256=self.sha(self.report),
-                       report_bytes=self.report.stat().st_size, confirmed=True,
-                       task_pack_sha256=self.sha(self.pack_path))
-        self.write(self.receipt, receipt)
-        self.assertEqual(self.stop().returncode, 0)
+        native = NativeFixture.attach(self, home=self.home, provider='claude',
+            identity=dict(workspace_uuid=self.workspace, caller_surface_uuid=self.surface,
+                          target_surface_uuid=self.supervisor, target_pane_uuid='pane'))
+        callback = self.pack['completion_callback']
+        idle = native.draft('', provider='claude')
+        with mock.patch.object(BRIDGE, 'read_screen', side_effect=native.ready_screens(
+                idle, native.draft(callback, provider='claude'), idle)):
+            native.key.side_effect = native.receipt_on_key(callback)
+            receipt = BRIDGE.submit_completion_callback(self.pack_path)
+        self.assertTrue(receipt['confirmed'])
+        native.send.assert_called_once()
+        native.key.assert_called_once()
+        self.native_state = native.export_state(self.root / 'native-state.json')
+        before = self.snapshot()
+        result = self.stop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, self.snapshot())
         self.write(self.receipt, dict(receipt, confirmed=False))
-        self.assertEqual(self.stop().returncode, 2)
+        before = self.snapshot()
+        result = self.stop(final='报告已冻结，回调尚未确认，等待主管核收。')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('WAITING_SUPERVISOR', json.loads(result.stdout)['stopReason'])
+        self.assertEqual(self.stop(final='callback confirmed').returncode, 2)
+        self.assertEqual(before, self.snapshot())
 
-    def test_terminal_report_handoff_still_allowed_and_exact(self):
+    def test_terminal_report_allows_honest_wait_without_exact_template(self):
         self.dispatch_attempt('POST_ENTER_OBSERVATION', ['PASTE_INTENT'])
         self.report.write_text('bounded result\n')
         journal = self.root / 'receipt-attempts'
@@ -208,13 +237,35 @@ class StopDispatchLifecycleTests(unittest.TestCase):
             phase='NO_INPUT', events=[], started_at_epoch=1.0, ended_at_epoch=2.0,
             error='COMPOSE_OCCUPIED'))
         line = closeout.handoff_line(dict(task_id='life-task', report=str(self.report)))
-        self.assertEqual(self.stop(final=line).returncode, 0)
-        r = self.stop(final=line + ' extra')
-        self.assertEqual(r.returncode, 2)
-        self.assertIn('End without more tools using exactly', r.stderr)
+        before = self.snapshot()
+        for active in (False, True):
+            result = self.stop(final=line, stop_hook_active=active)
+            self.assertEqual((result.returncode, result.stderr), (0, ''))
+            self.assertEqual(json.loads(result.stdout), {
+                'continue': False,
+                'suppressOutput': True,
+                'stopReason': (
+                    'WAITING_SUPERVISOR: report frozen; original callback returned. '
+                    'Await supervisor receipt reconciliation and acceptance. '
+                    'Delivery and task completion remain unconfirmed.'
+                ),
+            })
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse(self.receipt.exists())
+        for final in (line + ' extra', '报告已冻结，回调尚未确认，等待主管核收。'):
+            r = self.stop(final=final)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('WAITING_SUPERVISOR', json.loads(r.stdout)['stopReason'])
+        for final in ('callback confirmed', 'consensus-validation PASS'):
+            r = self.stop(final=final)
+            self.assertEqual(r.returncode, 2)
+            self.assertEqual(r.stdout, '')
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse(self.receipt.exists())
 
     def test_stop_hook_active_reentry_only_for_boolean_true(self):
-        self.assertEqual(self.stop(stop_hook_active=True).returncode, 0)
+        result = self.stop(stop_hook_active=True)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         self.assertEqual(self.stop(stop_hook_active='true').returncode, 2)
         self.assertEqual(self.stop().returncode, 2)
 

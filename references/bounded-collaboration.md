@@ -71,7 +71,7 @@ path against its original evidence; do not issue another challenge just because
 the first screen detector timed out. Formal consensus rounds apply only to an
 explicit formal consensus phase, not to channel readiness or ordinary status.
 
-## Both directions require post-Enter verification
+## Both directions require exact native reception
 
 Use `submit_task_pack` for task dispatch and `submit_completion_callback` for
 completion, from the bound guarded bridge. A helper return code, echoed prompt,
@@ -84,8 +84,8 @@ states, not new runtime receipt enums or a reason to require extra ACKs.
 | --- | --- |
 | Not submitted | Complete payload remains in compose. Preserve the draft and original attempt; no blind Enter, Tab, paste or force-clear. |
 | Submitted | The supported bridge verifies submission of the exact payload to the bound target. Submission alone proves neither queue position nor consumption. |
-| Queued | The exact payload is observed in the receiver queue. Observe the same attempt without resending or promoting it over existing input. |
-| Consumed | Task-related receiver activity or a verified native receipt binds consumption to the exact request. Do not resend after a detector false-negative. |
+| Queued | UI queue or Claude queued_command is pending, not reception. Observe the same attempt without resending or promoting it over existing input. |
+| Received | Only a new complete native user after the original PASTE_INTENT EOF fence, bound to the same receiver process/session/transcript and exactly equal to the payload, yields NATIVE_RECEIVED. Reception does not prove execution. |
 | Processed | The requested business action has its own outcome evidence. A read notice is insufficient; a resource release needs the actual lifecycle result. Record success or failure separately. |
 | Unknown | Evidence is missing, truncated or ambiguous. Preserve identity/journal and do bounded read-only recovery. |
 
@@ -100,6 +100,10 @@ Do not wait for `supervisor busy=false` as an extra callback prerequisite. Invok
 the guarded entrypoint once and let it assess the input state. Do not manually
 add a Tab-to-queue workaround or interrupt an active command to clear compose.
 
+Full native proof, the shared one-key recovery budget, permitted task-bound
+diagnostics and finite idle/CCC waiting follow
+[verified native delivery](verified-compose-delivery.md).
+
 ## Close callback work instead of engineering indefinitely
 
 Completion has separate facts: business report accepted, original callback
@@ -110,7 +114,8 @@ The initial callback is followed, if needed, by one bounded read-only recovery
 window under the existing attempt. At its end, preserve unresolved transport
 evidence and hand it to the supervisor. Do not launch a second watcher, poll each
 second, lengthen the retry budget, delete the journal, or rewrite a frozen report.
-This handoff is not a success receipt or permission to bypass the Stop guard.
+An ordinary honest handoff may end in WAITING_SUPERVISOR under the bound closeout
+checks; it creates no receipt, acceptance or disarm.
 The supervisor continues independent authorized work while resolving the missing
 fact through the existing lifecycle, without stacking a new task on the executor.
 

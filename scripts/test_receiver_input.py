@@ -6,17 +6,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import cmux_bridge as bridge
+from native_test_support import NativeFixture
 
 
 class ReceiverInputTests(unittest.TestCase):
     @contextlib.contextmanager
     def isolated_message_identity(self):
-        with tempfile.TemporaryDirectory() as home, \
-             patch.object(pathlib.Path, "home", return_value=pathlib.Path(home)), \
-             patch.object(bridge, "pin_workspace", return_value={
-                 "workspace_uuid": "workspace", "caller_surface_uuid": "caller",
-                 "target_surface_uuid": "target", "target_pane_uuid": "pane"}):
-            yield
+        with NativeFixture() as native:
+            yield native
 
     def test_shell_or_unknown_does_not_receive_any_bytes_or_keys(self):
         screens = ["researcher@mac ~ %", "bash-3.2$ ", "PS C:\\work> ",
@@ -24,11 +21,13 @@ class ReceiverInputTests(unittest.TestCase):
                    "❯ ", "", "ordinary text"]
         for screen in screens:
             for force in (False, True):
-                with self.subTest(screen=screen, force=force), patch.object(bridge, "read_screen", return_value=screen), \
+                with self.subTest(screen=screen, force=force), NativeFixture(), \
+                     patch.object(bridge, "read_screen", return_value=screen), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
-                    with self.assertRaises(bridge.DispatchUnconfirmed) as error:
-                        bridge._submit_text_once("peer", "STATUS: continuation", marker="marker", force_compose=force)
-                    self.assertEqual(error.exception.state, bridge.SUPERVISOR_DID_NOT_SUBMIT)
+                    with self.assertRaises(bridge.TaskPackContractError if force else bridge.DispatchUnconfirmed) as error:
+                        bridge.submit_text("peer", "STATUS: continuation", marker="continuation", force_compose=force)
+                    if not force:
+                        self.assertEqual(error.exception.state, bridge.SUPERVISOR_DID_NOT_SUBMIT)
                     send.assert_not_called()
                     key.assert_not_called()
 
@@ -36,17 +35,16 @@ class ReceiverInputTests(unittest.TestCase):
         with patch.object(bridge, "read_screen", return_value="› Ask Codex to do anything\nGPT-6 high"), \
              patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
              patch.object(bridge.time, "sleep"):
-            result = bridge._submit_text_once("peer", "STATUS: continuation")
-        self.assertTrue(result["submitted"])
-        self.assertFalse(result["confirmed"])
-        send.assert_called_once()
-        key.assert_called_once_with("peer", "enter")
+            with self.assertRaisesRegex(bridge.TaskPackContractError, 'MESSAGE_MARKER_REQUIRED'):
+                bridge.submit_text("peer", "STATUS: continuation")
+        send.assert_not_called()
+        key.assert_not_called()
 
     def test_user_draft_is_not_appended_or_cleared(self):
-        with patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
+        with NativeFixture(), patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
              patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
             with self.assertRaises(bridge.DispatchUnconfirmed) as error:
-                bridge._submit_text_once("peer", "STATUS: continuation", marker="marker")
+                bridge.submit_text("peer", "STATUS: continuation", marker="continuation")
             self.assertEqual(error.exception.state, bridge.COMPOSE_OCCUPIED)
             send.assert_not_called()
             key.assert_not_called()
@@ -85,10 +83,11 @@ class ReceiverInputTests(unittest.TestCase):
     def test_queued_message_is_one_send_not_a_failed_delivery_retry(self):
         screens = ["› Ask Codex to do anything\nGPT-6 high",
                    "Messages to be submitted after current tool\nmarker\n› Ask Codex to do anything\nGPT-6 high"]
-        with patch.object(bridge, "read_screen", side_effect=screens), patch.object(bridge, "send_text") as send, \
+        with NativeFixture() as native, patch.object(bridge, "read_screen", side_effect=native.ready_screens(
+                screens[0], native.draft('STATUS: marker'), screens[1])), patch.object(bridge, "send_text") as send, \
              patch.object(bridge, "send_key") as key, patch.object(bridge.time, "sleep"):
             with self.assertRaises(bridge.DispatchUnconfirmed) as error:
-                bridge._submit_text_once("peer", "STATUS: marker", marker="marker")
+                bridge.submit_text("peer", "STATUS: marker", marker="marker")
         self.assertEqual(error.exception.state, bridge.DELIVERY_QUEUED_AT_RECEIVER)
         send.assert_called_once()
         key.assert_called_once_with("peer", "enter")
@@ -101,15 +100,15 @@ class ReceiverInputTests(unittest.TestCase):
         historical = "› Ask Codex to do anything\nGPT-6 high"
         for tail in ("➜  project git:(main)", "custom-host [main] >>", "interpreter waiting"):
             for force in (False, True):
-                with self.subTest(tail=tail, force=force), \
+                with self.subTest(tail=tail, force=force), NativeFixture(), \
                      patch.object(bridge, "read_screen", return_value=historical + "\n" + tail), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
-                    with self.assertRaises(bridge.DispatchUnconfirmed):
-                        bridge._submit_text_once("peer", "STATUS: continuation", force_compose=force)
+                    with self.assertRaises(bridge.TaskPackContractError if force else bridge.DispatchUnconfirmed):
+                        bridge.submit_text("peer", "STATUS: continuation", marker="continuation", force_compose=force)
                     send.assert_not_called()
                     key.assert_not_called()
 
-    def test_force_clear_stops_at_every_new_shell_unknown_or_active_observation(self):
+    def test_force_never_clears_shell_unknown_active_or_user_draft(self):
         occupied = "› supervisor-owned unsent draft\nGPT-6 high"
         unsafe = ("researcher@mac ~/project %", "render unavailable",
                   "✻ Running tool\n" + occupied,
@@ -121,14 +120,10 @@ class ReceiverInputTests(unittest.TestCase):
                      patch.object(bridge, "read_screen", side_effect=[occupied] * safe_reads + [changed]), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
                      patch.object(bridge, "focus_surface"), patch.object(bridge.time, "sleep"):
-                    with self.assertRaises(bridge.DispatchUnconfirmed):
-                        bridge._submit_text_once("peer", "STATUS: continuation", force_compose=True)
+                    with self.assertRaisesRegex(bridge.TaskPackContractError, 'PRESERVE_COMPOSE'):
+                        bridge.submit_text("peer", "STATUS: continuation", marker="continuation", force_compose=True)
                     send.assert_not_called()
-                    observed = [c.args[1] for c in key.call_args_list]
-                    expected = ["escape", "ctrl+u", "ctrl+c"][:safe_reads]
-                    if safe_reads == 4:
-                        expected += ["end"] + ["backspace"] * 256
-                    self.assertEqual(observed, expected)
+                    key.assert_not_called()
 
     def test_marker_queue_has_priority_over_new_activity_from_earlier_work(self):
         import contextlib
@@ -137,7 +132,9 @@ class ReceiverInputTests(unittest.TestCase):
         idle = "› Ask Codex to do anything\nGPT-6 high"
         queued = "• Ran preceding task tool\nMessages to be submitted after next tool call\nmarker\n" + idle
         for screens in ([idle, queued], [idle, "render unavailable", queued]):
-            with self.subTest(screens=screens), self.isolated_message_identity(), patch.object(bridge, "read_screen", side_effect=screens), \
+            with self.subTest(screens=screens), self.isolated_message_identity() as native, \
+                 patch.object(bridge, "read_screen", side_effect=native.ready_screens(
+                     screens[0], native.draft('STATUS: marker'), *screens[1:])), \
                  patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key, \
                  patch.object(bridge.time, "sleep"), contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(io.StringIO()) as error:
@@ -146,6 +143,94 @@ class ReceiverInputTests(unittest.TestCase):
                 self.assertEqual(json.loads(error.getvalue())["delivery_state"], bridge.DELIVERY_QUEUED_AT_RECEIVER)
                 send.assert_called_once()
                 key.assert_called_once_with("peer", "enter")
+
+
+class PendingQueueRegionTests(unittest.TestCase):
+    MARKER = 'queue-boundary-marker-20261009'
+    BANNER = 'Messages to be submitted after next tool call'
+
+    @staticmethod
+    def composers(text):
+        body = text.replace('\n', '\n  ')
+        border = '─' * 96
+        return [
+            ('codex', '› ' + body + '\nGPT-6 high'),
+            ('claude_unbordered', '❯ ' + body + '\n[claude-opus-5]'),
+            ('claude_bordered', border + '\n❯ ' + body + '\n' + border + '\n[claude-opus-5]'),
+        ]
+
+    def test_own_live_draft_under_unrelated_queue_is_not_queued(self):
+        for layout, composer in self.composers('STATUS: ' + self.MARKER):
+            screen = self.BANNER + '\nunrelated queued message\n' + composer
+            with self.subTest(layout=layout):
+                self.assertFalse(bridge.pending_queue_holds(screen, self.MARKER))
+
+    def test_marker_in_actual_queue_region_is_queued(self):
+        for layout, composer in self.composers(''):
+            screen = self.BANNER + '\nSTATUS: ' + self.MARKER + '\n' + composer
+            with self.subTest(layout=layout):
+                self.assertTrue(bridge.pending_queue_holds(screen, self.MARKER))
+                with self.assertRaises(bridge.DispatchUnconfirmed) as error:
+                    bridge._unconfirmed_native(screen, self.MARKER, {})
+                self.assertEqual(error.exception.state, bridge.DELIVERY_QUEUED_AT_RECEIVER)
+
+    def test_banner_inside_live_composer_is_not_a_queue_region(self):
+        for text in [self.BANNER + '\n' + self.MARKER,
+                     'my draft\n' + self.BANNER + '\n' + self.MARKER]:
+            for layout, composer in self.composers(text):
+                with self.subTest(layout=layout, text=text):
+                    self.assertFalse(bridge.pending_queue_holds(composer, self.MARKER))
+
+    def test_marker_below_composer_or_in_footer_is_not_queued(self):
+        for layout, composer in self.composers(''):
+            for tail in [self.MARKER, self.BANNER + '\n' + self.MARKER]:
+                screen = self.BANNER + '\nunrelated queued message\n' + composer + '\n' + tail
+                with self.subTest(layout=layout, tail=tail):
+                    self.assertFalse(bridge.pending_queue_holds(screen, self.MARKER))
+
+    def test_marker_before_queue_banner_is_not_queued(self):
+        for layout, composer in self.composers(''):
+            screen = self.MARKER + '\n' + self.BANNER + '\nunrelated queued message\n' + composer
+            with self.subTest(layout=layout):
+                self.assertFalse(bridge.pending_queue_holds(screen, self.MARKER))
+
+    def test_new_activity_ends_the_queue_region(self):
+        for layout, composer in self.composers(''):
+            for activity in ['• Read evidence', '⏺ Read evidence']:
+                screen = '\n'.join([self.BANNER, 'unrelated queued message', activity,
+                                    'tool output quotes ' + self.MARKER, composer])
+                with self.subTest(layout=layout, activity=activity):
+                    self.assertFalse(bridge.pending_queue_holds(screen, self.MARKER))
+
+    def test_historical_prompt_after_banner_is_not_queued(self):
+        for layout, composer in self.composers(''):
+            for glyph in ['›', '❯']:
+                screen = '\n'.join([self.BANNER, 'unrelated queued message',
+                                    glyph + ' ' + self.MARKER, '• Read evidence', composer])
+                with self.subTest(layout=layout, glyph=glyph):
+                    self.assertFalse(bridge.pending_queue_holds(screen, self.MARKER))
+
+    def test_missing_live_composer_cannot_bound_a_queue_region(self):
+        for tail in ['', '\nresearcher@mac ~ %', '\nrender unavailable']:
+            with self.subTest(tail=tail):
+                self.assertFalse(bridge.pending_queue_holds(self.BANNER + '\n' + self.MARKER + tail,
+                                                           self.MARKER))
+
+    def test_public_send_reports_own_draft_as_stranded_under_unrelated_queue(self):
+        text = 'STATUS: ' + self.MARKER
+        drafts = dict(self.composers(text))
+        for layout, idle in self.composers(''):
+            provider = 'codex' if layout == 'codex' else 'claude'
+            draft = drafts[layout]
+            after = self.BANNER + '\nunrelated queued message\n' + draft
+            with self.subTest(layout=layout), NativeFixture(provider=provider) as native, \
+                    patch.object(bridge, 'read_screen', side_effect=native.ready_screens(idle, draft, after)), \
+                    patch.object(bridge, 'send_text') as send, patch.object(bridge, 'send_key') as key:
+                with self.assertRaises(bridge.DispatchUnconfirmed) as error:
+                    bridge.submit_text('peer', text, marker=self.MARKER)
+                self.assertEqual(error.exception.state, bridge.STRANDED_IN_COMPOSE)
+                send.assert_called_once_with('peer', text)
+                key.assert_called_once_with('peer', 'enter')
 
 
 # --- 2026-10-04 measured regression: pane-width truncation of chrome rows ---
@@ -193,11 +278,13 @@ class TruncatedChromeRowTests(unittest.TestCase):
             with self.subTest(tail=tail.strip()):
                 self.assertEqual(bridge.receiver_input_kind(head + tail), "UNKNOWN")
 
-    def test_measured_truncated_claude_footer_is_not_user_content(self):
+    def test_measured_truncated_claude_footer_fails_closed(self):
         screen = (FIXTURES / "claude-compose-truncated-footer-20260924.txt").read_text()
         body = bridge.compose_block_text(screen)
         self.assertIsNotNone(body)
-        self.assertTrue(bridge.compose_block_is_empty(screen))
+        # 截断 footer 无法证明完整边框；不能据此授权输入或清空。
+        self.assertEqual(bridge.receiver_input_kind(screen), "UNKNOWN")
+        self.assertFalse(bridge.compose_block_is_empty(screen))
 
     def test_truncated_model_and_cwd_rows_are_chrome(self):
         for row in ("  [claude-opus\u2026", "  claude/u8-fo\u2026", "  [Opus 5\u2026",

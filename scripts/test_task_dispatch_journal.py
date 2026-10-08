@@ -8,6 +8,7 @@ from unittest.mock import patch
 import cmux_bridge as b
 import cmux_task_journal as j
 import cmux_submit_confirmation_guard as guard
+from native_test_support import NativeFixture
 
 IDLE = '❯ \n[claude-opus-5]'
 TEXT = 'STATUS: task-journal-test run original task'
@@ -31,12 +32,14 @@ class TaskDispatchJournalTests(unittest.TestCase):
                      patch.object(b.time, 'sleep')):
             item.start()
             self.addCleanup(item.stop)
+        self.native = NativeFixture.attach(self, home=self.home, identity=self.proof, provider='claude')
 
     def call(self, **kw):
         return b.submit_task_pack('peer', TEXT, str(self.path), **kw)
 
     def uncertain(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, '⏺ Read unrelated\n'+IDLE]), \
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(TEXT, 'claude'), '⏺ Read unrelated\n'+IDLE)), \
                 patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             with self.assertRaises(b.DispatchUnconfirmed):
                 self.call()
@@ -44,8 +47,10 @@ class TaskDispatchJournalTests(unittest.TestCase):
             key.assert_called_once()
 
     def test_confirmed_dispatch_is_not_sent_twice(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
-                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(TEXT, 'claude'), CONSUMED)), \
+                patch.object(b, 'send_text') as send, \
+                patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(TEXT)) as key:
             result = self.call()
             self.assertTrue(Path(result['receipt']).is_file())
             with self.assertRaises(b.TaskPackContractError):
@@ -58,8 +63,9 @@ class TaskDispatchJournalTests(unittest.TestCase):
             text=TEXT, pack=str(self.path)), 'peer', b)
 
     def test_post_hook_reads_new_journal_without_input(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
-                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(TEXT, 'claude'), CONSUMED)), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(TEXT)):
             self.call()
         with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             self.assertEqual(self.hook_proof()['source'], 'revalidated_task_dispatch_v1')
@@ -68,6 +74,7 @@ class TaskDispatchJournalTests(unittest.TestCase):
 
     def test_post_hook_accepts_original_readonly_reconciliation(self):
         self.uncertain()
+        self.native.append_user(TEXT)
         with patch.object(b, 'read_screen', return_value=CONSUMED), \
                 patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             self.call(reconcile_only=True)
@@ -76,13 +83,14 @@ class TaskDispatchJournalTests(unittest.TestCase):
             key.assert_not_called()
 
     def test_post_hook_rejects_tampered_observation_and_pack(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
-                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(TEXT, 'claude'), CONSUMED)), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(TEXT)):
             result = self.call()
         attempt_path = Path(result['attempt'])
         original = attempt_path.read_bytes()
         data = json.loads(original)
-        data['events'][-1]['screen'] = 'unrelated activity'
+        data['events'][0]['screen'] = 'unrelated original intent'
         attempt_path.write_text(json.dumps(data))
         self.assertIsNone(self.hook_proof())
         attempt_path.write_bytes(original)
@@ -90,14 +98,16 @@ class TaskDispatchJournalTests(unittest.TestCase):
         self.assertIsNone(self.hook_proof())
 
     def test_post_hook_requires_receipt_not_only_confirmation(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, CONSUMED]), \
-                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(TEXT, 'claude'), CONSUMED)), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(TEXT)):
             result = self.call()
         Path(result['receipt']).unlink()
         self.assertIsNone(self.hook_proof())
 
     def test_restart_after_uncertainty_is_read_only(self):
         self.uncertain()
+        self.native.append_user(TEXT)
         with patch.object(b, 'read_screen', return_value=CONSUMED), \
                 patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             with self.assertRaises(b.TaskPackContractError):
@@ -108,6 +118,9 @@ class TaskDispatchJournalTests(unittest.TestCase):
 
     def test_partial_cross_block_and_queue_never_reconcile(self):
         self.uncertain()
+        self.native.append_user('task-journal-test')
+        self.native.append_user(TEXT + ' extra')
+        self.native.append_queued(TEXT)
         for screen in ['❯ task-journal-test\n⏺ Read original task\n'+IDLE,
                        '❯ '+TEXT+'\n❯ other task\n⏺ Read original task\n'+IDLE,
                        'Messages to be submitted after next tool call\n'+TEXT+'\n'+IDLE]:

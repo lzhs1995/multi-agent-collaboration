@@ -6,6 +6,8 @@ import json
 import os
 import time
 from pathlib import Path
+import cmux_native_delivery as native
+from cmux_evidence_io import read_bytes, attempt_paths, open_regular_lock
 
 
 def write_json(path, value):
@@ -35,13 +37,6 @@ def verified_receipt(bridge, surface, task_pack_path):
         pack = bridge.validate_task_pack_contract(path)
         if submission_target(pack['callback_target']) != surface:
             return None
-        live = bridge.pin_workspace(surface)
-        identity = {k: live[k] for k in ('workspace_uuid', 'caller_surface_uuid',
-                                       'target_surface_uuid', 'target_pane_uuid')}
-        if not all(isinstance(v, str) and v for v in identity.values()):
-            return None
-        if identity['caller_surface_uuid'].upper() != pack['executor_uuid'].upper():
-            return None
         report = Path(pack['report'])
         pins[report] = snapshot(report)
         binding = dict(task_id=pack['task_id'], completion_nonce=pack['completion_nonce'],
@@ -51,13 +46,19 @@ def verified_receipt(bridge, surface, task_pack_path):
                        report_bytes=report.stat().st_size)
         receipt_path = Path(pack['completion_receipt'])
         pins[receipt_path] = snapshot(receipt_path)
-        receipt = json.loads(receipt_path.read_text())
+        receipt = json.loads(read_bytes(receipt_path))
         journal = receipt_path.with_name(receipt_path.stem + '-attempts')
-        attempts = sorted(journal.glob('attempt-*.json'))
+        attempts = attempt_paths(journal)
         if not attempts or receipt.get('attempt') != str(attempts[-1]):
             return None
         pins[attempts[-1]] = snapshot(attempts[-1])
-        attempt = json.loads(attempts[-1].read_text())
+        attempt = json.loads(read_bytes(attempts[-1]))
+        identity = attempt['binding']['identity']
+        if (set(identity) != set(native.IDENTITY_KEYS)
+                or not all(isinstance(v, str) and v for v in identity.values())
+                or identity['caller_surface_uuid'].upper() != pack['executor_uuid'].upper()):
+            return None
+        live = native.observer_identity(bridge, surface, identity)
         if (receipt.get('confirmed') is not True
                 or any(receipt.get(k) != v for k, v in binding.items())
                 or attempt.get('binding') != dict(binding, identity=identity)):
@@ -65,44 +66,33 @@ def verified_receipt(bridge, surface, task_pack_path):
         pastes = [e for e in attempt['events'] if e['phase'] == 'PASTE_INTENT']
         if len(pastes) != 1 or pastes[0].get('screen_sha256') != bridge.screen_hash(pastes[0]['screen']):
             return None
-        if receipt.get('confirmation_source') == 'original_journal_native_user_record':
+        if receipt.get('confirmation_source') != 'native_user_message_v1':
+            return None
+        if receipt.get('reconciled_read_only') is True and 'native_evidence' in receipt:
             from callback_native_evidence import validate
             evidence = receipt['native_evidence']
-            native = evidence['native']
+            record = evidence['native']
             receiver = receipt['receiver_identity']
             if (type(receipt.get('input_operations')) is not int
                     or receipt['input_operations'] != 0
-                    or receipt.get('reconciled_read_only') is not True
                     or receiver['caller_surface_uuid'] != identity['target_surface_uuid']
                     or receiver['target_surface_uuid'] != identity['caller_surface_uuid']
                     or receiver['workspace_uuid'] != identity['workspace_uuid']
-                    or validate(path, attempts[-1], native['path'], native['line'],
-                                native['session_id']) != evidence):
+                    or validate(path, attempts[-1], record['path'], record['line'],
+                                record['session_id']) != evidence):
                 return None
-            if any(snapshot(p) != pin for p, pin in pins.items()) or bridge.pin_workspace(surface) != live:
-                return None
-            return dict(source='revalidated_native_callback_journal', identity=identity,
-                        pack=pins[path], report=pins[report], receipt=pins[receipt_path])
-        if receipt.get('reconciled_read_only') is True:
+        elif receipt.get('reconciled_read_only') is True:
             observed = Path(receipt['observation'])
             if observed.parent != journal or not observed.name.startswith('observation-'):
                 return None
             pins[observed] = snapshot(observed)
-            observation = json.loads(observed.read_text())
+            observation = json.loads(read_bytes(observed))
             if type(observation.get('input_operations')) is not int or observation['input_operations'] != 0:
                 return None
-        else:
-            observations = [e for e in attempt['events'] if e['phase'] in
-                            ('POST_ENTER_OBSERVATION', 'POST_QUEUE_TAB_OBSERVATION')]
-            if attempt.get('phase') != 'CONFIRMED' or not observations:
-                return None
-            observation = observations[-1]
-        after = observation['screen']
-        if (observation.get('screen_sha256') != bridge.screen_hash(after)
-                or not bridge._delivery_confirmed(pastes[0]['screen'], after,
-                                                   pack['completion_nonce'], pack['completion_callback'])):
+        if not native.receipt_evidence(bridge, surface, pack['completion_callback'], attempt, receipt, read_only=True):
             return None
-        if any(snapshot(p) != pin for p, pin in pins.items()) or bridge.pin_workspace(surface) != live:
+        if (attempt_paths(journal) != attempts or any(snapshot(p) != pin for p, pin in pins.items())
+                or native.observer_identity(bridge, surface, identity) != live):
             return None
         return dict(source='revalidated_callback_journal', identity=identity,
                     pack=pins[path], report=pins[report], receipt=pins[receipt_path])
@@ -124,7 +114,8 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
     journal.mkdir(exist_ok=True)
     # Persistent inode; a second process must never race the same callback.
     with contextlib.ExitStack() as stack:
-        lock = stack.enter_context((journal / 'delivery.lock').open('a+b'))
+        lock_path = journal / 'delivery.lock'
+        lock = stack.enter_context(open_regular_lock(lock_path))
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -139,13 +130,40 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
             raise bridge.TaskPackContractError(
                 'LEGACY_CALLBACK_PENDING: preserve original; supervisor must '
                 'review actual receipt evidence without resending')
-        proof = bridge.pin_workspace(pack['callback_target'])
-        identity = {k: proof[k] for k in ('workspace_uuid', 'caller_surface_uuid',
-                                        'target_surface_uuid', 'target_pane_uuid')}
+        attempts = attempt_paths(journal)
+        old = json.loads(read_bytes(attempts[-1])) if attempts else None
+
+        def observe_original_identity(original_identity):
+            try:
+                return native.observer_identity(bridge, pack['callback_target'], original_identity)
+            except native.NativeDeliveryError as exc:
+                raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED: ' + str(exc)) from exc
+
+        if reconcile_only and old:
+            identity = old['binding']['identity']
+            if set(identity) != set(native.IDENTITY_KEYS):
+                raise bridge.TaskPackContractError('CALLBACK_ORIGINAL_IDENTITY_REQUIRED')
+            proof = observe_original_identity(identity)
+        else:
+            proof = bridge.pin_workspace(pack['callback_target'])
+            identity = {k: proof[k] for k in native.IDENTITY_KEYS}
+
+        def current_identity():
+            if reconcile_only:
+                return observe_original_identity(identity)
+            return bridge.pin_workspace(pack['callback_target'])
         target_root = Path.home() / '.local/state/multi-agent-collaboration/deliveries-v1'
         target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        pane_key = hashlib.sha256((identity['workspace_uuid'] + ':' + identity['target_pane_uuid']).encode()).hexdigest()
+        pane_lock_path = target_root / ('pane-' + pane_key + '.lock')
+        pane_lock = stack.enter_context(open_regular_lock(pane_lock_path))
+        try:
+            fcntl.flock(pane_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise bridge.TaskPackContractError('CALLBACK_PANE_IN_PROGRESS') from exc
         target_key = hashlib.sha256(identity['target_surface_uuid'].encode()).hexdigest()
-        target_lock = stack.enter_context((target_root / ('target-' + target_key + '.lock')).open('a+b'))
+        target_lock_path = target_root / ('target-' + target_key + '.lock')
+        target_lock = stack.enter_context(open_regular_lock(target_lock_path))
         try:
             fcntl.flock(target_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -162,11 +180,18 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
             'report_bytes': report.stat().st_size,
             'identity': identity,
         }
-        attempts = sorted(journal.glob('attempt-*.json'))
-        old = json.loads(attempts[-1].read_text()) if attempts else None
         if old and old['binding'] != binding:
             raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED: preserve previous attempt')
         if resume_queue_only:
+            # 原生核验先于任何恢复意图；旧版本无基线不能事后补造。
+            if not old:
+                raise bridge.TaskPackContractError('NO_RECOVERABLE_ENTER_ATTEMPT')
+            prior = native.scan_original(bridge, pack['callback_target'], pack['completion_callback'],
+                                         attempts[-1], old.get('native_binding'))
+            if prior.get('confirmed') is True:
+                raise bridge.TaskPackContractError('ALREADY_RECEIVED: use --reconcile-only; no input')
+            if prior.get('state') == 'NATIVE_QUEUED':
+                raise bridge.DispatchUnconfirmed('ALREADY_QUEUED: use --reconcile-only; no input')
             # Resume only a recorded Enter that left this exact payload in the
             # measured Codex composer. Never paste, Enter again, or retry Tab.
             events = old.get('events', []) if old else []
@@ -180,66 +205,72 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                    e.get('screen_sha256') != bridge.screen_hash(e['screen'])
                    for e in events if 'screen' in e or 'screen_sha256' in e):
                 raise bridge.TaskPackContractError('RECOVERY_SCREEN_EVIDENCE_CHANGED')
+            attempt_path = attempts[-1]
+
+            def observe_recovery(phase, screen=None):
+                # 未知、变化或排队的观察同样落盘，恢复原样也不能重新取得资格。
+                if json.loads(read_bytes(attempt_path)) != old:
+                    raise bridge.TaskPackContractError('RECOVERY_JOURNAL_CHANGED')
+                event = dict(phase=phase, at_epoch=time.time(), recovery='queue_resume')
+                if screen is not None:
+                    event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
+                old.setdefault('original_ended_at_epoch', old.get('ended_at_epoch'))
+                old['events'].append(event)
+                old['phase'] = phase
+                old['ended_at_epoch'] = event['at_epoch']
+                write_json(attempt_path, old)
+
             screen = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
+            observe_recovery('RECOVERY_OBSERVATION', screen)
+            structure = bridge.require_original_draft(old, screen, pack['completion_callback'])
+            if not bridge._codex_tab_queue_allowed(screen, pack['completion_callback']):
+                raise bridge.DispatchUnconfirmed('ORIGINAL_COMPOSER_NOT_RECOVERABLE: no input')
+            screen = bridge._stable_owned_draft(pack['callback_target'], pack['completion_callback'],
+                confirm_lines, observe_recovery, expected_structure=structure)
             if not bridge._codex_tab_queue_allowed(screen, pack['completion_callback']):
                 raise bridge.DispatchUnconfirmed('ORIGINAL_COMPOSER_NOT_RECOVERABLE: no input')
             # Revalidate identity/report immediately before persisting key intent.
             if bridge.pin_workspace(pack['callback_target']) != proof or bridge._sha256_file(report) != binding['report_sha256']:
                 raise bridge.TaskPackContractError('RECOVERY_BINDING_CHANGED')
-            for held in (lock, target_lock):
+            # fdopen 文件的 name 是 fd；用原锁路径核对持有 inode，拒绝锁替换。
+            for held, held_path in ((lock, lock_path), (pane_lock, pane_lock_path),
+                                    (target_lock, target_lock_path)):
                 opened = os.fstat(held.fileno())
-                current = os.lstat(held.name)
+                current = os.lstat(held_path)
                 if (opened.st_dev, opened.st_ino, opened.st_nlink) != (current.st_dev, current.st_ino, 1):
                     raise bridge.TaskPackContractError('RECOVERY_LOCK_CHANGED')
             if bridge._sha256_file(task_pack_path) != binding['task_pack_sha256']:
                 raise bridge.TaskPackContractError('RECOVERY_TASK_CHANGED')
             attempt_path = attempts[-1]
-            if json.loads(attempt_path.read_text()) != old:
+            if json.loads(read_bytes(attempt_path)) != old:
                 raise bridge.TaskPackContractError('RECOVERY_JOURNAL_CHANGED')
-            old['phase'] = 'QUEUE_TAB_INTENT'
-            old['events'].append(dict(phase='QUEUE_TAB_INTENT', at_epoch=time.time(),
-                                      screen=screen, screen_sha256=bridge.screen_hash(screen)))
-            write_json(attempt_path, old)
+            native.require_bound(bridge, pack['callback_target'], old.get('native_binding'), pack['completion_callback'])
+            observe_recovery('QUEUE_TAB_INTENT', screen)
+            native.require_bound(bridge, pack['callback_target'], old.get('native_binding'), pack['completion_callback'])
             bridge.send_key(pack['callback_target'], 'tab')
             after = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
-            old['phase'] = 'POST_QUEUE_TAB_OBSERVATION'
-            old['events'].append(dict(phase=old['phase'], at_epoch=time.time(),
-                                      screen=after, screen_sha256=bridge.screen_hash(after)))
-            write_json(attempt_path, old)
-            before = next(e['screen'] for e in events if e['phase'] == 'PASTE_INTENT')
-            if not bridge._delivery_confirmed(before, after, pack['completion_nonce'], pack['completion_callback']):
+            observe_recovery('POST_QUEUE_TAB_OBSERVATION', after)
+            result = native.scan_original(bridge, pack['callback_target'], pack['completion_callback'],
+                                          attempt_path, old.get('native_binding'))
+            if result.get('confirmed') is not True:
                 raise bridge.DispatchUnconfirmed('QUEUE_ACTION_UNCONFIRMED: observe original; no more input')
-            result = {'confirmed': True, 'retries': 0, 'queue_key': 'tab'}
+            result = dict(result, retries=0, queue_key='tab')
             old.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time())
             write_json(attempt_path, old)
             evidence = {'reconciled_read_only': False, 'attempt': str(attempt_path)}
         elif reconcile_only:
             if not old or old['phase'] in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_ATTEMPT: cannot manufacture receipt')
-            screen = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
-            observation = {
-                'recorded_at_epoch': time.time(), 'screen': screen,
-                'screen_sha256': bridge.screen_hash(screen), 'input_operations': 0,
-            }
+            result = native.scan_original(bridge, pack['callback_target'], pack['completion_callback'],
+                                          attempts[-1], old.get('native_binding'), read_only=True)
+            observation = dict(result, recorded_at_epoch=time.time(), input_operations=0)
             observed = journal / ('observation-' + str(time.time_ns()) + '.json')
             write_json(observed, observation)
-            bridge.require_agent_input(screen, pack['callback_target'])
-            before = next(event['screen'] for event in old['events']
-                          if event['phase'] == 'PASTE_INTENT')
-            # Marker plus unrelated activity cannot reconcile a callback. Require
-            # its whole exact line (allow terminal wrapping), actual transcript
-            # activity after the marker, and no pending compose/queue copy.
-            full_line = ''.join(pack['completion_callback'].split())
-            confirmed = (
-                full_line in ''.join(screen.split())
-                and bridge._delivery_confirmed(before, screen, pack['completion_nonce'],
-                                               pack['completion_callback'])
-            )
-            if not confirmed:
+            if result.get('confirmed') is not True:
                 raise bridge.DispatchUnconfirmed(
                     'CALLBACK_NOT_YET_CONFIRMED: read-only observation saved; do not resend',
                     state=bridge.DELIVERY_UNVERIFIED_BY_DETECTOR)
-            result = {'confirmed': True, 'retries': old.get('extra_enter', 0)}
+            result = dict(result, retries=old.get('extra_enter', 0))
             evidence = {'reconciled_read_only': True, 'observation': str(observed),
                         'attempt': str(attempts[-1])}
         else:
@@ -257,8 +288,11 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
             write_json(attempt_path, attempt)
 
             def observe(phase, screen=None):
+                fence = native.capture_paste_fence(attempt['native_binding']) if phase == 'PASTE_INTENT' else None
                 attempt['phase'] = phase
                 event = {'phase': phase, 'at_epoch': time.time()}
+                if fence is not None:
+                    event['native_paste_fence'] = fence
                 if screen is not None:
                     event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
                 attempt['events'].append(event)
@@ -267,10 +301,13 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                 write_json(attempt_path, attempt)
 
             try:
+                attempt['native_binding'] = native.bind_target(bridge, pack['callback_target'], pack['completion_callback'])
+                write_json(attempt_path, attempt)
                 result = bridge.submit_text(
                     pack['callback_target'], pack['completion_callback'],
                     marker=pack['completion_nonce'], confirm_lines=confirm_lines,
-                    delivery_observer=observe)
+                    delivery_observer=observe, native_binding=attempt['native_binding'],
+                    native_attempt=attempt_path)
                 if result.get('confirmed') is not True:
                     raise bridge.DispatchUnconfirmed('callback not confirmed')
             except BaseException as exc:
@@ -286,8 +323,16 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
         # The report must remain the exact document whose callback was sent.
         if bridge._sha256_file(report) != binding['report_sha256']:
             raise bridge.TaskPackContractError('REPORT_CHANGED_DURING_CALLBACK: receipt refused')
+        if bridge._sha256_file(task_pack_path) != binding['task_pack_sha256'] or current_identity() != proof:
+            raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED_BEFORE_RECEIPT')
+        if not native.receipt_evidence(bridge, pack['callback_target'], pack['completion_callback'],
+                                      json.loads(read_bytes(Path(evidence['attempt']))), result,
+                                      read_only=reconcile_only):
+            raise bridge.DispatchUnconfirmed('CALLBACK_NATIVE_PROOF_REQUIRED')
         receipt = {**{k: v for k, v in binding.items() if k != 'identity'},
                    'confirmed': True, 'bridge_retries': result.get('retries', 0),
+                   'native_binding': result['native_binding'], 'native_proof': result['native_proof'],
+                   'confirmation_source': result['confirmation_source'],
                    'recorded_at_epoch': time.time(), **evidence}
         encoded = (json.dumps(receipt, ensure_ascii=False, indent=2) + '\n').encode()
         fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

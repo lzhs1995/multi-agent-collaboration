@@ -135,11 +135,15 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
         self.assertNotIn('disarm', err)
         self.assertNotIn('record-round', err)
 
-    def test_stop_reentry_still_skips_discovery_with_live_marker(self):
+    def test_stop_reentry_only_discovers_identity_for_waiting_output(self):
         self.marker()
-        for event in ('Stop', 'SubagentStop'):
-            self.assertEqual(self.main(stop, dict(
-                hook_event_name=event, stop_hook_active=True)), (0, ''))
+        # 重入 verdict 保留放行；原生等待出口只在 Stop 上核身份，错误不伪造等待。
+        self.assertEqual(self.main(stop, dict(
+            hook_event_name='Stop', stop_hook_active=True)), (0, ''))
+        self.resolve.assert_called_once()
+        self.resolve.reset_mock()
+        self.assertEqual(self.main(stop, dict(
+            hook_event_name='SubagentStop', stop_hook_active=True)), (0, ''))
         self.resolve.assert_not_called()
 
     def test_explicit_root_alone_enforces_conflict_without_discovery(self):

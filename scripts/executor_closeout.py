@@ -9,7 +9,15 @@ import hashlib
 import json
 import math
 import os
+import stat
+import time
+from datetime import datetime
 from pathlib import Path
+from cmux_evidence_io import read_bytes, attempt_paths
+
+# The user's own completion sentence. Only the executor may supply it when its
+# bounded task is genuinely complete; it never proves delivery or acceptance.
+COMPLETION_SENTENCE = '完成，建议检查 usage: /context'
 
 
 def _number(value):
@@ -27,7 +35,7 @@ def terminal_report(marker, workspace, surface):
     def read(path):
         if not path.is_absolute() or path.is_symlink():
             raise ValueError('noncanonical evidence path')
-        raw = path.read_bytes()
+        raw = read_bytes(path)
         pins[path] = raw
         return raw
 
@@ -69,10 +77,12 @@ def terminal_report(marker, workspace, surface):
         lock_path = journal / 'delivery.lock'
         # Never create/unlink the persistent lock. Nonblocking shared lock
         # excludes the existing sender's exclusive delivery operation.
-        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as lock:
-            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
             opened = os.fstat(lock.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                return None
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
 
             def same_inode():
                 current = os.lstat(lock_path)
@@ -81,7 +91,7 @@ def terminal_report(marker, workspace, surface):
 
             if not same_inode():
                 return None
-            attempts = sorted(journal.glob('attempt-*.json'))
+            attempts = attempt_paths(journal)
             if not attempts:
                 return None
             attempt = doc(attempts[-1])
@@ -104,12 +114,15 @@ def terminal_report(marker, workspace, surface):
             phase = attempt['phase']
             events = attempt['events']
             phases = {'PASTE_INTENT', 'PASTED', 'ENTER_INTENT', 'ENTER_SENT',
+                      'DRAFT_OBSERVATION', 'RECOVERY_OBSERVATION',
                       'POST_ENTER_OBSERVATION', 'EXTRA_ENTER_INTENT',
                       'QUEUE_TAB_INTENT', 'POST_QUEUE_TAB_OBSERVATION'}
             if not isinstance(events, list) or phase not in phases | {'NO_INPUT', 'CONFIRMED'}:
                 return None
             effective_end = end
-            if phase in {'QUEUE_TAB_INTENT', 'POST_QUEUE_TAB_OBSERVATION'}:
+            if (phase in {'QUEUE_TAB_INTENT', 'POST_QUEUE_TAB_OBSERVATION'}
+                    and events and _number(events[-1].get('at_epoch'))
+                    and events[-1]['at_epoch'] > end):
                 # Older original controllers leave ended_at at the first
                 # uncertain Enter when queue-only continuation also returns
                 # uncertainly. The shared lock above excludes a live sender.
@@ -151,11 +164,20 @@ def terminal_report(marker, workspace, surface):
                     return None
             elif phase != 'CONFIRMED' and (not events or events[-1]['phase'] != phase):
                 return None
-            if (not same_inode() or sorted(journal.glob('attempt-*.json')) != attempts
-                    or any(p.read_bytes() != raw for p, raw in pins.items())):
+            if (not same_inode() or attempt_paths(journal) != attempts
+                    or any(read_bytes(p) != raw for p, raw in pins.items())):
                 return None
             return dict(task_id=pack['task_id'], report=str(report),
-                        attempt=str(attempts[-1]), report_sha256=expected['report_sha256'])
+                        attempt=str(attempts[-1]), report_sha256=expected['report_sha256'],
+                        attempt_sha256=hashlib.sha256(pins[attempts[-1]]).hexdigest(),
+                        artifact_root=str(root), ended_at_epoch=effective_end,
+                        supervisor_uuid=supervisor.get('surface_uuid'),
+                        # 只返回已经校验并在锁内重核的原任务绑定。
+                        completion_nonce=pack['completion_nonce'],
+                        completion_callback=pack['completion_callback'],
+                        attempt_phase=phase,
+                        task_pack_sha256=expected['task_pack_sha256'],
+                        started_at_epoch=start)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
@@ -165,3 +187,73 @@ def handoff_line(evidence):
     return ('STATUS: REPORT_READY TASK_ID=' + evidence['task_id']
             + ' CALLBACK_UNCONFIRMED REPORT=' + evidence['report']
             + ' supervisor_reconciliation_required')
+
+
+def honest_closeout(final, evidence):
+    """Only the two exact turn-ends; neither confirms delivery or acceptance.
+
+    The completion sentence is the executor's own statement that its bounded
+    task is complete. Nothing here derives it from a report or a returned call.
+    """
+    line = handoff_line(evidence)
+    return final.strip().split('\n') in ([line], [line, COMPLETION_SENTENCE])
+
+
+def closeout_instructions(evidence):
+    # 模板仅供引用；正常说明也可以结束等待，不把措辞变成解锁条件。
+    return ('End with an honest explanation that delivery remains unconfirmed, '
+            'or use this optional handoff line:\n' + handoff_line(evidence) + '\n'
+            'Ordinary explanations and corrections are allowed. Stop enters '
+            'WAITING_SUPERVISOR without receipt creation, acceptance or disarm. '
+            'Only if your own bounded task is actually complete may you append "'
+            + COMPLETION_SENTENCE + '". The hook never supplies that sentence. '
+            'Do not claim callback confirmation or consensus without evidence.')
+
+
+def _epoch(stamp):
+    """POSIX seconds for an offset-aware ISO-8601 stamp, else None."""
+    try:
+        moment = datetime.fromisoformat(stamp)
+        return moment.timestamp() if moment.utcoffset() is not None else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def superseded(evidence, markers, workspace, surface, now=None):
+    """True once this supervisor armed a later, different task for this executor.
+
+    Free text cannot unseal a frozen closeout: a user's new request and an
+    automatic continuation prompt look the same to a hook. The protected signal
+    is a fresh marker whose workspace, executor, supervisor, task, root and
+    arming time (strictly after the original attempt, including queue-only
+    continuation, ended) all match. Recheck TTL here: malformed legacy marker
+    dates may remain visible to the caller, but never prove a new task boundary.
+    This only moves tool/Stop scope; it never settles the original callback.
+    """
+    now = time.time() if now is None else now
+    ended = evidence.get('ended_at_epoch')
+    supervisor = evidence.get('supervisor_uuid')
+    if not surface or not supervisor or not _number(ended) or not _number(now):
+        return False
+    for marker in markers:
+        try:
+            peers = [p for p in marker['participants'] if isinstance(p, dict)]
+            executors = [p for p in peers if p.get('surface_uuid') == surface
+                         and str(p.get('role', '')).startswith('executor')]
+            supervisors = [p for p in peers if p.get('role') == 'supervisor']
+            armed = _epoch(marker.get('armed_at'))
+            ttl = marker.get('ttl_seconds')
+            root, task = marker.get('artifact_root'), marker.get('task_id')
+            if (marker.get('workspace_uuid') == workspace
+                    and len(executors) == 1 and len(supervisors) == 1
+                    and supervisors[0].get('surface_uuid') == supervisor
+                    and isinstance(task, str) and task and task != evidence['task_id']
+                    and isinstance(root, str) and Path(root).is_absolute()
+                    and not Path(root).is_symlink()
+                    and Path(root).resolve() != Path(evidence['artifact_root']).resolve()
+                    and _number(armed) and ended < armed <= now
+                    and _number(ttl) and ttl > 0 and now - armed <= ttl):
+                return True
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return False

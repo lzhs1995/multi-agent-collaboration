@@ -8,6 +8,8 @@ import stat
 import time
 from pathlib import Path
 from cmux_callback_journal import write_json
+import cmux_native_delivery as native
+from cmux_evidence_io import read_bytes, attempt_paths, open_regular_lock
 
 
 def digest(value):
@@ -35,13 +37,13 @@ def verified_receipt(bridge, surface, text, marker, task_pack_path):
         journal = root / digest(json.dumps([identity['caller_surface_uuid'], pack['task_id']]))
         receipt_path = journal / 'receipt.json'
         receipt_pin = snapshot(receipt_path)
-        receipt = json.loads(receipt_path.read_text())
-        attempts = sorted(journal.glob('attempt-*.json'))
+        receipt = json.loads(read_bytes(receipt_path))
+        attempts = attempt_paths(journal)
         if not attempts or receipt.get('attempt') != str(attempts[-1]):
             return None
         attempt_path = attempts[-1]
         attempt_pin = snapshot(attempt_path)
-        attempt = json.loads(attempt_path.read_text())
+        attempt = json.loads(read_bytes(attempt_path))
         if (receipt.get('confirmed') is not True or receipt.get('binding') != binding
                 or attempt.get('binding') != binding):
             return None
@@ -58,23 +60,14 @@ def verified_receipt(bridge, surface, text, marker, task_pack_path):
             if observation_path.parent != journal or not observation_path.name.startswith('observation-'):
                 return None
             observation_pin = snapshot(observation_path)
-            observation = json.loads(observation_path.read_text())
+            observation = json.loads(read_bytes(observation_path))
             if type(observation.get('input_operations')) is not int or observation['input_operations'] != 0:
                 return None
             pins.append((observation_path, observation_pin))
-        else:
-            if attempt.get('phase') != 'CONFIRMED':
-                return None
-            observations = [e for e in events if e['phase'] in
-                            ('POST_ENTER_OBSERVATION', 'POST_QUEUE_TAB_OBSERVATION')]
-            if not observations:
-                return None
-            observation = observations[-1]
-        after = observation['screen']
-        if (observation.get('screen_sha256') != bridge.screen_hash(after)
-                or not bridge._delivery_confirmed(before, after, marker, text)):
+        if not native.receipt_evidence(bridge, surface, text, attempt, receipt):
             return None
-        if any(snapshot(p) != pin for p, pin in pins) or bridge.pin_workspace(surface) != live:
+        if (attempt_paths(journal) != attempts or any(snapshot(p) != pin for p, pin in pins)
+                or bridge.pin_workspace(surface) != live):
             return None
         return dict(source='revalidated_task_dispatch_v1', identity=identity,
                     pack=pack_pin, attempt=attempt_pin, receipt=receipt_pin)
@@ -126,11 +119,11 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
     with contextlib.ExitStack() as stack:
         target_root = root.parent / 'deliveries-v1'
         target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for path in (target_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
+        for path in (target_root / ('pane-' + digest(identity['workspace_uuid'] + ':' + identity['target_pane_uuid']) + '.lock'),
+                     target_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      journal / 'delivery.lock'):
-            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            lock = stack.enter_context(os.fdopen(fd, 'a+b'))
+            lock = stack.enter_context(open_regular_lock(path))
             held = os.fstat(lock.fileno())
             if not stat.S_ISREG(held.st_mode):
                 raise bridge.TaskPackContractError('DISPATCH_LOCK_NOT_REGULAR')
@@ -146,8 +139,8 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         legacy = root.parent / 'deliveries-v1' / (old_key + '.json')
         if legacy.exists():
             raise bridge.TaskPackContractError('ORIGINAL_DELIVERY_CONTROLLER_REQUIRED: ' + str(legacy))
-        attempts = sorted(journal.glob('attempt-*.json'))
-        old = json.loads(attempts[-1].read_text()) if attempts else None
+        attempts = attempt_paths(journal)
+        old = json.loads(read_bytes(attempts[-1])) if attempts else None
         if old and old.get('binding') != binding:
             raise bridge.TaskPackContractError('DISPATCH_BINDING_CHANGED: preserve original attempt')
         if (old and old.get('delivery_lock_identity') is not None
@@ -160,14 +153,12 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         if reconcile_only:
             if not old or old.get('phase') in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_DISPATCH')
-            screen = bridge.read_screen(surface, lines=confirm_lines)
+            result = native.scan_original(bridge, surface, text, attempts[-1], old.get('native_binding'))
             observation = journal / ('observation-' + str(time.time_ns()) + '.json')
-            write_json(observation, dict(screen=screen, screen_sha256=bridge.screen_hash(screen),
-                                         input_operations=0, at_epoch=time.time()))
-            before = next(e['screen'] for e in old['events'] if e['phase'] == 'PASTE_INTENT')
-            if not bridge._delivery_confirmed(before, screen, marker, text):
+            write_json(observation, dict(result, input_operations=0, at_epoch=time.time()))
+            if result.get('confirmed') is not True:
                 raise bridge.DispatchUnconfirmed('DISPATCH_NOT_YET_CONFIRMED: observe original; no resend')
-            result = dict(confirmed=True, reconciled_read_only=True, observation=str(observation))
+            result = dict(result, reconciled_read_only=True, observation=str(observation))
             attempt_path = attempts[-1]
         else:
             if old and old.get('phase') != 'NO_INPUT':
@@ -181,16 +172,22 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
 
             def observe(phase, screen=None):
                 recheck()
+                fence = native.capture_paste_fence(attempt['native_binding']) if phase == 'PASTE_INTENT' else None
                 attempt['phase'] = phase
                 event = dict(phase=phase, at_epoch=time.time())
+                if fence is not None:
+                    event['native_paste_fence'] = fence
                 if screen is not None:
                     event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
                 attempt['events'].append(event)
                 write_json(attempt_path, attempt)
 
             try:
+                attempt['native_binding'] = native.bind_target(bridge, surface, text)
+                write_json(attempt_path, attempt)
                 result = bridge.submit_text(surface, text, marker=marker, confirm_lines=confirm_lines,
-                                            task_pack_path=task_pack_path, delivery_observer=observe)
+                    task_pack_path=task_pack_path, delivery_observer=observe,
+                    native_binding=attempt['native_binding'], native_attempt=attempt_path)
                 if result.get('confirmed') is not True:
                     raise bridge.DispatchUnconfirmed('DISPATCH_NOT_CONFIRMED')
             except BaseException as exc:
@@ -202,6 +199,8 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
             attempt.update(phase='CONFIRMED', ended_at_epoch=time.time())
             write_json(attempt_path, attempt)
         recheck()
+        if not native.receipt_evidence(bridge, surface, text, json.loads(read_bytes(attempt_path)), result):
+            raise bridge.DispatchUnconfirmed('DISPATCH_NATIVE_PROOF_REQUIRED')
         result = dict(result, binding=binding, attempt=str(attempt_path), at_epoch=time.time())
         fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as handle:

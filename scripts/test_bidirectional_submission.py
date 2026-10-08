@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import patch
 import cmux_bridge as b
+from native_test_support import NativeFixture
 
 
 class BidirectionalSubmissionTests(unittest.TestCase):
@@ -14,19 +15,40 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         consumed = glyph + ' ' + prompt + '\n' + activity + '\n' + idle
         return idle, prompt, pending, consumed
 
-    def run_case(self, glyph, screens, expected, keys):
-        _, text, _, _ = self.states(glyph)
-        with patch.object(b, 'read_screen', side_effect=screens), \
-                patch.object(b, 'send_text') as send, \
-                patch.object(b, 'send_key') as key, patch.object(b.time, 'sleep'):
-            if expected:
-                self.assertTrue(b._submit_text_once('peer', text, marker='unique-marker-20261004')['confirmed'])
-            else:
-                with self.assertRaises(b.DispatchUnconfirmed):
-                    b._submit_text_once('peer', text, marker='unique-marker-20261004')
-            send.assert_called_once_with('peer', text)
-            self.assertEqual(key.call_count, keys)
-            self.assertTrue(all(c.args == ('peer', 'enter') for c in key.call_args_list))
+    def run_case(self, glyph, screens, expected, keys, sends=1, *, original_draft=None):
+        _, text, draft, _ = self.states(glyph)
+        if original_draft is not None:
+            draft = original_draft
+        with NativeFixture(provider='codex' if glyph == '›' else 'claude') as native:
+            reads, sent_keys = 0, 0
+            def observe(*args, **kwargs):
+                nonlocal reads
+                reads += 1
+                if reads == 1:
+                    return screens[0]
+                if sent_keys == 0:
+                    return draft
+                return screens[min(sent_keys, len(screens) - 1)]
+            def receive(surface, key):
+                nonlocal sent_keys
+                sent_keys += 1
+                if expected and sent_keys == keys:
+                    native.append_user(text)
+            with patch.object(b, 'read_screen', side_effect=observe), \
+                    patch.object(b, 'send_text') as send, \
+                    patch.object(b, 'send_key', side_effect=receive) as key:
+                if expected:
+                    result = b.submit_text('peer', text, marker='unique-marker-20261004')
+                    self.assertTrue(result['confirmed'])
+                    self.assertEqual(result['confirmation_source'], 'native_user_message_v1')
+                else:
+                    with self.assertRaises((b.DispatchUnconfirmed, b.TaskPackContractError)):
+                        b.submit_text('peer', text, marker='unique-marker-20261004')
+                self.assertEqual(send.call_count, sends)
+                if sends:
+                    send.assert_called_once_with('peer', text)
+                self.assertEqual(key.call_count, keys)
+                self.assertTrue(all(c.args == ('peer', 'enter') for c in key.call_args_list))
 
     def test_prompt_and_callback_confirm_only_after_consumption(self):
         for glyph in ['›', '❯']:
@@ -34,17 +56,18 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 idle, _, _, consumed = self.states(glyph)
                 self.run_case(glyph, [idle, consumed], True, 1)
 
-    def test_idle_pending_gets_one_extra_enter_and_is_rechecked(self):
+    def test_idle_pending_never_gets_automatic_second_enter(self):
         for glyph in ['›', '❯']:
             with self.subTest(glyph=glyph):
                 idle, _, pending, consumed = self.states(glyph)
-                self.run_case(glyph, [idle, pending, consumed], True, 2)
+                # 后一帧只有第二个键才会出现；首次投递不得为等它而补键。
+                self.run_case(glyph, [idle, pending, consumed], False, 1)
 
-    def test_still_pending_after_two_enters_is_never_success(self):
+    def test_still_pending_after_first_enter_is_never_success(self):
         for glyph in ['›', '❯']:
             with self.subTest(glyph=glyph):
                 idle, _, pending, _ = self.states(glyph)
-                self.run_case(glyph, [idle, pending, pending], False, 2)
+                self.run_case(glyph, [idle, pending, pending], False, 1)
 
     def test_busy_pending_is_preserved_without_extra_enter(self):
         for glyph in ['›', '❯']:
@@ -62,7 +85,7 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         for glyph in ['›', '❯']:
             with self.subTest(glyph=glyph):
                 _, _, _, consumed = self.states(glyph)
-                self.run_case(glyph, [consumed, consumed], False, 1)
+                self.run_case(glyph, [consumed, consumed], False, 0, sends=0)
 
     def test_visible_queue_never_counts_as_consumption(self):
         for glyph in ['›', '❯']:
@@ -77,7 +100,26 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 idle, _, pending, consumed = self.states(glyph)
                 wrapped = lambda s: s.replace('unique-marker-20261004', 'unique-marker-\n  20261004')
                 self.assertTrue(b.compose_contains(wrapped(pending), 'unique-marker-20261004'))
-                self.run_case(glyph, [idle, wrapped(pending), wrapped(consumed)], True, 2)
+                self.run_case(glyph, [idle, wrapped(pending), wrapped(consumed)], False, 1)
+                self.run_case(glyph, [idle, wrapped(consumed)], True, 1)
+
+    def test_enter_added_blank_rows_never_trigger_another_key(self):
+        for glyph in ['›', '❯']:
+            idle, _, pending, _ = self.states(glyph)
+            for added in ['', '\n', ' ', '  ', '\n  ', ' \n  ']:
+                altered = pending.replace('\n', '\n' + added + '\n', 1)
+                with self.subTest(glyph=glyph, added=repr(added)):
+                    self.run_case(glyph, [idle, altered], False, 1)
+
+    def test_bordered_claude_enter_added_blank_rows_never_trigger_another_key(self):
+        _, text, _, _ = self.states('❯')
+        border = '─' * 72
+        idle = border + '\n❯ \n' + border + '\n[claude-opus-5]'
+        draft = border + '\n❯ ' + text + '\n' + border + '\n[claude-opus-5]'
+        for added in ['', '\n', ' ', '  ', '\n  ']:
+            altered = draft.replace(text + '\n', text + '\n' + added + '\n', 1)
+            with self.subTest(added=repr(added)):
+                self.run_case('❯', [idle, altered], False, 1, original_draft=draft)
 
     def test_unrelated_draft_after_enter_is_not_confirmed(self):
         for glyph in ['›', '❯']:
@@ -96,15 +138,17 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         busy = '• Working (3s • esc to interrupt)\n' + pending + '\ntab to queue message'
         queue = 'Messages to be submitted after next tool call\n' + text + '\n' + idle
         for after, accepted in [(queue, False), (consumed, True), (busy, False)]:
-            with self.subTest(after=after), patch.object(b, 'read_screen', side_effect=[idle, busy, after]), \
+            with self.subTest(after=after), NativeFixture() as native, \
+                    patch.object(b, 'read_screen', side_effect=native.ready_screens(idle, busy, after)), \
                     patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key, \
                     patch.object(b.time, 'sleep'):
                 if accepted:
-                    self.assertTrue(b._submit_text_once('peer', text, marker='unique-marker-20261004')['confirmed'])
+                    key.side_effect = native.receipt_on_key(text)
+                    self.assertTrue(b.submit_text('peer', text, marker='unique-marker-20261004')['confirmed'])
                 else:
                     with self.assertRaises(b.DispatchUnconfirmed):
-                        b._submit_text_once('peer', text, marker='unique-marker-20261004')
-                self.assertEqual([c.args for c in key.call_args_list], [('peer', 'enter'), ('peer', 'tab')])
+                        b.submit_text('peer', text, marker='unique-marker-20261004')
+                self.assertEqual([c.args for c in key.call_args_list], [('peer', 'tab')])
                 send.assert_called_once()
 
     def test_tab_never_operates_on_compaction_changed_or_additional_draft(self):
@@ -133,17 +177,16 @@ class DraftOwnershipTests(unittest.TestCase):
     def test_model_or_path_looking_first_row_remains_occupied(self):
         for draft in ['GPT-this is my draft', 'claude/my-draft', '[Claude draft]']:
             screen='› '+draft+'\nGPT-6 high'
-            with self.subTest(draft=draft), patch.object(b, 'read_screen', return_value=screen), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
-                with self.assertRaises(b.DispatchUnconfirmed): b._submit_text_once('peer','new',marker='new')
+            with self.subTest(draft=draft), NativeFixture(), patch.object(b, 'read_screen', return_value=screen), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+                with self.assertRaises(b.DispatchUnconfirmed): b.submit_text('peer','new',marker='new')
                 send.assert_not_called(); key.assert_not_called()
 
-    def test_extra_enter_refuses_foreign_text_with_own_marker(self):
+    def test_first_enter_never_repeats_after_foreign_text_with_own_marker(self):
         for glyph in ['›','❯']:
             idle,prompt,pending,_=BidirectionalSubmissionTests().states(glyph)
             altered=pending.replace(prompt,prompt+' user added words')
-            with self.subTest(glyph=glyph), patch.object(b,'read_screen',side_effect=[idle,altered]), patch.object(b,'send_text') as send, patch.object(b,'send_key') as key, patch.object(b.time,'sleep'):
-                with self.assertRaises(b.DispatchUnconfirmed): b._submit_text_once('peer',prompt,marker='unique-marker-20261004')
-                send.assert_called_once(); self.assertEqual(key.call_count,1)
+            with self.subTest(glyph=glyph):
+                BidirectionalSubmissionTests().run_case(glyph, [idle, altered], False, 1)
 
 
 class ExactDraftWhitespaceTests(unittest.TestCase):
@@ -221,4 +264,4 @@ class StaleMarkerProgressTests(unittest.TestCase):
             case = BidirectionalSubmissionTests()
             idle, prompt, pending, consumed = case.states(glyph)
             after = consumed.replace(idle, '• Read unrelated next file\n' + idle)
-            case.run_case(glyph, [consumed, after], False, 1)
+            case.run_case(glyph, [consumed, after], False, 0, sends=0)

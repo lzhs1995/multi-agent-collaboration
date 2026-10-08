@@ -36,6 +36,7 @@ import cmux_consensus_stop_guard as STOP_GUARD  # noqa: E402
 import cmux_consensus_round_guard as ROUND_GUARD  # noqa: E402
 import cmux_handshake_receipt_guard as HANDSHAKE_GUARD  # noqa: E402
 import cmux_lease_guard as LEASE_GUARD  # noqa: E402
+from native_test_support import NativeFixture  # noqa: E402
 
 
 def setUpModule():
@@ -43,9 +44,17 @@ def setUpModule():
     # the test runner's real managed-daemon ancestry. Native authentication has
     # its own dedicated positive/negative suite and live guard verification.
     import cmux_daemon_identity
-    patcher = mock.patch.object(cmux_daemon_identity, "collect", return_value=None)
+    import offline_test_hook
+    # 仅替换离线进程输入，真实 collect / collect_hook 与身份验证仍会执行。
+    patcher = mock.patch.object(cmux_daemon_identity, "process",
+                                side_effect=offline_test_hook.ordinary_process)
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
+    registry = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(registry.cleanup)
+    registry_patch = mock.patch.object(HARNESS, "ARTIFACT_REGISTRY_DIR", Path(registry.name))
+    registry_patch.start()
+    unittest.addModuleCleanup(registry_patch.stop)
 
 
 def gate(root: Path, task_id="r3-test", executor="surface:2", supervisor="surface:1"):
@@ -96,6 +105,12 @@ def args(root: Path, **over):
     return SimpleNamespace(**values)
 
 
+def claude_editor(text=""):
+    # 正例提供完整已知布局；不再用截断 shortcuts 行冒充空输入框。
+    border = "─" * 40
+    return f"{border}\n❯ {text}\n{border}\n[Opus 5]"
+
+
 class OfflineWorkspaceFixture(unittest.TestCase):
     """These suites test delivery/receipts; workspace enforcement has its own
     wired tests in test_cmux_workspace_guard, without this transport mock."""
@@ -136,9 +151,9 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
                                   # 1st read is the ownership pre-read: the box
                                   # must be provably empty before anything is
                                   # typed. 2nd is post-paste, 3rd is post-clear.
-                                  side_effect=["❯ \n  ? for shortcuts",
-                                               "❯ B1_01234567",
-                                               "❯ "]),
+                                  side_effect=[claude_editor(),
+                                               claude_editor("B1_01234567"),
+                                               claude_editor()]),
                 mock.patch.object(HARNESS.time, "sleep"),
             ):
                 HARNESS.cmd_bridge_test(args(root))
@@ -158,14 +173,14 @@ class BridgeClearPostconditionTests(OfflineWorkspaceFixture):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             gate(root)
-            stuck = "❯ B1_01234567"
+            stuck = claude_editor("B1_01234567")
             with (
                 mock.patch.object(HARNESS.cmux, "send_text"),
                 mock.patch.object(HARNESS.cmux, "send_key"),
                 # First read satisfies the ownership pre-read (empty box); every
                 # read after that shows the token stuck in compose.
                 mock.patch.object(HARNESS.cmux, "read_screen",
-                                  side_effect=["❯ \n  ? for shortcuts"] + [stuck] * 12),
+                                  side_effect=[claude_editor()] + [stuck] * 12),
                 mock.patch.object(HARNESS.time, "sleep"),
                 self.assertRaises(SystemExit) as exit_ctx,
             ):
@@ -975,11 +990,15 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
 
     def test_claude_task_status_is_chrome_but_user_triangle_text_is_not(self):
         task_status = (
+            "─────────────────────────\n"
             "❯ \n"
-            "  ─────────────────────────\n"
+            "─────────────────────────\n"
             "  [Opus 5 (1M context)]\n"
+            "  上下文 █░░░░░░░░░ 10%\n"
+            "  1 CLAUDE.md | 9 MCPs | 7 钩子\n"
             "  ▸ Repair transport lifecycle (109/125)\n"
-            "  ⏵⏵ bypass permissions on")
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle)")
+        self.assertEqual(HARNESS.cmux.receiver_input_kind(task_status), "AGENT_TUI")
         self.assertTrue(HARNESS.cmux.compose_block_is_empty(task_status))
         self.assertFalse(HARNESS.cmux.compose_block_is_empty(
             "❯ ▸ keep this unsubmitted user text"))
@@ -1274,6 +1293,8 @@ class SubmissionTaxonomyTests(unittest.TestCase):
         "• Working (1m 03s • esc to interrupt)",
         "  Messages to be submitted after next tool call",
         "  ↳ [CMUX-AGENT][delivery:MARK] TASK: ...",
+        "› ",
+        "GPT-6 high · tab to queue message",
     ])
     COMPOSE = "❯ MARK still sitting here"
     DELIVERED = "\n".join(["  MARK", "⏺ working on it"])
@@ -1299,6 +1320,12 @@ class SubmissionTaxonomyTests(unittest.TestCase):
         for state in BRIDGE.SUBMISSION_STATES:
             if state != BRIDGE.DELIVERY_QUEUED_AT_RECEIVER:
                 self.assertNotIn(state, BRIDGE.SUBMISSION_STATES_MEANING_WAIT)
+
+    def test_history_without_live_composer_is_not_queue_evidence(self):
+        history = '\n'.join(self.QUEUED.splitlines()[:-2])
+        self.assertNotEqual(
+            BRIDGE.classify_submission_failure(history, 'MARK', submitted=True),
+            BRIDGE.DELIVERY_QUEUED_AT_RECEIVER)
 
     def test_never_submitted_is_not_confused_with_delivered(self):
         """POISON: the misattribution that recorded a valid ACK as silence."""
@@ -1467,82 +1494,32 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertIn("raise SystemExit(_cli_main())", source)
         self.assertNotIn("print(\"ping:\", ping())", source)
 
-    def test_force_compose_uses_focused_ctrl_u_when_escape_is_noop(self):
-        """Claude can acknowledge Escape without editing its compose buffer."""
+    def _assert_forced_replacement_refused(self, screens):
+        """旧清空/覆盖路径在 public 入口拒绝，保留 receiver 的全部输入。"""
         with (
-            mock.patch.object(BRIDGE, "read_screen",
-                              side_effect=["❯ stale prompt\n[Opus 5]", "❯ stale prompt\n[Opus 5]", "❯ \n[Opus 5]"]),
+            mock.patch.object(BRIDGE, "read_screen", side_effect=screens) as read,
             mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "send_text"),
+            mock.patch.object(BRIDGE, "send_text") as send_text,
             mock.patch.object(BRIDGE, "focus_surface") as focus,
-            mock.patch.object(BRIDGE.time, "sleep"),
+            mock.patch.object(BRIDGE, "pin_workspace") as pin,
         ):
-            result = BRIDGE._submit_text_once(
-                "surface:104", "fresh prompt", marker=None, force_compose=True
-            )
-        self.assertFalse(result["confirmed"])
-        self.assertTrue(result["submitted"])
-        focus.assert_called_once_with("surface:104")
-        self.assertEqual(
-            [call.args[1] for call in send_key.call_args_list],
-            ["escape", "ctrl+u", "enter"],
-        )
+            with self.assertRaisesRegex(BRIDGE.TaskPackContractError, "MESSAGE_PRESERVE_COMPOSE"):
+                BRIDGE.submit_text("surface:104", "fresh prompt force-marker-001",
+                                   marker="force-marker-001", force_compose=True)
+        for operation in (read, send_key, send_text, focus, pin):
+            operation.assert_not_called()
 
-    def test_force_compose_cancels_known_idle_buffer_when_line_clear_is_noop(self):
-        """The final fallback is bounded and only follows both failed clears."""
-        with (
-            mock.patch.object(
-                BRIDGE,
-                "read_screen",
-                side_effect=[
-                    "❯ stale prompt\n[Opus 5]",
-                    "❯ stale prompt\n[Opus 5]",
-                    "❯ stale prompt\n[Opus 5]",
-                    "❯ \n[Opus 5]",
-                ],
-            ),
-            mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "focus_surface"),
-            mock.patch.object(BRIDGE.time, "sleep"),
-        ):
-            result = BRIDGE._submit_text_once(
-                "surface:104", "fresh prompt", marker=None, force_compose=True
-            )
-        self.assertFalse(result["confirmed"])
-        self.assertTrue(result["submitted"])
-        self.assertEqual(
-            [call.args[1] for call in send_key.call_args_list],
-            ["escape", "ctrl+u", "ctrl+c", "enter"],
-        )
+    def test_force_compose_refuses_escape_and_focused_ctrl_u_replacement(self):
+        self._assert_forced_replacement_refused([
+            claude_editor("stale prompt"), claude_editor("stale prompt"), claude_editor()])
 
-    def test_force_compose_deletes_only_fingerprinted_buffer_as_last_fallback(self):
-        with (
-            mock.patch.object(
-                BRIDGE,
-                "read_screen",
-                side_effect=[
-                    "❯ owned stale prompt\n[Opus 5]",
-                    "❯ owned stale prompt\n[Opus 5]",
-                    "❯ owned stale prompt\n[Opus 5]",
-                    "❯ owned stale prompt\n[Opus 5]",
-                    "❯ \n[Opus 5]",
-                ],
-            ),
-            mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "focus_surface"),
-            mock.patch.object(BRIDGE.time, "sleep"),
-        ):
-            result = BRIDGE._submit_text_once(
-                "surface:104", "fresh prompt", marker=None, force_compose=True
-            )
-        self.assertFalse(result["confirmed"])
-        self.assertTrue(result["submitted"])
-        keys = [call.args[1] for call in send_key.call_args_list]
-        self.assertEqual(keys[:4], ["escape", "ctrl+u", "ctrl+c", "end"])
-        self.assertEqual(keys.count("backspace"), 256)
-        self.assertEqual(keys[-1], "enter")
+    def test_force_compose_refuses_ctrl_c_after_noop_line_clear(self):
+        self._assert_forced_replacement_refused([
+            *[claude_editor("stale prompt")] * 3, claude_editor()])
+
+    def test_force_compose_refuses_fingerprinted_buffer_backspace_fallback(self):
+        self._assert_forced_replacement_refused([
+            *[claude_editor("owned stale prompt")] * 4, claude_editor()])
 
 
 class ArtifactBindingTests(unittest.TestCase):
@@ -2124,8 +2101,13 @@ class TaskPackDispatchContractTests(unittest.TestCase):
             self.assertEqual(pack["task_id"], "dispatch-contract")
 
     def test_manual_task_dispatch_without_pack_is_rejected(self):
-        with self.assertRaises(BRIDGE.TaskPackContractError):
-            BRIDGE._submit_text_once("surface:2", "TASK:\nreview this", marker=None)
+        with mock.patch.object(BRIDGE, "send_text") as send, \
+                mock.patch.object(BRIDGE, "send_key") as key:
+            with self.assertRaisesRegex(BRIDGE.TaskPackContractError, "TASK_PACK_REQUIRED"):
+                BRIDGE.submit_text("surface:2", "TASK:\nreview this task-marker-001",
+                                   marker="task-marker-001")
+        send.assert_not_called()
+        key.assert_not_called()
 
     def test_missing_skill_is_rejected_before_delivery(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2145,15 +2127,18 @@ class TaskPackDispatchContractTests(unittest.TestCase):
             path = self._pack(root)
             report = root / "report.md"
             report.write_text("verified\n", encoding="utf-8")
-            with mock.patch.object(
-                BRIDGE, "submit_text", return_value={"confirmed": True, "retries": 0}
-            ) as submit, mock.patch.object(BRIDGE, "pin_workspace", return_value={
-                "workspace_uuid": "TEST-WS", "caller_surface_uuid": "TEST-EXECUTOR",
-                "target_surface_uuid": "TEST-SUPERVISOR", "target_pane_uuid": "TEST-PANE"
-            }):
+            callback = json.loads(path.read_text())["completion_callback"]
+            identity = dict(workspace_uuid="TEST-WS", caller_surface_uuid="TEST-EXECUTOR",
+                            target_surface_uuid="TEST-SUPERVISOR", target_pane_uuid="TEST-PANE")
+            with NativeFixture(home=root / "home", identity=identity, provider="claude") as native, \
+                    mock.patch.object(BRIDGE, "read_screen", side_effect=NativeFixture.ready_screens(
+                        claude_editor(), claude_editor(callback), claude_editor())):
+                native.key.side_effect = native.receipt_on_key(callback)
                 receipt = BRIDGE.submit_completion_callback(path)
-            submit.assert_called_once()
+                native.send.assert_called_once_with("surface:1", callback)
+                native.key.assert_called_once_with("surface:1", "enter")
             self.assertTrue(receipt["confirmed"])
+            self.assertTrue(receipt["native_proof"])
             self.assertEqual(receipt["report_bytes"], report.stat().st_size)
             on_disk = json.loads(
                 (root / "completion-callback-receipt.json").read_text(encoding="utf-8")
@@ -2188,10 +2173,16 @@ class CompletionCallbackStopGateTests(unittest.TestCase):
         (artifact / "task-pack.json").write_text(json.dumps({
             "task_id": "completion-stop",
             "draft": False,
+            "executor_uuid": "executor-uuid",
+            "required_skill": str(BRIDGE.COLLABORATION_SKILL_PATH),
             "report": str(report),
             "completion_nonce": nonce,
             "completion_callback": callback,
             "callback_target": "surface:1",
+            "completion_delivery": {
+                "transport": "cmux_bridge.submit_completion_callback",
+                "require_confirmed": True,
+            },
             "completion_receipt": str(receipt),
         }), encoding="utf-8")
         (active / "marker.json").write_text(json.dumps({
@@ -2220,28 +2211,25 @@ class CompletionCallbackStopGateTests(unittest.TestCase):
 
     def test_executor_stop_passes_with_report_bound_confirmed_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
-            _, report, receipt, callback, nonce = self._fixture(Path(tmp))
-            receipt.write_text(json.dumps({
-                "task_id": "completion-stop",
-                "task_pack_sha256": __import__("hashlib").sha256(
-                    (report.parent / "task-pack.json").read_bytes()
-                ).hexdigest(),
-                "completion_nonce": nonce,
-                "completion_callback": callback,
-                "callback_target": "surface:1",
-                "report": str(report),
-                "report_sha256": __import__("hashlib").sha256(
-                    report.read_bytes()
-                ).hexdigest(),
-                "report_bytes": report.stat().st_size,
-                "confirmed": True,
-            }), encoding="utf-8")
-            with mock.patch.object(STOP_GUARD, "ACTIVE_DIR", Path(tmp) / "active"), \
+            artifact, _, receipt, callback, _ = self._fixture(Path(tmp))
+            identity = dict(workspace_uuid="workspace-test", caller_surface_uuid="executor-uuid",
+                            target_surface_uuid="supervisor-uuid", target_pane_uuid="pane-uuid")
+            with NativeFixture(home=Path(tmp) / "home", identity=identity, provider="claude") as native, \
+                    mock.patch.object(BRIDGE, "read_screen", side_effect=NativeFixture.ready_screens(
+                        claude_editor(), claude_editor(callback), claude_editor())), \
+                    mock.patch.object(STOP_GUARD, "ACTIVE_DIR", Path(tmp) / "active"), \
                     mock.patch.dict(os.environ, {
                         "CMUX_WORKSPACE_ID": "workspace-test",
                         "CMUX_SURFACE_ID": "executor-uuid",
                     }):
+                native.key.side_effect = native.receipt_on_key(callback)
+                result = BRIDGE.submit_completion_callback(artifact / "task-pack.json")
+                self.assertTrue(result["confirmed"])
+                before = receipt.read_bytes()
                 ok, message = STOP_GUARD.evaluate({"final_message": "DONE"})
+                self.assertEqual(receipt.read_bytes(), before)
+                native.send.assert_called_once()
+                native.key.assert_called_once()
             self.assertTrue(ok, message)
 
 
@@ -3239,9 +3227,9 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
             if seq is None:
                 token = f"B{bare.index(surface) + 1}_01234567"
                 if surface == fail_on:
-                    seq = ["❯ \n  ? for shortcuts"] + [f"❯ {token}"] * 12
+                    seq = [claude_editor()] + [claude_editor(token)] * 12
                 else:
-                    seq = ["❯ \n  ? for shortcuts", f"❯ {token}", "❯ "]
+                    seq = [claude_editor(), claude_editor(token), claude_editor()]
                 screens_cache.setdefault(surface, list(seq))
                 seq = screens_cache[surface]
             return seq.pop(0) if len(seq) > 1 else seq[0]

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import cmux_bridge as b
+from native_test_support import NativeFixture
 
 
 class MessageJournalTests(unittest.TestCase):
@@ -17,8 +18,9 @@ class MessageJournalTests(unittest.TestCase):
         p.start(); self.addCleanup(p.stop)
         self.identity = dict(workspace_uuid='workspace', caller_surface_uuid='caller',
                              target_surface_uuid='target', target_pane_uuid='pane')
-        p = patch.object(b, 'pin_workspace', return_value=self.identity)
-        self.pin = p.start(); self.addCleanup(p.stop)
+        self.native = NativeFixture.attach(self, home=self.home, identity=self.identity)
+        self.home = self.native.home
+        self.pin = self.native.pin
         p = patch.object(b.time, 'sleep')
         p.start(); self.addCleanup(p.stop)
         self.text = 'STATUS: message-nonce-20261005'
@@ -30,8 +32,10 @@ class MessageJournalTests(unittest.TestCase):
         return b.submit_text('peer', self.text, marker=self.marker, **kwargs)
 
     def test_success_blocks_duplicate_and_changed_payload(self):
-        with patch.object(b, 'read_screen', side_effect=[self.idle, self.done]), \
-                patch.object(b, 'send_text') as paste, patch.object(b, 'send_key') as key:
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                self.idle, self.native.draft(self.text), self.done)), \
+                patch.object(b, 'send_text') as paste, \
+                patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(self.text)) as key:
             result = self.call()
             self.assertTrue(result['confirmed'])
             with self.assertRaisesRegex(b.TaskPackContractError, 'RECEIPT_EXISTS'):
@@ -51,6 +55,7 @@ class MessageJournalTests(unittest.TestCase):
             with self.assertRaisesRegex(b.TaskPackContractError, 'ATTEMPT_EXISTS'):
                 self.call()
             paste.assert_called_once(); key.assert_not_called()
+        self.native.append_user(self.text)
         with patch.object(b, 'read_screen', return_value=self.done), \
                 patch.object(b, 'send_text') as paste, patch.object(b, 'send_key') as key:
             result = self.call(reconcile_only=True)
@@ -67,9 +72,10 @@ class MessageJournalTests(unittest.TestCase):
                 paste.assert_not_called(); key.assert_not_called()
 
     def test_identity_changes_before_paste(self):
-        changed = dict(self.identity, target_pane_uuid='moved')
-        self.pin.side_effect = [self.identity, self.identity, changed]
-        with patch.object(b, 'read_screen', return_value=self.idle), \
+        def move_after_observation(*args, **kwargs):
+            self.identity['target_pane_uuid'] = 'moved'
+            return self.idle
+        with patch.object(b, 'read_screen', side_effect=move_after_observation), \
                 patch.object(b, 'send_text') as paste, patch.object(b, 'send_key') as key:
             with self.assertRaisesRegex(b.TaskPackContractError, 'IDENTITY_CHANGED'):
                 self.call()
@@ -87,8 +93,10 @@ class MessageJournalTests(unittest.TestCase):
 
     def test_posthook_revalidates_message_and_rejects_modified_evidence(self):
         from cmux_submit_confirmation_guard import _attempt_evidence
-        with patch.object(b, 'read_screen', side_effect=[self.idle, self.done]), \
-                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                self.idle, self.native.draft(self.text), self.done)), \
+                patch.object(b, 'send_text'), \
+                patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(self.text)):
             result = self.call()
         call = dict(kind='text', surface='peer', text=self.text, marker=self.marker)
         with patch.object(b, 'send_text') as paste, patch.object(b, 'send_key') as key:

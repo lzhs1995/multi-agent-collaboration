@@ -61,6 +61,7 @@ from pathlib import Path
 _dir = Path(__file__).parent
 sys.path.insert(0, str(_dir))
 import cmux_bridge as cmux
+import render_cmux_agent
 
 # ---------------------------------------------------------------------------
 # Phase budgets and bridge-test clear postcondition
@@ -2239,18 +2240,7 @@ HOOK_CONFIGS = {
 # Guards that must be active on BOTH sides, with the event each one needs.
 # A PreToolUse guard cannot see a turn ending, and a Stop guard cannot see a
 # command being run, so the event is part of the requirement, not a detail.
-REQUIRED_GUARD_WIRING = {
-    "cmux_executor_closeout_guard": "PreToolUse",
-    "cmux_submit_confirmation_guard": "PostToolUse",
-    "cmux_agent_panel_guard": "PreToolUse",
-    "cmux_handshake_receipt_guard": "PreToolUse",
-    "cmux_consensus_round_guard": "PreToolUse",
-    "cmux_consensus_stop_guard": "Stop",
-    # A lease record that nothing checks is a comment. This guard is the
-    # enforcement half, so it must be present on both sides or the lease design
-    # is documentation only.
-    "cmux_lease_guard": "PreToolUse",
-}
+from manage_install import GUARDS as REQUIRED_GUARD_WIRING
 
 
 def _wired_guards(config_path: Path) -> dict[str, set[str]]:
@@ -2458,6 +2448,7 @@ def check_helper_parity() -> dict:
         "evaluated": 0,
         "divergences": [],
         "status": "HELPER_ABSENT",
+        "route_verified": False,
     }
     helper = find_external_helper()
     if helper is None:
@@ -2469,6 +2460,18 @@ def check_helper_parity() -> dict:
         text = helper.read_text(encoding="utf-8", errors="replace")
     except OSError:
         result["status"] = "HELPER_UNREADABLE"
+        return result
+
+    # 新 helper 使用同版 bridge adapter；核验完整渲染结果而非单个 exec 字符串。
+    if "cmux_agent_adapter.py" in text or "ask|send|broadcast|reconcile)" in text:
+        try:
+            result.update(render_cmux_agent.verify_route(
+                helper.read_bytes(), Path(__file__).resolve().parents[1]))
+            result["status"] = "PARITY_OK"
+            result["function_name"] = "fixed_bridge_adapter"
+        except (OSError, ValueError, UnicodeError) as exc:
+            result["status"] = "HELPER_ROUTE_INVALID"
+            result["route_error"] = str(exc)
         return result
 
     function_src = extract_bash_function(text, HELPER_FUNCTION_NAME)
@@ -2521,7 +2524,7 @@ def cmd_helper_parity(args):
     if result["status"] == "HELPER_ABSENT":
         _ok("helper-parity SKIPPED — no external cmux-agent helper on this machine")
         return
-    if result["status"] in {"HELPER_UNREADABLE", "HELPER_FUNCTION_NOT_FOUND"}:
+    if result["status"] in {"HELPER_UNREADABLE", "HELPER_FUNCTION_NOT_FOUND", "HELPER_ROUTE_INVALID"}:
         _fail(f"HELPER_PARITY_INDETERMINATE — {result['status']}")
         sys.exit(1)
     if result["divergences"]:
@@ -2543,20 +2546,19 @@ def cmd_helper_parity(args):
             "paste is reported as 'delivered, unverified' and never retried; "
             "helper=True where in_scope=False means an already-delivered message "
             "can receive a second enter and arrive twice."
-            + "\n  Remediation: the helper is outside this skill's scope, so do "
-            "NOT edit it from here. Either (a) send via cmux_bridge.submit_text, "
-            "which is in scope and already correct, or (b) get explicit scope "
-            "expansion for the helper path, then re-run this gate. Until one of "
-            "those happens, treat every DISPATCH_UNCONFIRMED from the helper as "
-            "unclassified: read the receiver's screen and classify with "
-            "cmux_bridge.classify_submission_failure before deciding anything, "
-            "and never blind-resend."
+            + "\n  Remediation: install the helper rendered for the same fixed "
+            "release, or explicitly pin this task to cmux_bridge. Preserve any "
+            "original uncertain attempt; only native reception confirms delivery."
         )
         sys.exit(1)
-    _ok(
-        f"helper-parity PASS — external helper agrees on all "
-        f"{result['evaluated']} fixtures"
-    )
+    if not result["route_verified"]:
+        if getattr(args, "callback_transport", "auto") == "bridge":
+            _ok("legacy screen parity is diagnostic only; this task uses cmux_bridge")
+            return
+        _fail("HELPER_NATIVE_ROUTE_REQUIRED — screen parity does not prove native delivery; "
+              "install the fixed adapter helper or explicitly use cmux_bridge")
+        sys.exit(1)
+    _ok("helper-parity PASS — complete helper bytes delegate to the same fixed bridge adapter")
 
 
 def cmd_guard_check(args):

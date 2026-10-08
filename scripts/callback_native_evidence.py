@@ -12,6 +12,7 @@ import stat
 from pathlib import Path
 
 from delivery_receipts import ReceiptError, native_user_record, snapshot
+import cmux_native_delivery as delivery
 
 
 def reconcile_received(pack_path, bridge, *, transcript, line):
@@ -57,6 +58,8 @@ def reconcile_received(pack_path, bridge, *, transcript, line):
             raise ReceiptError('original callback attempt required')
         evidence = validate(pack_path, attempts[-1], transcript, line, session)
         old = json.loads(attempts[-1].read_text())
+        delivery.require_bound(bridge, pack['callback_target'], old['native_binding'],
+                               pack['completion_callback'], read_only=True)
         original = old['binding']['identity']
         if (live['caller_surface_uuid'] != original['target_surface_uuid']
                 or live['target_surface_uuid'] != original['caller_surface_uuid']
@@ -68,9 +71,12 @@ def reconcile_received(pack_path, bridge, *, transcript, line):
         require_action(pack['task_id'], 'callback', pack)
         check_lock()
         value = {k: v for k, v in old['binding'].items() if k != 'identity'}
-        value.update(confirmed=True, confirmation_source='original_journal_native_user_record',
+        delivery.require_bound(bridge, pack['callback_target'], old['native_binding'],
+                               pack['completion_callback'], read_only=True)
+        value.update(confirmed=True, confirmation_source='native_user_message_v1',
                      reconciled_read_only=True, attempt=str(attempts[-1]),
-                     native_evidence=evidence, receiver_identity=live, input_operations=0)
+                     native_evidence=evidence, receiver_identity=live, input_operations=0,
+                     native_binding=old['native_binding'], native_proof=evidence['native_proof'])
         publish(receipt, value)
         return value
     finally:
@@ -89,6 +95,15 @@ def validate(pack_path, attempt_path, transcript, line, session_id):
     if not attempts or attempts[-1] != attempt_path:
         raise ReceiptError('must validate latest original callback attempt')
     attempt = json.loads(attempt_path.read_text())
+    try:
+        intent_at, fence = delivery._original_intent(
+            attempt, attempt.get('native_binding'), pack['completion_callback'])
+    except delivery.NativeDeliveryError as exc:
+        raise ReceiptError(str(exc)) from exc
+    original_native = attempt['native_binding']
+    if (original_native['session_id'] != session_id
+            or original_native['transcript']['path'] != str(transcript)):
+        raise ReceiptError('native transcript differs from original binding')
     binding = attempt.get('binding', {})
     expected = dict(task_id=pack['task_id'], completion_nonce=pack['completion_nonce'],
                     completion_callback=pack['completion_callback'],
@@ -114,16 +129,20 @@ def validate(pack_path, attempt_path, transcript, line, session_id):
         raise ReceiptError('original paste and Enter intent required')
     if hashlib.sha256(pastes[0]['screen'].encode('utf-8', 'replace')).hexdigest()[:16] != pastes[0].get('screen_sha256'):
         raise ReceiptError('original screen hash mismatch')
-    from datetime import datetime, timezone
-    after = max(datetime.fromisoformat(pack['finalized_at'].replace('Z', '+00:00')),
-                datetime.fromtimestamp(enters[0]['at_epoch'], timezone.utc)).isoformat()
     native = native_user_record(transcript, line, session_id=session_id,
-                                exact_text=pack['completion_callback'], after=after)
+                                exact_text=pack['completion_callback'], after=pack['finalized_at'])
+    proof = dict(schema=delivery.SCHEMA, session_id=session_id,
+                 **{k: native[k] for k in ('path', 'device', 'inode', 'offset', 'length')},
+                 sha256=native['record_sha256'], reception_kind='native_user_message',
+                 payload_sha256=original_native['payload_sha256'])
+    if not delivery.validate_proof(original_native, pack['completion_callback'], proof,
+                                   not_before=intent_at, paste_fence=fence):
+        raise ReceiptError('original native paste fence does not prove this user record')
     if (snapshot(pack_path) != pack_pin or snapshot(pack['report']) != report_pin
             or snapshot(attempt_path) != attempt_pin or snapshot(pack['identity_gate']) != gate_pin
             or sorted(journal.glob('attempt-*.json')) != attempts):
         raise ReceiptError('evidence changed during validation')
     return dict(status='EXACT_NATIVE_RECEPTION', pack=pack_pin, report=report_pin,
-                attempt=attempt_pin, gate=gate_pin, native=native,
+                attempt=attempt_pin, gate=gate_pin, native=native, native_proof=proof,
                 input_operations=0, receipt_created=False,
                 scope='Reception evidence only; original controller settlement remains required')

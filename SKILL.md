@@ -49,9 +49,12 @@ replacement, or claim a successful handshake. Existing sessions remain intact.
 
 `scripts/cmux_workspace_guard.py` provides the shared fail-closed check.
 `cmux_agent_panel_guard.py` invokes it before help/recovery exceptions. Raw
-`cmux send/send-key`, `cmux-agent ask/broadcast` and terminal-write RPC paths are
-blocked by the hook; use `cmux_bridge`, which rechecks every paste/key and addresses
-both workspace and surface by UUID. The harness rechecks saved gate UUIDs before
+`cmux send/send-key` and terminal-write RPC paths are blocked. Direct
+`ask/send/broadcast/reconcile` calls to an absolute executable helper are admitted
+only when its complete rendered bytes, adapter release and Python match this guard.
+Optional `rtk`/`rtk proxy` prefixes are supported; shell/env wrappers, nesting,
+redirection and alternate senders are refused. The helper routes through the same
+`cmux_bridge`, which rechecks every paste/key and addresses both endpoints by UUID. The harness rechecks saved gate UUIDs before
 later phases. Missing identity, ambiguous refs, stale UUIDs, target movement,
 unknown cmux state and a changed designated peer deny before input. No force,
 message-prefix, timeout, recovery-authority or environment bypass exists.
@@ -107,15 +110,21 @@ not an OS sandbox against arbitrary self-written socket clients.
 
 ## Delivery And Monitoring
 
+The current contract for both directions, original-attempt recovery, Stop and idle
+waiting is [verified native delivery](references/verified-compose-delivery.md).
+Historical screen confirmation and separate Enter/Tab retry budgets are superseded.
+
 Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
 choose zero, one or two executors, apply phase-specific handshake budgets,
 attribute delivery failures, and close accepted work without repeated reviews.
 
 Use [executor closeout enforcement](references/executor-closeout-enforcement.md):
-the PreToolUse guard blocks additional tools after a bound report's callback
-attempt has returned. Stop permits its exact honest REPORT_READY handoff without
-manufacturing delivery confirmation. Supervisor reconciliation and task acceptance
-remain separate. Missing/in-flight/changed evidence cannot use this exception.
+the PreToolUse guard freezes the report, task pack and original attempt after the
+bound callback returns. Strict task-bound read-only diagnostics and original-controller
+reconciliation remain available. Stop accepts an ordinary honest waiting statement
+as WAITING_SUPERVISOR (continue:false, suppressOutput:true); no exact STATUS template
+is required. It preserves task/receipt state and rejects unsupported confirmation or
+consensus claims. Missing/in-flight/changed evidence cannot use this boundary.
 
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
@@ -137,11 +146,14 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
 - Match the observation budget to the harness phase minimum. A shorter local
   observation is a supervisor budget limitation, not executor silence. Recover a
   late genuine ACK against the original task/provider/nonce without resending.
-- **Paste is not submission; Enter is not delivery.** For prompts and callbacks
-  alike, use the guarded bridge, lowercase `enter`, and a post-key screen check.
-  A marker still in compose is not delivered. A queued marker is pending, not
-  failed and not confirmed. Only real receiver activity after the marker can
-  confirm delivery; a prompt echo or unrelated activity cannot.
+- **Keys and queue entries do not prove reception.** Bind the exact receiver
+  process/session/transcript and a fresh EOF fence at the original PASTE_INTENT.
+  Only a new whole native user record after that fence, exactly equal to the
+  payload including whitespace, yields NATIVE_RECEIVED. Claude queued_command
+  remains pending. Paste once, wait for the full stable draft, then submit once:
+  use Tab directly for busy Codex displaying the verified tab-to-queue hint,
+  otherwise Enter in a clear supported state. All recovery paths share at most
+  one additional key under the original controller; no separate Enter/Tab budget.
 - `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
   A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
@@ -160,6 +172,13 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   two independent UI channels: serialize input and recheck exact surface UUIDs.
   Supervisors continue independent work while callbacks are pending. Persistent
   executor failures use the authorized solo takeover boundary below.
+
+Supervisors use authenticated active markers for bounded discovery of frozen
+reports through the PostToolUse `scripts/cmux_supervisor_report_guard.py`
+(REPORT_DISCOVERED). Discovery is not delivery,
+acceptance or disarm. Idle Stop records one durable notice and allows termination;
+explicit `executor_ready.py persist` is read-only and bounded to 300 seconds.
+CCC waits have a deadline; native Goal behavior requires separate evidence.
 
 Follow [bounded handshakes, delivery and closeout](references/bounded-collaboration.md)
 for each dispatch. Keep business acceptance, callback confirmation and resource
@@ -192,17 +211,20 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   recover only in the original session at a safe handoff and fresh handshake.
   Read [availability and shared resources](references/availability-and-resources.md)
   for the evidence rule, v2 initialization, v1 migration and resource leases.
-- Pasting is not submission. Confirm lowercase `enter` and new receiver activity
-  using the bridge's delivery classifier. Prompt echo, stale callbacks and marker
-  absence are not proof. On ambiguous delivery inspect before any resend.
+- On uncertain delivery, inspect the original native evidence without resending.
+  Missing original binding/fence cannot be backfilled. Screen activity, ACK,
+  empty compose and marker absence never substitute for exact native reception.
 - Confirmed product virtual suggestions are not actual compose input. The bridge
   tests exact known shapes in both directions. Unknown text stays occupied.
   Public default is **no force-compose**. Only explicit operator permission may
   enable `--force-compose`; active/queued work still cannot be overwritten.
 - Preserve the current model. An optional `MULTI_AGENT_EXECUTOR_MODEL` records
   the task's requested model; it does not silently issue a model-switch command.
-- The external `cmux-agent` helper is not shipped. Check `helper-parity` before
-  trusting it. The in-repo bridge is authoritative for task/callback delivery.
+- `scripts/render_cmux_agent.py` renders the helper from a pinned baseline.
+  Installation must verify the whole helper and same-release adapter with
+  `helper-parity`; a matching path or a successful exit is insufficient. Ordinary
+  messages use its sole guarded bridge route. Formal task packs and completion
+  callbacks retain their dedicated task-bound bridge entrypoints.
 
 ## Enforcement And Evidence
 
@@ -230,7 +252,7 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 ## 双向投递与高效协作维护
 
-执行[高效握手、多执行者与双向投递](references/efficient-bidirectional-collaboration-20261004.md)：每次Enter后读回；输入框残留、排队与消费分别记录；可能已发送的回调仅只读核收，禁止重贴。
+执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，封口保留 task-bound 诊断与零输入核收，idle Stop 不要求求派。
 
 ### Stop hook reentry
 

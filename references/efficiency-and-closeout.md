@@ -121,19 +121,16 @@ force授权的虚拟建议场景，只能恢复到实际粘贴前的文本，不
 身份和空闲状态。原始哈希变化、草稿、运行/排队、未知界面或已有握手都拒绝。
 这不是重跑 preflight 的许可，也不能补造回执使真实 caller 认证失败通过。
 
-prompt 和 callback 都须经原受保护 bridge，在每次写入前核 live UUID，
-Enter 后核同一接收端的完整消息及原 marker。证据分开记：
+prompt 和 callback 均遵循[原生投递与有界等待](verified-compose-delivery.md)：
+输入前固定同一接收进程/session/transcript 和原 PASTE_INTENT 新鲜 EOF fence；
+只有边界后新增、全文完全相等的 native user 才为 `NATIVE_RECEIVED`。
+空白和换行不得改写。屏幕、ACK、Enter/Tab、退出码与空 compose 不证明收到；
+Claude `queued_command` 仍 pending。执行、正式 receipt 和业务接受另列。
 
-1. 文字留在 compose：尚未证明提交。
-2. queued：已排队，尚未证明消费。
-3. 原生记录中的本次完整消息及关联后续活动：消费证据。
-4. 由原绑定校验并发布的正式 receipt：传输核收。
-5. supervisor 阅读报告与原件并裁决：业务接受。
-
-按键返回成功、单独 marker、无关活动和报告文件存在不能跨级证明。
-unknown/queued 只读核原 attempt，不能重贴、循环按键、删除 journal 或
-改写冻结报告。补 Enter/Tab 只能由原 bridge 按既有严格条件执行，
-不是人工看到 compose 就补键的许可。
+首次粘贴一次，完整草稿稳定后提交一次。忙碌 Codex 明示
+`tab to queue message` 且原文匹配时直接 Tab；其他清晰受支持状态 Enter。
+原次恢复先核迟到原生记录；自动/显式路径共用一次补键，意图落盘即消耗。
+未知、排队、草稿改变或缺原 binding/fence 不补键，不重贴或追补旧基线。
 
 executor 完成报告后调用原 callback 入口，由它判断输入条件；
 不得额外等待 supervisor 的 busy=false，也不另建秒级 watcher。
@@ -194,8 +191,10 @@ queued、消费和确认仍分别记录。通知未确认不撤销已核收的�
 不生成新同步动作。通知本身不能证明工具恢复或业务验收。
 
 运行约束见[执行者交付后收口](executor-closeout-enforcement.md)。报告及原回调终态
-绑定成立后，PreToolUse 阻止额外工具调用；Stop 接受精确诚实交接模板。
-未知回调交主管核原次，不能强迫执行者无限重试，也不伪造 confirmed。
+绑定成立后，PreToolUse 冻结报告/任务包及原记录，保留严格 task-bound
+只读诊断与原 controller reconcile。Stop 接受普通诚实等待说明，返回
+WAITING_SUPERVISOR、continue:false、suppressOutput:true；无证据的
+confirmed/共识声明仍拦。未知回调交主管核原次，不强迫无限重试。
 
 定点失败、必要增量回归、真实效果、用户验收分别留证。用户已验收的
 局部故障即在账本结案，剩余主线另列；没有新变更或未决风险就不重跑旧矩阵。
@@ -204,6 +203,19 @@ queued、消费和确认仍分别记录。通知未确认不撤销已核收的�
 经验进入仓库时只写可复用规则，不公开 Key、用户原日志或本机身份。
 源码提交、CI、安装、客户端加载、真实投递及整体验收各自报告；
 修改本页不代表新 hook 上线，也不需要重启正在工作的客户端。
+
+## 有界发现报告与等待
+
+主管用 `scripts/cmux_supervisor_report_guard.py` 经认证 active markers 有界发现
+本 workspace 的原冻结报告；发现不等于送达、业务接受或 disarm。封口
+诊断使用 `scripts/cmux_callback_diagnose.py --task-pack <原绝对路径>`，
+不发送输入，不改原证据。正式接口须来自完整相容安装。
+
+idle Stop 只持久化一次状态并允许结束；未求派不能拦截 Stop。
+显式 `executor_ready.py persist` 仅读原请求/答复，最长 300 秒。
+未确认保持同一 payload、marker、nonce，不每 60 秒重贴，不因重启延长
+期限。CCC 等待主管同步终态和期限；native Goal 单独核证，不能由配置
+落盘或 hook 放行推断。详见[统一合同](verified-compose-delivery.md)。
 
 ## 文件协调与磁盘受限时的接续
 

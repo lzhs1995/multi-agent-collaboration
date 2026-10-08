@@ -68,7 +68,9 @@ class CallbackReconcileTests(base.QueueResumeTests):
             ok, reason = guard._evaluate_resolved(dict(self.payload, tool_input=dict(command="ls")))
         self.assertFalse(ok)
         self.assertIn("cmux_callback_reconcile.py", reason)
-        self.assertIn("do not retry, wait or poll", reason)
+        self.assertIn("zero terminal input", reason)
+        self.assertIn("existing guarded queue-resume entrypoint", reason)
+        self.assertIn("no new paste, watcher, or retry loop", reason)
 
 
 # Do not re-run the inherited queue-resume cases under this class.
