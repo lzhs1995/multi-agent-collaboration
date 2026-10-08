@@ -62,12 +62,19 @@ _NEVER_INPUT = frozenset({"PREPARED", "NO_INPUT"})
 _QUEUED_STATE = "DELIVERY_QUEUED_AT_RECEIVER"
 
 
+# 旧 attempt 没有结构化字段，只有发送器写进 error 的散文。探针必须抄自发送器源码
+# （cmux_bridge.py 的 DispatchUnconfirmed 文案），不能照我自己以为的常量名去搜：
+# 实测真实 error 串里根本没有 "DELIVERY_QUEUED_AT_RECEIVER" 这几个字，
+# 于是我原先的兼容分支对所有真实旧 attempt 恒为假。
+_QUEUED_PROSE = "delivery queued at receiver"
+
+
 def _queued_at_receiver(attempt: dict[str, Any]) -> bool:
-    """只认结构化字段，其次兼容旧 attempt 的 error 串。"""
+    """只认结构化字段，其次兼容旧 attempt 的 error 散文。"""
     state = attempt.get("delivery_state")
     if isinstance(state, str) and state:
         return state == _QUEUED_STATE
-    return _QUEUED_STATE in str(attempt.get("error") or "")
+    return _QUEUED_PROSE in str(attempt.get("error") or "").lower()
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:

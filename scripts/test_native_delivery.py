@@ -274,10 +274,31 @@ class GuardEnforcement(unittest.TestCase):
         self.assertNotIn("只能等", text)
 
     def test_legacy_attempt_reads_queued_state_from_error_string(self):
-        """旧 attempt 没有结构化字段，只在 error 串里带状态。"""
-        items = self._with(error="DISPATCH_UNCONFIRMED marker=x (delivery queued at "
-                                 "receiver) DELIVERY_QUEUED_AT_RECEIVER")
-        self.assertTrue(items[0]["queued_at_receiver"])
+        """旧 attempt 只有 error 散文。探针抄自 cmux_bridge 源码，不是我以为的常量名。
+
+        实测 2026-10-08：真实 error 串里没有 "DELIVERY_QUEUED_AT_RECEIVER"，
+        我原先按常量名搜的兼容分支对每一条真实旧 attempt 都恒为假。
+        """
+        real_strings = [
+            "DISPATCH_UNCONFIRMED marker=da3aa88c549e7256 surface=surface:40 "
+            "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
+            "DISPATCH_UNCONFIRMED marker=x surface=surface:40 "
+            "(delivery queued at receiver after one retry — wait, do not resend)",
+        ]
+        for text in real_strings:
+            items = self._with(delivery_state=None, error=text)
+            self.assertTrue(items[0]["queued_at_receiver"], f"漏判真实串：{text[:60]}")
+        # 负控：别的未确认原因不得被当成排队。
+        items = self._with(delivery_state=None,
+                           error="DISPATCH_UNCONFIRMED marker=x surface=surface:40 "
+                                 "(compose still holds the payload)")
+        self.assertFalse(items[0]["queued_at_receiver"])
+
+    def test_queued_prose_probe_matches_the_senders_own_text(self):
+        """判据本身要有测试：探针必须真出现在发送器源码里。"""
+        bridge_src = (SCRIPT_DIR / "cmux_bridge.py").read_text(encoding="utf-8")
+        self.assertIn(guard._QUEUED_PROSE, bridge_src,
+                      "探针不在发送器源码中 = 又一次凭记忆敲探针")
 
     def test_exit_2_when_not_received(self):
         results = guard.verify(self._pending(), wait_seconds=0.0,
