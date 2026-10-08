@@ -7,6 +7,7 @@ from cmux_consensus_stop_guard import (
     _active_markers, _has_active_markers, _workspace_key, _surface_key,
 )
 from executor_closeout import terminal_report, handoff_line
+from cmux_callback_queue_resume import allowed as queue_resume_allowed
 
 
 def _evaluate_resolved(payload):
@@ -16,6 +17,8 @@ def _evaluate_resolved(payload):
     for marker in _active_markers(payload):
         evidence = terminal_report(marker, _workspace_key(payload), surface)
         if evidence:
+            if queue_resume_allowed(payload, marker, evidence):
+                continue
             return False, (
                 'EXECUTOR_CLOSEOUT: report frozen; original callback attempt returned. '
                 'Do not add tests, memories, watchers, retries, or other tool calls. '

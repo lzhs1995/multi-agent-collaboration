@@ -25,12 +25,14 @@ Exit codes: 0 = allow turn-end, 2 = block turn-end (Claude must act/retract).
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import hashlib
 import math
 import os
 import cmux_hook_identity as hook_identity
 import re
+import stat
 import sys
 from executor_closeout import terminal_report, handoff_line
 from datetime import datetime, timezone
@@ -384,6 +386,102 @@ def _current_participant_is_executor(marker: dict[str, Any], payload: dict[str, 
     )
 
 
+def _lifecycle_snapshot(path: Path) -> tuple[bytes, tuple[int, ...]]:
+    """Pin a regular original file; symlinks and concurrent changes are unknown."""
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("lifecycle evidence is not a regular file")
+        raw = handle.read()
+        after, current = os.fstat(handle.fileno()), path.lstat()
+        def identity(s):
+            return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (not stat.S_ISREG(current.st_mode)
+                or identity(before) != identity(after)
+                or identity(before) != identity(current)):
+            raise ValueError("lifecycle evidence changed")
+        return raw, identity(before)
+
+
+def _task_dispatch_state(marker: dict[str, Any], pack_raw: bytes, executor: str) -> str:
+    """Read-only lifecycle of the supervisor's task prompt for this exact pack.
+
+    A finalized pack is not a delivered task. Only one state proves the task
+    never reached this executor: the original dispatch journal exists, every
+    attempt is NO_INPUT for this pack/executor, no receipt exists, and the
+    sender holds no delivery lock. Missing, legacy, malformed, in-flight,
+    pasted, queued or confirmed evidence is never treated as "not started".
+    """
+    try:
+        supervisors = [p for p in marker.get("participants", [])
+                       if isinstance(p, dict) and p.get("role") == "supervisor"]
+        if len(supervisors) != 1 or not supervisors[0].get("surface_uuid"):
+            return "UNKNOWN"
+        task_id = marker.get("task_id")
+        pack = json.loads(pack_raw)
+        workspace = str(marker.get("workspace_uuid") or "").upper()
+        if (not workspace or pack.get("task_id") != task_id
+                or str(pack.get("executor_uuid", "")).upper() != executor.upper()):
+            return "UNKNOWN"
+        key = hashlib.sha256(json.dumps(
+            [supervisors[0]["surface_uuid"], task_id]).encode()).hexdigest()
+        journal = (Path.home() / ".local/state/multi-agent-collaboration"
+                   / "task-dispatch-v1" / key)
+        if journal.is_symlink() or not journal.is_dir():
+            return "UNKNOWN"
+        if os.path.lexists(journal / "receipt.json"):
+            return "CONFIRMED_OR_RECONCILED"
+        attempts = sorted(journal.glob("attempt-*.json"))
+        if not attempts:
+            return "UNKNOWN"
+        lock_path = journal / "delivery.lock"
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return "IN_FLIGHT"
+            held = os.fstat(lock.fileno())
+            lock_identity = {"device": held.st_dev, "inode": held.st_ino}
+            def original_lock():
+                now = lock_path.lstat()
+                return (stat.S_ISREG(now.st_mode) and stat.S_ISREG(held.st_mode)
+                        and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino))
+            if not original_lock():
+                return "UNKNOWN"
+            pack_sha = hashlib.sha256(pack_raw).hexdigest()
+            pins = {}
+            for path in attempts:
+                pins[path] = _lifecycle_snapshot(path)
+                attempt = json.loads(pins[path][0])
+                binding = attempt["binding"]
+                identity = binding["identity"]
+                if (binding.get("task_id") != task_id
+                        or binding.get("task_pack_sha256") != pack_sha
+                        or str(identity.get("target_surface_uuid", "")).upper()
+                        != executor.upper()
+                        or str(identity.get("workspace_uuid", "")).upper() != workspace
+                        or str(identity.get("caller_surface_uuid", "")).upper()
+                        != str(supervisors[0]["surface_uuid"]).upper()
+                        or not identity.get("target_pane_uuid")):
+                    return "UNKNOWN"
+                if attempt.get("phase") != "NO_INPUT" or attempt.get("events") != []:
+                    return "SUBMITTED_OR_UNKNOWN"
+                # Older writers did not pin the lock inode. They cannot prove
+                # the unlocked path is the original sender's lock.
+                pin = attempt.get("delivery_lock_identity")
+                if (pin != lock_identity or not isinstance(pin, dict)
+                        or any(type(pin.get(k)) is not int for k in lock_identity)):
+                    return "UNKNOWN"
+            if (not original_lock() or os.path.lexists(journal / "receipt.json")
+                    or sorted(journal.glob("attempt-*.json")) != attempts
+                    or any(_lifecycle_snapshot(p) != v for p, v in pins.items())):
+                return "UNKNOWN"
+        return "NO_INPUT"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return "UNKNOWN"
+
+
 def _completion_callback_evidence(
     marker: dict[str, Any], payload: dict[str, Any]
 ) -> tuple[bool, str]:
@@ -406,7 +504,27 @@ def _completion_callback_evidence(
         return False, "completion_receipt is not bound directly under artifact_root"
     receipt = _read_json(receipt_path)
     if not isinstance(receipt, dict):
-        return False, f"completion callback receipt missing/unreadable at {receipt_path}"
+        # An executor-side callback attempt means work was reported; never
+        # release it through the dispatch side. Otherwise only a proven
+        # NO_INPUT dispatch shows the finalized task never reached us.
+        attempts = receipt_path.with_name(receipt_path.stem + "-attempts")
+        report_value = pack.get("report")
+        report = Path(report_value) if isinstance(report_value, str) else None
+        if report is None or not report.is_absolute() or report.parent.resolve() != root.resolve():
+            return False, "completion report is not bound directly under artifact_root"
+        pack_raw = (root / "task-pack.json").read_bytes()
+        state = "CALLBACK_ATTEMPTED" if os.path.lexists(attempts) else \
+            "REPORT_WITHOUT_CALLBACK" if os.path.lexists(report) else \
+            _task_dispatch_state(marker, pack_raw, _surface_key(payload) or "")
+        if state == "NO_INPUT":
+            if (os.path.lexists(report) or os.path.lexists(attempts)
+                    or os.path.lexists(receipt_path)
+                    or (root / "task-pack.json").read_bytes() != pack_raw):
+                return False, "task lifecycle changed during NO_INPUT observation"
+            return True, ("finalized task pack was never delivered (dispatch NO_INPUT); "
+                          "no completion callback is owed yet")
+        return False, (f"completion callback receipt missing/unreadable at {receipt_path} "
+                       f"(task dispatch state: {state})")
 
     report_value = pack.get("report")
     report = Path(report_value) if isinstance(report_value, str) else None
