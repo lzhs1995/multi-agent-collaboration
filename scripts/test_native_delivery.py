@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -253,6 +254,101 @@ class GuardEnforcement(unittest.TestCase):
             env=dict(os.environ, CMUX_NATIVE_PROOF_DISABLE="1"))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stderr.strip(), "")
+
+
+class NativeGate(unittest.TestCase):
+    """闸门：发送器不得在没有原生记录时写 CONFIRMED。
+
+    这些用例自己管 CMUX_NATIVE_GATE；test_all.py 刻意不覆盖本类（否则被测开关
+    被 mock 掉，断言空转）。
+    """
+
+    def setUp(self):
+        import cmux_native_gate
+        self.gate = cmux_native_gate
+        self.bridge = cmux_bridge
+        self.env = patch.dict(os.environ, {"CMUX_NATIVE_GATE": "on",
+                                           "CMUX_NATIVE_GATE_WAIT": "0"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def test_received_confirms(self):
+        verdict, evidence = self.gate.require(
+            self.bridge, MARKER, TEXT, 0,
+            waiter=lambda **kw: {"state": nd.RECEIVED, "transcript": "/t.jsonl"})
+        self.assertEqual(verdict, "CONFIRMED")
+        self.assertEqual(evidence["state"], nd.RECEIVED)
+
+    def test_not_received_raises_when_not_recoverable(self):
+        with self.assertRaises(self.bridge.DispatchUnconfirmed) as ctx:
+            self.gate.require(self.bridge, MARKER, TEXT, 0, recoverable=False,
+                              waiter=lambda **kw: {"state": nd.NOT_RECEIVED})
+        self.assertIn("NATIVE_DELIVERY_NOT_RECEIVED", str(ctx.exception))
+
+    def test_not_received_is_strandable_when_recovery_is_allowed(self):
+        verdict, _ = self.gate.require(
+            self.bridge, MARKER, TEXT, 0, recoverable=True,
+            waiter=lambda **kw: {"state": nd.NOT_RECEIVED})
+        self.assertEqual(verdict, "STRANDED")
+
+    def test_altered_payload_never_confirms(self):
+        with self.assertRaises(self.bridge.DispatchUnconfirmed):
+            self.gate.require(self.bridge, MARKER, TEXT, 0, recoverable=True,
+                              waiter=lambda **kw: {"state": nd.RECEIVED_ALTERED,
+                                                   "transcript": "/t.jsonl"})
+
+    def test_gate_off_is_labelled_not_proven(self):
+        with patch.dict(os.environ, {"CMUX_NATIVE_GATE": "off"}):
+            verdict, evidence = self.gate.require(
+                self.bridge, MARKER, TEXT, 0,
+                waiter=lambda **kw: self.fail("gate off must not query transcripts"))
+            # stamp 必须在同一个 patch 作用域内读，否则读到的是恢复后的开关值。
+            self.assertEqual(self.gate.stamp(evidence, 0)["gate"], "off")
+        self.assertEqual(verdict, "CONFIRMED")
+        self.assertEqual(evidence["state"], "GATE_DISABLED")
+        self.assertIn("NOT proven", evidence["note"])
+        self.assertEqual(self.gate.stamp(evidence, 0)["gate"], "on",
+                         "开关恢复后 stamp 必须随之变化，否则它没在读环境")
+
+    def test_stamp_records_criterion_and_time(self):
+        stamp = self.gate.stamp({"state": nd.RECEIVED}, 123.0)
+        self.assertEqual(stamp["criterion"],
+                         "whole_text_user_record_in_receiver_native_transcript")
+        self.assertEqual(stamp["since_epoch"], 123.0)
+        self.assertGreater(stamp["verified_at_epoch"], 0)
+
+    def test_message_sender_refuses_receipt_without_native_proof(self):
+        """端到端：屏幕说已消费、但原生记录没有 → 不得落 receipt。"""
+        import cmux_message_journal
+        home = Path(tempfile.mkdtemp())
+        marker, text = "ff00ff00ff00ff00", "hello ff00ff00ff00ff00"
+        screen = "❯ \ntab to queue message"
+        fake = types.SimpleNamespace(
+            TaskPackContractError=self.bridge.TaskPackContractError,
+            DispatchUnconfirmed=self.bridge.DispatchUnconfirmed,
+            _looks_like_task_dispatch=lambda t: False,
+            pin_workspace=lambda s: {"workspace_uuid": "W", "caller_surface_uuid": "C",
+                                     "target_surface_uuid": "T", "target_pane_uuid": "P"},
+            screen_hash=self.bridge.screen_hash,
+            read_screen=lambda s, lines=200: screen,
+            _delivery_confirmed=lambda *a, **k: True,
+            recover_stranded_once=lambda *a, **k: {"recovered": "key"},
+            _submit_text_once=lambda *a, **k: (
+                k["delivery_observer"]("PASTE_INTENT", screen),
+                k["delivery_observer"]("ENTER_SENT"),
+                {"confirmed": True})[-1],
+        )
+        with patch.object(Path, "home", staticmethod(lambda: home)), \
+                patch.object(cmux_message_journal.time, "sleep", lambda s: None):
+            with self.assertRaises(self.bridge.DispatchUnconfirmed):
+                cmux_message_journal.deliver(fake, "surface:40", text, marker)
+        receipts = list(home.rglob("receipt.json"))
+        self.assertEqual(receipts, [], "未证明送达却落了 receipt")
+        attempts = list(home.rglob("attempt-*.json"))
+        self.assertTrue(attempts, "attempt 必须留痕")
+        body = json.loads(attempts[-1].read_text())
+        self.assertNotEqual(body.get("phase"), "CONFIRMED")
+        self.assertIn("NATIVE_DELIVERY_NOT_RECEIVED", body.get("error", ""))
 
 
 if __name__ == "__main__":

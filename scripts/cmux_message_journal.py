@@ -196,11 +196,27 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 attempt['phase'] = phase
                 write_json(attempt_path, attempt)
 
+            started = time.time()
             try:
                 result = bridge._submit_text_once(surface, text, marker=marker,
                     confirm_lines=confirm_lines, force_compose=False, delivery_observer=observe)
                 if result.get('confirmed') is not True:
                     raise bridge.DispatchUnconfirmed('MESSAGE_NOT_CONFIRMED')
+                # 屏幕说「已消费」还不够：Enter 可能被 compose 当换行吃掉，屏幕判据
+                # 在繁忙接收端上会猜错。只有接收端 transcript 里出现整条相等的 user
+                # 记录才算送达。未送达时用既有单键预算补一次，然后必须再过一次闸门。
+                import cmux_native_gate as gate
+                verdict, evidence = gate.require(bridge, marker, text, started,
+                                                 payload_sha256=binding['payload_sha256'],
+                                                 recoverable=True)
+                if verdict == 'STRANDED':
+                    paste = next(e for e in attempt['events'] if e['phase'] == 'PASTE_INTENT')
+                    observe('NATIVE_PROOF_MISSING_RECOVERING')
+                    bridge.recover_stranded_once(surface, text, marker, paste['screen'],
+                        confirm_lines=confirm_lines, delivery_observer=observe)
+                    gate.require(bridge, marker, text, started,
+                                 payload_sha256=binding['payload_sha256'], recoverable=False)
+                attempt['native_delivery'] = gate.stamp(evidence, started)
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'
