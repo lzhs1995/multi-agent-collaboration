@@ -1,6 +1,6 @@
 ## Unreleased — 2026-10-08
 
-Add the executor idle Stop guard and `executor_ready.py`: a disarmed executor sends one journaled ready request to its bound supervisor instead of waiting silently; finite reminders, reentry pass, fail-open identity. Not installed into running clients by this change.
+Add the executor idle Stop guard and `executor_ready.py`: an idle executor keeps asking its supervisor every 60 s from a loop that outlives its turns, instead of waiting silently or asking once. Release requires a live loop, a reply that actually reached the executor (mailbox file or own transcript), or an operator stop; no reminder budget and no reentry escape. Asks are never stacked while the supervisor's input still holds the previous one. Fail-open identity. Not installed into running clients by this change.
 
 ## 0.1.1 — 2026-09-26
 

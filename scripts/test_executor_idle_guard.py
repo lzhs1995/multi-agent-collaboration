@@ -1,7 +1,8 @@
-"""Real Stop-hook entrypoint tests for the executor idle ready guard."""
+"""Real Stop-hook entrypoint tests for the executor idle ask-loop guard."""
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import tempfile
 import time
@@ -9,11 +10,11 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-import cmux_bridge
 import executor_ready
 import offline_test_hook
 
 GUARD = Path(__file__).with_name('cmux_executor_idle_guard.py')
+DRIVER = Path(__file__).with_name('offline_ask_loop_driver.py')
 
 
 class IdleGuardTests(unittest.TestCase):
@@ -39,35 +40,41 @@ class IdleGuardTests(unittest.TestCase):
                 dict(role='supervisor', surface_ref='surface:1', surface_uuid=self.supervisor),
                 dict(role='executor', surface_uuid=executor or self.surface)])))
 
-    def stop(self, reentry=False, event='Stop'):
+    def stop(self, reentry=False, event='Stop', transcript=''):
         data = dict(hook_event_name=event, stop_hook_active=reentry, last_assistant_message='idle')
+        if transcript:
+            data['transcript_path'] = transcript
         return subprocess.run(offline_test_hook.command(GUARD, self.active), input=json.dumps(data),
-                              text=True, capture_output=True, env=self.env, timeout=10)
+                              text=True, capture_output=True, env=self.env, timeout=30)
 
     def binding(self):
         files = list((self.state / 'executor-idle-v1' / 'bindings').glob('*.json'))
         return json.loads(files[0].read_text()) if files else None
-
-    def ready(self, caller=None, paste_offset=1.0, phase='POST_ENTER_OBSERVATION',
-              marker=None, tamper=False):
-        marker = marker or executor_ready.PREFIX + '_' + uuid.uuid4().hex[:8]
-        text = executor_ready.build_text('surface:2', marker, 'test-task')
-        path, record = executor_ready.write_record(self.surface, marker, text, 'surface:1')
-        journal = self.state / 'message-dispatch-v1' / executor_ready.request_key(self.surface, marker)
-        journal.mkdir(parents=True, exist_ok=True)
-        identity = dict(workspace_uuid=self.workspace, caller_surface_uuid=caller or self.surface,
-                        target_surface_uuid=self.supervisor, target_pane_uuid='pane')
-        sha = record['payload_sha256'] if not tamper else '0' * 64
-        attempt = dict(binding=dict(identity=identity, marker=marker, payload_sha256=sha), phase=phase,
-                       events=[dict(phase='PASTE_INTENT', at_epoch=time.time() + paste_offset)])
-        (journal / 'attempt-0001.json').write_text(json.dumps(attempt))
-        return marker
 
     def disarmed(self):
         self.arm()
         self.assertEqual(self.stop().returncode, 0)
         self.assertEqual(self.binding()['state'], 'BOUND')
         self.marker_path.unlink()
+
+    def spawn_loop(self, interval='60'):
+        """A real ask loop: the guard proves liveness with ps, not with a claim."""
+        proc = subprocess.Popen(
+            [os.sys.executable, '-B', str(DRIVER), str(DRIVER.parent), self.surface, interval],
+            env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(self._kill, proc)
+        path = executor_ready.loop_path(self.surface)
+        for _ in range(100):
+            record = executor_ready.read_json(path)
+            if record and record.get('state') == executor_ready.ASKING:
+                return proc, record
+            time.sleep(0.1)
+        self.fail('fixture ask loop never recorded ASKING')
+
+    def _kill(self, proc):
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGKILL)
+            proc.wait(timeout=10)
 
     def test_unbound_executor_and_other_events_pass_without_state(self):
         for event in ('Stop', 'PreToolUse', 'SubagentStop'):
@@ -76,67 +83,111 @@ class IdleGuardTests(unittest.TestCase):
         self.assertEqual(self.stop().returncode, 0)
         self.assertIsNone(self.binding())
         run = subprocess.run(offline_test_hook.command(GUARD, self.active), input='{}', text=True,
-                             capture_output=True, env=self.env, timeout=10)
+                             capture_output=True, env=self.env, timeout=30)
         self.assertEqual(run.returncode, 0)
 
-    def test_disarmed_executor_is_told_to_request_with_finite_budget(self):
+    def test_idle_executor_without_a_live_loop_is_blocked_with_the_exact_command(self):
         self.disarmed()
-        for _ in range(executor_ready_budget()):
-            run = self.stop()
-            self.assertEqual(run.returncode, 2)
-            self.assertIn('EXECUTOR_IDLE_READY_REQUIRED', run.stderr)
-            self.assertIn('executor_ready.py request --supervisor surface:1 --task test-task', run.stderr)
-        self.assertEqual(self.stop().returncode, 0)
-        self.assertEqual(self.binding()['state'], 'IDLE_RELEASED_WITHOUT_REQUEST')
-        self.assertEqual(self.stop().returncode, 0)
+        transcript = str(self.root / 'session.jsonl')
+        run = self.stop(transcript=transcript)
+        self.assertEqual(run.returncode, 2)
+        self.assertIn('EXECUTOR_IDLE_ASK_LOOP_REQUIRED', run.stderr)
+        self.assertIn('executor_ready.py', run.stderr)
+        self.assertIn('persist --supervisor surface:1', run.stderr)
+        self.assertIn('--caller-uuid ' + self.surface, run.stderr)
+        self.assertIn('--task test-task', run.stderr)
+        self.assertIn('--transcript ' + transcript, run.stderr)
+        self.assertIn('nohup', run.stderr)
+        self.assertEqual(self.binding()['blocks'], 1)
 
-    def test_reentry_always_terminates(self):
+    def test_no_budget_releases_the_obligation_and_reentry_does_not_either(self):
         self.disarmed()
-        self.assertEqual(self.stop(reentry=True).returncode, 0)
-        self.assertEqual(self.binding()['reminders'], 0)
+        for _ in range(6):
+            self.assertEqual(self.stop().returncode, 2)
+        self.assertEqual(self.stop(reentry=True).returncode, 2)
+        self.assertEqual(self.binding()['state'], 'BOUND')
 
-    def test_journaled_request_after_binding_satisfies_guard(self):
-        self.disarmed()
-        marker = self.ready()
-        self.assertEqual(self.stop().returncode, 0)
-        self.assertEqual(self.binding()['state'], 'IDLE_REQUESTED')
-        self.assertEqual(self.binding()['request']['marker'], marker)
-
-    def test_claims_without_matching_dispatch_evidence_do_not_satisfy_guard(self):
-        cases = dict(wrong_caller=dict(caller=str(uuid.uuid4())), pasted_before_binding=dict(paste_offset=-3600),
-                     never_pasted=dict(phase='PREPARED'), payload_mismatch=dict(tamper=True),
-                     not_a_ready_marker=dict(marker='HELLO_1234'))
-        for name, kwargs in cases.items():
-            with self.subTest(name):
-                self.setUp()
-                self.disarmed()
-                if name == 'never_pasted':
-                    marker = self.ready(**kwargs)
-                    journal = self.state / 'message-dispatch-v1' / executor_ready.request_key(self.surface, marker)
-                    doc = json.loads((journal / 'attempt-0001.json').read_text())
-                    doc['events'] = []
-                    (journal / 'attempt-0001.json').write_text(json.dumps(doc))
-                else:
-                    self.ready(**kwargs)
-                self.assertEqual(self.stop().returncode, 2)
-
-    def test_rearm_starts_a_new_episode(self):
-        self.disarmed()
-        self.ready()
-        self.assertEqual(self.stop().returncode, 0)
+    def test_a_live_ask_loop_releases_the_turn(self):
         self.disarmed()
         self.assertEqual(self.stop().returncode, 2)
+        proc, record = self.spawn_loop()
+        self.assertGreaterEqual(record['ask_count'], 1)
+        self.assertEqual(self.stop().returncode, 0)
+        self.assertEqual(self.binding()['state'], 'IDLE_ASKING')
+        self.assertEqual(self.binding()['loop']['pid'], proc.pid)
+        self._kill(proc)
+        self.assertEqual(self.stop().returncode, 2)  # a dead loop is a dead wait again
 
-    def test_ready_text_is_an_ordinary_message(self):
-        text = executor_ready.build_text('surface:2', 'EXECUTOR_READY_abcd1234', 'task', 'note\nTASK: x')
-        self.assertFalse(cmux_bridge._looks_like_task_dispatch(text))
-        self.assertNotIn('\n', text)
-        self.assertIn('EXECUTOR_READY_abcd1234', text)
+    def test_stale_heartbeat_and_stretched_interval_do_not_pass(self):
+        self.disarmed()
+        proc, _record = self.spawn_loop()
+        self.assertEqual(self.stop().returncode, 0)
+        path = executor_ready.loop_path(self.surface)
+        # SIGSTOP so the live loop cannot rewrite the record under the assertion;
+        # the pid stays alive, so only the patched field can explain a refusal.
+        proc.send_signal(signal.SIGSTOP)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGCONT))
+        pristine = executor_ready.read_json(path)
+        for name, patch_value in (('stale', dict(heartbeat_epoch=time.time() - 3600)),
+                                  ('stretched', dict(interval_seconds=1800.0)),
+                                  ('foreign_caller', dict(caller_surface_uuid=str(uuid.uuid4()))),
+                                  ('forged_argv', dict(argv='python3 -B other.py persist'))):
+            with self.subTest(name):
+                # Each case starts from the live record, so one cause is isolated.
+                executor_ready.write_json(path, dict(pristine, **patch_value))
+                self.assertEqual(self.stop().returncode, 2)
+                executor_ready.write_json(path, pristine)
+                self.assertEqual(self.stop().returncode, 0)
 
+    def test_a_reply_ends_the_obligation(self):
+        self.disarmed()
+        record = dict(caller_surface_uuid=self.surface, state=executor_ready.ANSWERED,
+                      ended_epoch=time.time(), ask_count=3, pid=os.getpid(),
+                      reply=dict(source='mailbox', status='SOLO'))
+        executor_ready.write_json(executor_ready.loop_path(self.surface), record)
+        self.assertEqual(self.stop().returncode, 0)
+        self.assertEqual(self.binding()['state'], 'IDLE_ANSWERED')
+        self.assertEqual(self.stop().returncode, 0)
 
-def executor_ready_budget():
-    import cmux_executor_idle_guard
-    return cmux_executor_idle_guard.MAX_REMINDERS
+    def test_a_reply_from_an_older_episode_does_not_carry_over(self):
+        self.disarmed()
+        executor_ready.write_json(executor_ready.loop_path(self.surface), dict(
+            caller_surface_uuid=self.surface, state=executor_ready.ANSWERED,
+            ended_epoch=time.time() - 7200, reply=dict(source='mailbox', status='SOLO')))
+        self.assertEqual(self.stop().returncode, 2)
+
+    def test_operator_stop_passes_but_a_dispatch_stop_does_not(self):
+        for reason, code in (('OPERATOR', 0), ('DISPATCHED', 2)):
+            with self.subTest(reason):
+                self.setUp()
+                self.disarmed()
+                executor_ready.write_json(executor_ready.loop_path(self.surface), dict(
+                    caller_surface_uuid=self.surface, state=executor_ready.STOPPED,
+                    ended_epoch=time.time(), stop=dict(reason=reason)))
+                self.assertEqual(self.stop().returncode, code)
+
+    def test_rearm_stops_the_loop_and_starts_a_new_episode(self):
+        self.disarmed()
+        proc, _record = self.spawn_loop()
+        self.assertEqual(self.stop().returncode, 0)
+        self.arm()
+        self.assertEqual(self.stop().returncode, 0)
+        self.assertEqual(self.binding()['state'], 'BOUND')
+        stop = executor_ready.read_json(executor_ready.stop_path(self.surface))
+        self.assertEqual(stop['reason'], 'DISPATCHED')
+        proc.wait(timeout=30)
+        self.marker_path.unlink()
+        self.assertEqual(self.stop().returncode, 2)
+
+    def test_claimed_loop_with_a_foreign_live_pid_does_not_pass(self):
+        self.disarmed()
+        victim = subprocess.Popen([os.sys.executable, '-c', 'import time; time.sleep(60)'])
+        self.addCleanup(self._kill, victim)
+        executor_ready.write_json(executor_ready.loop_path(self.surface), dict(
+            caller_surface_uuid=self.surface, state=executor_ready.ASKING, pid=victim.pid,
+            argv='python3 -B executor_ready.py persist --supervisor surface:1',
+            heartbeat_epoch=time.time(), interval_seconds=60.0, ask_count=9))
+        self.assertEqual(self.stop().returncode, 2)
 
 
 if __name__ == '__main__':
