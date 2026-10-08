@@ -1393,6 +1393,88 @@ def _empty_idle_agent_screen(screen):
             not cmux._queued_or_active_input(screen))
 
 
+def cmd_bridge_clear_token(args):
+    """Erase only an owned failed-test token; no paste, Enter, Tab or ACK.
+
+    The exclusive journal is created before the first key and prevents replay
+    after a crash or uncertain key result. Every key requires fresh evidence,
+    current UUIDs, idle input, and the exact expected prefix of the old token.
+    A separate bridge-clear-observe is still required before a handshake.
+    """
+    root = _artifact_root(args)
+    gate = _read(root / "identity-gate.json") or {}
+    journal = root / "bridge-token-cleanup.json"
+    stream = None
+    try:
+        if journal.exists() or journal.is_symlink():
+            raise ValueError("cleanup already attempted; preserve journal and inspect without replay")
+        if any((root / name).exists() for name in ("handshake-receipt.json", "task-pack.json")):
+            raise ValueError("handshake/task already started; do not clear its composer")
+        item, binding = _bridge_clear_binding(args, root, gate)
+        token = json.loads((root / "bridge-test-evidence.json").read_bytes()).get("token")
+        if not isinstance(token, str) or not re.fullmatch(r"B[1-9]\d*_[0-9a-f]{8}", token) or len(token) > 32:
+            raise ValueError("original probe token is invalid")
+
+        def observe(expected=None):
+            _recheck_workspace_gate(gate)
+            screen = cmux.read_screen(item["surface_ref"], lines=args.lines)
+            _recheck_workspace_gate(gate)
+            if _bridge_clear_binding(args, root, gate)[1] != binding:
+                raise ValueError("original probe binding changed; stop cleanup")
+            cmux.require_clearable_agent_input(screen, item["surface_ref"])
+            body = cmux.compose_rendered_text(screen)
+            if body is None or not token.startswith(body) or (expected is not None and body != expected):
+                raise ValueError("composer changed or contains foreign text; stop cleanup")
+            return body, screen
+
+        remaining, first_screen = observe()
+        stream = journal.open("x", encoding="utf-8")
+
+        def event(kind, **fields):
+            stream.write(json.dumps(dict(event=kind, at=_now(), **fields), ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        event("START", **binding, token=token, initial_prefix=remaining,
+              screen_sha256=hashlib.sha256(first_screen.encode("utf-8")).hexdigest())
+        if remaining:
+            keys = ["end"] + ["backspace"] * len(remaining)
+            for key in keys:
+                _, before = observe(remaining)
+                event("KEY_INTENT", key=key, expected_prefix=remaining,
+                      screen_sha256=hashlib.sha256(before.encode("utf-8")).hexdigest())
+                # Recheck again after durable intent, immediately before input.
+                observe(remaining)
+                cmux.send_key(item["surface_ref"], key)
+                event("KEY_RETURNED", key=key)
+                time.sleep(max(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS, 0.1))
+                expected = remaining[:-1] if key == "backspace" else remaining
+                # A delayed screen is reread, never another deletion guessed.
+                for attempt in range(3):
+                    body, after = observe()
+                    if body == expected:
+                        break
+                    if body != remaining or attempt == 2:
+                        raise ValueError("key result is uncertain or composer changed; no further input")
+                    time.sleep(0.15)
+                remaining = expected
+                event("KEY_OBSERVED", key=key, remaining_prefix=remaining,
+                      screen_sha256=hashlib.sha256(after.encode("utf-8")).hexdigest())
+        _, final = observe("")
+        event("EMPTY_OBSERVED", screen=final,
+              screen_sha256=hashlib.sha256(final.encode("utf-8")).hexdigest(),
+              handshake_performed=False)
+        _ok(f"owned probe cleared; original failure preserved; verify via bridge-clear-observe; journal={journal}")
+    except (OSError, ValueError, RuntimeError) as exc:
+        if stream is not None:
+            event("REFUSED", error=str(exc))
+        _fail(str(exc))
+        sys.exit(1)
+    finally:
+        if stream is not None:
+            stream.close()
+
+
 def cmd_bridge_clear_observe(args):
     """Zero-input observation; preserve the failed bridge evidence verbatim."""
     root = _artifact_root(args)
@@ -3549,7 +3631,7 @@ def main():
     )
     p.add_argument("command", choices=[
         "doctor", "setup-check", "identity", "surface-inventory",
-        "identity-gate", "name-surfaces", "bridge-test", "bridge-clear-observe", "handshake",
+        "identity-gate", "name-surfaces", "bridge-test", "bridge-clear-token", "bridge-clear-observe", "handshake",
         "validate", "task-pack", "finalize-pack", "map", "receipt", "guard-check",
         "preflight", "helper-parity",
         "record-round", "consensus-check", "disarm",
@@ -3640,6 +3722,7 @@ def main():
         "identity-gate":    cmd_identity_gate,
         "name-surfaces":    cmd_name_surfaces,
         "bridge-test":      cmd_bridge_test,
+        "bridge-clear-token": cmd_bridge_clear_token,
         "bridge-clear-observe": cmd_bridge_clear_observe,
         "handshake":        cmd_handshake,
         "validate":         cmd_validate,

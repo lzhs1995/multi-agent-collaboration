@@ -41,17 +41,45 @@ class JournalTests(unittest.TestCase):
 
     def pending_original(self):
         screen = '• Working (3s • esc to interrupt)\n› ' + self.pack['completion_callback'] + '\nGPT-6 high'
-        with patch.object(b, 'read_screen', side_effect=[IDLE, screen]), patch.object(b, 'send_text'), patch.object(b, 'send_key'):
-            with self.assertRaises(b.DispatchUnconfirmed):
+        original_submit = b.submit_text
+
+        def interrupted_submit(*args, **kwargs):
+            observer = kwargs['delivery_observer']
+
+            def interrupted_observer(phase, observed=None):
+                observer(phase, observed)
+                if phase == 'POST_ENTER_OBSERVATION':
+                    raise RuntimeError('interrupted after first Enter observation')
+
+            kwargs['delivery_observer'] = interrupted_observer
+            return original_submit(*args, **kwargs)
+
+        # Model a persisted interrupted attempt; do not rely on the new bridge
+        # declining the very extra Enter that recovery is intended to resume.
+        with patch.object(b, 'read_screen', side_effect=[IDLE, screen]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key, patch.object(b, 'submit_text', side_effect=interrupted_submit):
+            with self.assertRaisesRegex(RuntimeError, 'interrupted after first Enter'):
                 self.call()
+            send.assert_called_once()
+            key.assert_called_once_with('surface:46', 'enter')
         return screen + '\ntab to queue message'
 
-    def test_original_enter_resume_one_tab_no_paste(self):
+    def assert_resume_return_timestamp(self):
+        attempt = json.loads((self.journal / 'attempt-0001.json').read_text())
+        self.assertEqual(attempt['extra_enter'], 1)
+        self.assertGreater(attempt['ended_at_epoch'], attempt['resume_previous_return']['ended_at_epoch'])
+        self.assertGreaterEqual(attempt['ended_at_epoch'], max(e['at_epoch'] for e in attempt['events']))
+        return attempt
+
+    def test_original_enter_resume_one_more_enter_no_paste(self):
         pending = self.pending_original()
         with patch.object(b, 'read_screen', side_effect=[pending, self.confirmed_screen()]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             self.assertTrue(self.call(resume_queue_only=True)['confirmed'])
             send.assert_not_called()
-            key.assert_called_once_with('surface:46', 'tab')
+            key.assert_called_once_with('surface:46', 'enter')
+        attempt = self.assert_resume_return_timestamp()
+        self.assertEqual(attempt['phase'], 'CONFIRMED')
+        self.assertEqual(attempt['result']['retries'], 1)
+        self.assertNotIn('error', attempt)
 
     def test_queue_observation_does_not_create_receipt(self):
         pending = self.pending_original()
@@ -61,6 +89,8 @@ class JournalTests(unittest.TestCase):
                 self.call(resume_queue_only=True)
             key.assert_called_once(); send.assert_not_called()
         self.assertFalse(self.receipt.exists())
+        attempt = self.assert_resume_return_timestamp()
+        self.assertEqual(attempt['delivery_state'], b.DELIVERY_QUEUED_AT_RECEIVER)
 
     def test_replaced_lock_blocks_recovery(self):
         pending = self.pending_original()
@@ -74,7 +104,7 @@ class JournalTests(unittest.TestCase):
                 self.call(resume_queue_only=True)
             key.assert_not_called()
 
-    def test_failed_queue_key_is_never_retried(self):
+    def test_failed_extra_enter_is_never_retried(self):
         pending = self.pending_original()
         with patch.object(b, 'read_screen', return_value=pending), patch.object(b, 'send_text') as send, patch.object(b, 'send_key', side_effect=RuntimeError('transport lost')) as key:
             with self.assertRaises(RuntimeError):
@@ -83,6 +113,34 @@ class JournalTests(unittest.TestCase):
                 self.call(resume_queue_only=True)
             key.assert_called_once(); send.assert_not_called()
         self.assertFalse(self.receipt.exists())
+        attempt = self.assert_resume_return_timestamp()
+        self.assertEqual(attempt['phase'], 'EXTRA_ENTER_INTENT')
+        self.assertEqual(attempt['error'], 'transport lost')
+
+    def test_recovery_compacting_accepts_exact_payload_without_tab_hint(self):
+        pending = self.pending_original().replace('Working', 'Compacting context').removesuffix('\ntab to queue message')
+        with patch.object(b, 'read_screen', side_effect=[pending, self.confirmed_screen()]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            self.assertTrue(self.call(resume_queue_only=True)['confirmed'])
+            send.assert_not_called()
+            key.assert_called_once_with('surface:46', 'enter')
+
+    def test_recovery_reconnecting_preserves_original_without_input(self):
+        pending = 'Reconnecting\n' + self.pending_original()
+        with patch.object(b, 'read_screen', return_value=pending), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises(b.DispatchUnconfirmed):
+                self.call(resume_queue_only=True)
+            send.assert_not_called()
+            key.assert_not_called()
+
+    def test_post_enter_read_failure_records_return_and_cannot_retry(self):
+        pending = self.pending_original()
+        with patch.object(b, 'read_screen', side_effect=[pending, RuntimeError('read lost')]), patch.object(b, 'send_key') as key:
+            with self.assertRaisesRegex(RuntimeError, 'read lost'):
+                self.call(resume_queue_only=True)
+            with self.assertRaisesRegex(b.TaskPackContractError, 'NO_RECOVERABLE'):
+                self.call(resume_queue_only=True)
+            key.assert_called_once_with('surface:46', 'enter')
+        self.assert_resume_return_timestamp()
 
     def test_changed_composer_cannot_resume(self):
         pending = self.pending_original().replace('DONE|', 'CHANGED|')

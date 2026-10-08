@@ -167,8 +167,9 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
         if old and old['binding'] != binding:
             raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED: preserve previous attempt')
         if resume_queue_only:
-            # Resume only a recorded Enter that left this exact payload in the
-            # measured Codex composer. Never paste, Enter again, or retry Tab.
+            # Resume only a recorded first Enter that left this exact payload
+            # in the measured Codex composer. One additional Enter, no repaste
+            # or Tab; preserve all prior key intents against a second recovery.
             events = old.get('events', []) if old else []
             phases = [e.get('phase') for e in events]
             if (not old or phases.count('PASTE_INTENT') != 1
@@ -181,7 +182,7 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                    for e in events if 'screen' in e or 'screen_sha256' in e):
                 raise bridge.TaskPackContractError('RECOVERY_SCREEN_EVIDENCE_CHANGED')
             screen = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
-            if not bridge._codex_tab_queue_allowed(screen, pack['completion_callback']):
+            if not bridge._codex_extra_enter_allowed(screen, pack['completion_callback']):
                 raise bridge.DispatchUnconfirmed('ORIGINAL_COMPOSER_NOT_RECOVERABLE: no input')
             # Revalidate identity/report immediately before persisting key intent.
             if bridge.pin_workspace(pack['callback_target']) != proof or bridge._sha256_file(report) != binding['report_sha256']:
@@ -196,20 +197,34 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
             attempt_path = attempts[-1]
             if json.loads(attempt_path.read_text()) != old:
                 raise bridge.TaskPackContractError('RECOVERY_JOURNAL_CHANGED')
-            old['phase'] = 'QUEUE_TAB_INTENT'
-            old['events'].append(dict(phase='QUEUE_TAB_INTENT', at_epoch=time.time(),
+            old['resume_previous_return'] = {
+                key: old[key] for key in ('phase', 'ended_at_epoch', 'error', 'delivery_state')
+                if key in old}
+            for key in ('ended_at_epoch', 'error', 'delivery_state'):
+                old.pop(key, None)
+            old.update(phase='EXTRA_ENTER_INTENT', extra_enter=1)
+            old['events'].append(dict(phase='EXTRA_ENTER_INTENT', at_epoch=time.time(),
                                       screen=screen, screen_sha256=bridge.screen_hash(screen)))
             write_json(attempt_path, old)
-            bridge.send_key(pack['callback_target'], 'tab')
-            after = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
-            old['phase'] = 'POST_QUEUE_TAB_OBSERVATION'
-            old['events'].append(dict(phase=old['phase'], at_epoch=time.time(),
-                                      screen=after, screen_sha256=bridge.screen_hash(after)))
-            write_json(attempt_path, old)
-            before = next(e['screen'] for e in events if e['phase'] == 'PASTE_INTENT')
-            if not bridge._delivery_confirmed(before, after, pack['completion_nonce'], pack['completion_callback']):
-                raise bridge.DispatchUnconfirmed('QUEUE_ACTION_UNCONFIRMED: observe original; no more input')
-            result = {'confirmed': True, 'retries': 0, 'queue_key': 'tab'}
+            try:
+                bridge.send_key(pack['callback_target'], 'enter')
+                after = bridge.read_screen(pack['callback_target'], lines=confirm_lines)
+                old['phase'] = 'POST_ENTER_OBSERVATION'
+                old['events'].append(dict(phase=old['phase'], at_epoch=time.time(),
+                                          screen=after, screen_sha256=bridge.screen_hash(after)))
+                write_json(attempt_path, old)
+                before = next(e['screen'] for e in events if e['phase'] == 'PASTE_INTENT')
+                if not bridge._delivery_confirmed(before, after, pack['completion_nonce'], pack['completion_callback']):
+                    raise bridge.DispatchUnconfirmed(
+                        'EXTRA_ENTER_UNCONFIRMED: observe original; no more input',
+                        state=bridge.classify_submission_failure(
+                            after, pack['completion_nonce'], submitted=True))
+                result = {'confirmed': True, 'retries': 1}
+            except BaseException as exc:
+                old.update(error=str(exc), delivery_state=getattr(exc, 'state', None),
+                           ended_at_epoch=time.time())
+                write_json(attempt_path, old)
+                raise
             old.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time())
             write_json(attempt_path, old)
             evidence = {'reconciled_read_only': False, 'attempt': str(attempt_path)}

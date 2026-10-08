@@ -46,11 +46,17 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 idle, _, pending, _ = self.states(glyph)
                 self.run_case(glyph, [idle, pending, pending], False, 2)
 
-    def test_busy_pending_is_preserved_without_extra_enter(self):
-        for glyph in ['›', '❯']:
-            with self.subTest(glyph=glyph):
-                idle, _, pending, _ = self.states(glyph)
-                self.run_case(glyph, [idle, '• Compacting context (34s • esc to interrupt)\n'+pending], False, 1)
+    def test_claude_busy_pending_is_preserved_without_extra_enter(self):
+        idle, _, pending, _ = self.states('❯')
+        self.run_case('❯', [idle, '• Compacting context (34s • esc to interrupt)\n'+pending], False, 1)
+
+    def test_codex_compacting_exact_payload_gets_only_one_extra_enter(self):
+        idle, _, pending, consumed = self.states('›')
+        busy = '• Compacting context (34s • esc to interrupt)\n' + pending
+        for hint in ['', '\ntab to queue message']:
+            with self.subTest(hint=hint):
+                self.run_case('›', [idle, busy + hint, consumed], True, 2)
+                self.run_case('›', [idle, busy + hint, busy + hint], False, 2)
 
     def test_unrelated_new_activity_does_not_prove_delivery(self):
         for glyph in ['›', '❯']:
@@ -91,11 +97,12 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 idle, _, _, consumed = self.states(glyph)
                 self.run_case(glyph, [idle, consumed+'\nunknown interpreter'], False, 1)
 
-    def test_codex_explicit_tab_queues_exact_own_payload_once(self):
+    def test_codex_busy_payload_uses_enter_even_with_tab_hint(self):
         idle, text, pending, consumed = self.states('›')
         busy = '• Working (3s • esc to interrupt)\n' + pending + '\ntab to queue message'
         queue = 'Messages to be submitted after next tool call\n' + text + '\n' + idle
-        for after, accepted in [(queue, False), (consumed, True), (busy, False)]:
+        turn_queue = 'Queued follow-up inputs\n' + text + '\n' + idle
+        for after, accepted in [(queue, False), (turn_queue, False), (consumed, True), (busy, False)]:
             with self.subTest(after=after), patch.object(b, 'read_screen', side_effect=[idle, busy, after]), \
                     patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key, \
                     patch.object(b.time, 'sleep'):
@@ -104,13 +111,13 @@ class BidirectionalSubmissionTests(unittest.TestCase):
                 else:
                     with self.assertRaises(b.DispatchUnconfirmed):
                         b._submit_text_once('peer', text, marker='unique-marker-20261004')
-                self.assertEqual([c.args for c in key.call_args_list], [('peer', 'enter'), ('peer', 'tab')])
+                self.assertEqual([c.args for c in key.call_args_list], [('peer', 'enter'), ('peer', 'enter')])
                 send.assert_called_once()
 
-    def test_tab_never_operates_on_compaction_changed_or_additional_draft(self):
+    def test_extra_enter_never_operates_on_reconnecting_or_changed_draft(self):
         idle, text, pending, _ = self.states('›')
-        for change in ['Compacting context', 'Reconnecting', 'extra text', 'GPT-this is my draft']:
-            if change in ['Compacting context', 'Reconnecting']:
+        for change in ['Reconnecting', 'extra text', 'GPT-this is my draft']:
+            if change == 'Reconnecting':
                 after = change + '\n' + pending + '\ntab to queue message'
             else:
                 after = pending.replace('\nGPT-6 high', '\n' + change + '\nGPT-6 high') + '\ntab to queue message'
@@ -118,12 +125,20 @@ class BidirectionalSubmissionTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.run_case('›', [idle, after], False, 1)
 
-    def test_queue_hint_must_be_exact_and_codex(self):
+    def test_unknown_queue_hint_or_claude_does_not_authorize_codex_recovery(self):
         for glyph in ['›', '❯']:
             idle, text, pending, _ = self.states(glyph)
             for hint in ['tab to queue', 'tab to edit message', 'tab to queue message extra']:
-                self.assertFalse(b._codex_tab_queue_allowed(pending+'\n'+hint,text))
-        self.assertFalse(b._codex_tab_queue_allowed('❯ '+text+'\n[claude-opus-5]\ntab to queue message',text))
+                self.assertFalse(b._codex_extra_enter_allowed(pending+'\n'+hint,text))
+        self.assertFalse(b._codex_extra_enter_allowed('❯ '+text+'\n[claude-opus-5]\ntab to queue message',text))
+
+    def test_reconnecting_without_busy_line_still_refuses_extra_enter(self):
+        idle, _, pending, _ = self.states('›')
+        self.run_case('›', [idle, 'Reconnecting\n' + pending], False, 1)
+
+    def test_historical_codex_prompt_cannot_authorize_current_claude_draft(self):
+        _, text, pending, _ = self.states('❯')
+        self.assertFalse(b._codex_extra_enter_allowed('› old prompt\n' + pending, text))
 
 
 if __name__ == '__main__':
@@ -172,7 +187,7 @@ class ExactDraftWhitespaceTests(unittest.TestCase):
                 with self.subTest(glyph=glyph, altered=altered):
                     case.run_case(glyph, [idle, pending.replace(prompt, altered)], False, 1)
 
-    def test_changed_whitespace_never_authorizes_tab(self):
+    def test_changed_whitespace_never_authorizes_busy_extra_enter(self):
         idle, prompt, pending, _ = BidirectionalSubmissionTests().states('›')
         changed = pending.replace('STATUS: ', 'STATUS:  ')
         busy = '• Working (3s • esc to interrupt)\n' + changed + '\ntab to queue message'

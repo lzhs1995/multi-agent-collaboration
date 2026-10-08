@@ -144,6 +144,12 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   not terminal failures. See the executable postconditions in
   [efficiency and closeout](references/efficiency-and-closeout.md).
 
+- A clipped Claude footer is not a user draft. Recognize measured git/progress
+  truncation only below a complete bordered editor and known provider footer;
+  preserve identical text inside the editor. Recover a failed probe through
+  [original probe recovery](references/original-probe-recovery.md), retaining the
+  original evidence instead of repeating bridge-test or inventing an ACK.
+
 - Give the executor the absolute pending handshake receipt path in the initial
   challenge. It reads that file and the bound skill, then returns the exact ACK;
   no registry search, task audit or formal consensus is part of a handshake.

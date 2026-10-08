@@ -37,6 +37,46 @@ def draft(text, screen=IDLE):
 
 
 class ComposeBoundaryTests(unittest.TestCase):
+    def test_git_truncation_in_both_footer_positions(self):
+        separate = IDLE.replace(
+            "[claude-opus-5-5[1M]] │ example-project git:(main) │ ⏱️  1h 11m",
+            "[Opus 5]\n  example-project git:(feature/long-branch…")
+        inline = separate.replace("[Opus 5]\n  ", "[Opus 5] │ ")
+        for screen in (separate, inline):
+            with self.subTest(screen=screen):
+                self.assertTrue(H._empty_idle_agent_screen(screen))
+                self.assertEqual(B.compose_rendered_text(draft("B1_01234567", screen)),
+                                 "B1_01234567")
+                self.assertEqual(B.receiver_input_kind(screen + "unknown bottom row\n"), "UNKNOWN")
+                self.assertEqual(B.receiver_input_kind(screen + "zsh$ \n"), "SHELL")
+                self.assertEqual(B.receiver_input_kind(screen.replace("git:(", "branch ")), "UNKNOWN")
+
+    def test_clipped_progress_is_only_chrome_outside_complete_editor(self):
+        footer = "  ▸ Progress through section…\n"
+        screen = IDLE + footer
+        self.assertTrue(H._empty_idle_agent_screen(screen))
+        self.assertEqual(B.compose_rendered_text(draft("B1_01234567", screen)), "B1_01234567")
+        for text in (footer.strip(), "first line\n" + footer.strip()):
+            self.assertEqual(B.compose_rendered_text(draft(text, screen)), text)
+            self.assertFalse(B.compose_block_is_empty(draft(text, screen)))
+        self.assertFalse(B._COMPOSE_CHROME_RE.fullmatch(footer.strip()))
+        missing_top = "\n".join(screen.splitlines()[1:])
+        self.assertFalse(B.compose_block_is_empty(missing_top))
+        self.assertEqual(B.receiver_input_kind(screen + "unknown row\n"), "UNKNOWN")
+
+    def test_current_rotating_spinner_with_optional_goal_is_active(self):
+        for status in ("✢ Shimmying… (1m)", "✻ Forming…", "✻ API error · Retrying in 0s · attempt 1/10"):
+            for goal in ("", "  ◎ /goal active (9h)\n"):
+                with self.subTest(status=status, goal=goal):
+                    self.assertTrue(B._queued_or_active_input(status + "\n\n" + goal + IDLE))
+
+    def test_old_spinner_before_new_reply_does_not_block_idle_editor(self):
+        for historical in ("✢ Shimmying… (1m)", "✻ Running tool…", "✻ API error · Retrying in 0s"):
+            for goal in ("", "  ◎ /goal active (9h)\n"):
+                screen = historical + "\n⏺ Completed the requested review.\n\n" + goal + IDLE
+                self.assertTrue(H._empty_idle_agent_screen(screen))
+        self.assertTrue(H._empty_idle_agent_screen("✻ Sautéed for 44m\n" + IDLE))
+
     def test_minimal_captured_shape_is_empty_but_active(self):
         self.assertEqual(hashlib.sha256(FIXTURE.read_bytes()).hexdigest(), FIXTURE_SHA)
         self.assertEqual(B.receiver_input_kind(ACTIVE), "AGENT_TUI")
