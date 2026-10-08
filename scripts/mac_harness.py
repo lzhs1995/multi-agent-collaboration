@@ -1960,6 +1960,31 @@ def cmd_finalize_pack(args):
         if not exists:
             problems.append(f"source path does not exist: {path_str}")
 
+    # A scaffold path is not evidence. Check these before dispatch, without
+    # manufacturing attachments for an already-dispatched task. Live identity
+    # authentication remains the responsibility of the existing UUID gates.
+    attachment_entries = []
+    for field, command in (("role_map", "map"), ("pane_inventory", "surface-inventory")):
+        value = pack.get(field)
+        try:
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                raise ValueError("must name an absolute JSON file")
+            path = Path(value)
+            raw = path.read_bytes()
+            document = json.loads(raw)
+            if not isinstance(document, dict) or document.get("task_id") != args.task_id:
+                raise ValueError("must be a JSON object bound to this task_id")
+        except (OSError, ValueError) as exc:
+            problems.append(
+                f"{field}: {exc}; generate real evidence with `{command}` "
+                "for this task and artifact root before finalize-pack"
+            )
+        else:
+            attachment_entries.append({
+                "field": field, "path": str(path),
+                "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
+            })
+
     # 4. Absolute report path, so evidence does not depend on the caller's cwd.
     report = pack.get("report")
     if isinstance(report, str) and report and not Path(report).is_absolute():
@@ -2004,6 +2029,7 @@ def cmd_finalize_pack(args):
                 save_availability(state_file, availability)
     pack["draft"] = False
     pack["source_entries"] = source_entries
+    pack["attachment_entries"] = attachment_entries
     pack["finalized_at"] = _now()
     _write(pack_path, pack)
     _ok(

@@ -1938,6 +1938,8 @@ class PackFinalizationTests(unittest.TestCase):
     def _pack(self, root, **over):
         src = root / "real-source.md"
         src.write_text("# real\n")
+        for name in ("role-map.json", "surface-inventory.json"):
+            (root / name).write_text(json.dumps({"task_id": "fin-test"}))
         pack = {
             "task_id": "fin-test", "role": "executor", "draft": True,
             "supervisor": "surface:1", "executor": "surface:2",
@@ -2055,6 +2057,36 @@ class PackFinalizationTests(unittest.TestCase):
             self.assertTrue(all(e["exists"] for e in pack["source_entries"]))
             self.assertTrue(all(Path(e["path"]).is_absolute() for e in pack["source_entries"]))
             self.assertIsNotNone(pack.get("finalized_at"))
+            self.assertEqual(
+                {entry["field"] for entry in pack["attachment_entries"]},
+                {"role_map", "pane_inventory"})
+            for entry in pack["attachment_entries"]:
+                raw = Path(entry["path"]).read_bytes()
+                self.assertEqual(entry["sha256"], __import__("hashlib").sha256(raw).hexdigest())
+                self.assertEqual(entry["bytes"], len(raw))
+
+    def test_invalid_identity_attachments_refuse_without_changing_pack(self):
+        for field in ("role_map", "pane_inventory"):
+            for fault in ("missing", "relative", "directory", "malformed", "empty", "wrong_task"):
+                with self.subTest(field=field, fault=fault), tempfile.TemporaryDirectory() as tmp:
+                    root = self._root(tmp)
+                    pack = self._pack(root)
+                    path = Path(pack[field])
+                    if fault == "missing":
+                        path.unlink()
+                    elif fault == "relative":
+                        pack[field] = path.name
+                        (root / "task-pack.json").write_text(json.dumps(pack))
+                    elif fault == "directory":
+                        path.unlink()
+                        path.mkdir()
+                    else:
+                        path.write_text({"malformed": "{", "empty": "{}",
+                                         "wrong_task": '{"task_id":"other-task"}'}[fault])
+                    before = (root / "task-pack.json").read_bytes()
+                    with self.assertRaises(SystemExit):
+                        HARNESS.cmd_finalize_pack(self._args(root))
+                    self.assertEqual((root / "task-pack.json").read_bytes(), before)
 
     def test_missing_source_path_is_refused(self):
         """POISON: a cited path must exist before dispatch."""
