@@ -176,8 +176,12 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
 Supervisors use authenticated active markers for bounded discovery of frozen
 reports through the PostToolUse `scripts/cmux_supervisor_report_guard.py`
 (REPORT_DISCOVERED). Discovery is not delivery,
-acceptance or disarm. Idle Stop records one durable notice and allows termination;
-explicit `executor_ready.py persist` is read-only and bounded to 300 seconds.
+acceptance or disarm. An idle executor never waits silently (user order 2026-10-09):
+`scripts/executor_reask.py run` asks the supervisor every 60 s with a fresh marker until
+it replies, and the Stop hook `scripts/cmux_executor_reask_stop_guard.py` blocks Stop
+(including re-entry) while that episode waits. See
+[60 秒主动求派](references/verified-compose-delivery.md#空闲-executor-60-秒主动求派直到主管答复).
+`executor_ready.py persist` remains a read-only, 300-second observer of one request.
 CCC waits have a deadline; native Goal behavior requires separate evidence.
 
 Follow [bounded handshakes, delivery and closeout](references/bounded-collaboration.md)
@@ -252,7 +256,7 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 ## 双向投递与高效协作维护
 
-执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，封口保留 task-bound 诊断与零输入核收，idle Stop 不要求求派。
+执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，封口保留 task-bound 诊断与零输入核收。空闲 executor 每 60 秒用新 marker 主动求派直到主管答复，Stop hook 强制，不得空等。
 
 ### Stop hook reentry
 
