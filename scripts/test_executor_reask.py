@@ -157,6 +157,58 @@ class ReaskTest(Base):
         bridge.receiver_cannot_submit_now.return_value = False
         self.assertIsNone(reask._held(bridge, SUP, [])[0])
 
+    # 2026-10-09 实测屏幕形状：本版 Codex 横幅 "Queued follow-up inputs" 不被
+    # bridge._PENDING_QUEUE_RE 识别，#9 排队时 #10 仍被贴出。marker 故意折行。
+    LIVE_QUEUE = (
+        '• Compacting context (13s • esc to interrupt)\n'
+        '  └ Making room to continue.\n'
+        ' \n'
+        '• Queued follow-up inputs\n'
+        '  ↳ EXECUTOR_READY|E7C1C83C|EXECUTOR_READY_6480c9d5\n'
+        '    fd4912cb ask #9 (every 60s until you reply): executor E7C1C83C is\n'
+        '    shift+← edit last queued message\n'
+        ' \n'
+        ' \n'
+        '› Ask Codex to do anything\n')
+
+    def _real_bridge(self, screen):
+        bridge = ready._bridge()
+        self.assertFalse(bridge.pending_queue_holds(screen, 'EXECUTOR_READY_6480c9d5fd4912cb'),
+                         'fixture must exercise the banner the bridge regex misses')
+        return mock.Mock(wraps=bridge, read_screen=mock.Mock(return_value=screen))
+
+    def test_unreceived_queued_ask_holds_despite_unknown_banner(self):
+        marker = 'EXECUTOR_READY_6480c9d5fd4912cb'
+        ready.write_record(CALLER, marker, f'ask {marker}', SUP, 'r24', 'ep')
+        bridge = self._real_bridge(self.LIVE_QUEUE)
+        with mock.patch.object(ready, '_receipt', return_value=None):
+            held = reask._held(bridge, SUP, [dict(marker=marker, terminal=True)], CALLER)[0]
+        self.assertEqual(held, 'QUEUED')
+        # 对照：同一屏幕，但该请求已有原生回执（留在历史区）→ 不再拦，并记 CONFIRMED。
+        ask = dict(marker=marker, terminal=True)
+        with mock.patch.object(ready, '_receipt', return_value=dict(ok=1)):
+            held = reask._held(bridge, SUP, [ask], CALLER)[0]
+        self.assertIsNone(held)
+        self.assertEqual(ask['outcome'], 'CONFIRMED')
+        # 对照：marker 不在屏上 → 不拦。
+        with mock.patch.object(ready, '_receipt', return_value=None):
+            held = reask._held(bridge, SUP, [dict(marker='EXECUTOR_READY_ffff', terminal=True)],
+                               CALLER)[0]
+        self.assertIsNone(held)
+
+    def test_default_send_skips_when_previous_ask_still_queued(self):
+        marker = 'EXECUTOR_READY_6480c9d5fd4912cb'
+        ready.write_record(CALLER, marker, f'ask {marker}', SUP, 'r24', 'ep')
+        state = dict(supervisor=SUP, caller_surface_uuid=CALLER, task_id='r24', episode_id='ep',
+                     asks=[dict(marker=marker, terminal=True)])
+        bridge = self._real_bridge(self.LIVE_QUEUE)
+        with mock.patch.object(ready, '_bridge', return_value=bridge), \
+                mock.patch.object(ready, '_receipt', return_value=None), \
+                mock.patch.object(ready, 'advance_ask') as advance:
+            result = reask.default_send(state, 'EXECUTOR_READY_new', 'new ask')
+        self.assertEqual(result, dict(outcome='SKIPPED_QUEUED', terminal=False))
+        advance.assert_not_called()
+
 
 class StopGuardTest(Base):
     def payload(self, active=False):

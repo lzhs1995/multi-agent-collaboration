@@ -183,12 +183,40 @@ def write_channels(state, marker, text, now, status=WAITING):
     return written
 
 
-def _held(bridge, supervisor, asks):
+def _unreceived_on_screen(bridge, supervisor, caller, ask, flat_screen):
+    """已发终端请求无原生回执、但 marker 仍在屏上 = 仍待投递（排队/compose）。
+
+    不依赖 bridge 的 queue banner 正则：2026-10-09 实测本版 Codex 横幅为
+    "Queued follow-up inputs"，_PENDING_QUEUE_RE 不匹配，#9 排队时 #10 仍被贴出。
+    已原生收到的请求留在历史区也会显示 marker，所以先查回执再看屏幕。
+    """
+    marker = ask.get('marker', '')
+    if not marker or ask.get('outcome') == 'CONFIRMED':
+        return False
+    if marker not in flat_screen:
+        return False
+    try:
+        original = ready._original_request(caller, supervisor, marker)
+        receipt = ready._receipt(bridge, supervisor, original['text'], marker)
+    except Exception:
+        return True                  # 无法核实时按仍待投递处理：宁可只走文件通道
+    if receipt:
+        ask.update(outcome='CONFIRMED', receipt=receipt)
+        return False
+    return True
+
+
+def _held(bridge, supervisor, asks, caller=''):
     """旧请求仍排队或停在 composer：不再粘贴，避免堵住主管和其他 agent。"""
     screen = bridge.read_screen(supervisor, lines=120)
+    flat = ''.join(screen.split())   # 长行折行会拆开 marker
     for ask in asks:
         marker = ask.get('marker', '')
-        if ask.get('terminal') and bridge.pending_queue_holds(screen, marker):
+        if not ask.get('terminal'):
+            continue
+        if bridge.pending_queue_holds(screen, marker):
+            return 'QUEUED', screen
+        if caller and _unreceived_on_screen(bridge, supervisor, caller, ask, flat):
             return 'QUEUED', screen
     if not bridge.compose_block_is_empty(screen):
         return 'COMPOSE', screen
@@ -200,7 +228,8 @@ def _held(bridge, supervisor, asks):
 def default_send(state, marker, text):
     """一次 journaled 发送；结果按 executor_ready 原样保留，不重试。"""
     bridge = ready._bridge()
-    held, _screen = _held(bridge, state['supervisor'], state.get('asks', []))
+    held, _screen = _held(bridge, state['supervisor'], state.get('asks', []),
+                          state['caller_surface_uuid'])
     if held:
         return dict(outcome='SKIPPED_' + held, terminal=False)
     ready.write_record(state['caller_surface_uuid'], marker, text, state['supervisor'],
