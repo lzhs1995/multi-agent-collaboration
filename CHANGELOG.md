@@ -1,5 +1,7 @@
 ## 0.4.0 — 2026-10-09
 
+- Preserve literal escapes, tabs and newlines with guarded terminal.paste and
+  submit_key=none; never fall back to the escape-decoding CLI send path.
 - Confirm delivery only from a new, exact native user record after the original
   PASTE_INTENT EOF fence in the bound receiver process, session and transcript.
   Queued input, key success and a cleared composer remain unconfirmed.

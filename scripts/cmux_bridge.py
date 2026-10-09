@@ -140,7 +140,23 @@ def pin_workspace(surface, *, workspace_uuid=None, target_uuid=None, caller_uuid
 def _run(*args, check=True, capture=True):
     """Run cmux with given args, return stdout string."""
     args = list(args)
-    if args and args[0] in {"send", "send-key"}:
+    if args[:2] == ["rpc", "terminal.paste"]:
+        if len(args) != 3:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit paste parameters required")
+        try:
+            params = json.loads(args[2])
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: invalid paste parameters") from exc
+        if (not isinstance(params, dict) or params.get("submit_key") != "none"
+                or set(params) != {"text", "submit_key", "workspace_id", "surface_id"}
+                or not isinstance(params.get("text"), str) or not params["text"]):
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: literal paste must not implicitly submit")
+        proof = pin_workspace(params["surface_id"])
+        if uuid_value(params["workspace_id"]) != uuid_value(proof["workspace_uuid"]):
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: paste workspace changed")
+        params.update(workspace_id=proof["workspace_uuid"], surface_id=proof["target_surface_uuid"])
+        args[2] = json.dumps(params, ensure_ascii=False)
+    elif args and args[0] in {"send", "send-key"}:
         if "--surface" not in args:
             raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit surface required")
         index = args.index("--surface") + 1
@@ -1256,14 +1272,17 @@ def _queued_or_active_input(screen):
 
 
 def send_text(surface, text):
-    """
-    Paste raw text to a surface without consumption confirmation.
+    """原样粘贴 Unicode、字面转义和真实换行，显式禁止隐式提交。
 
-    cmux interprets a literal ``\\n`` in the payload as an Enter event, which is
-    useful for explicit shell startup commands. It is not valid evidence that a
-    task or callback was consumed; use :func:`submit_text` for those messages.
+    terminal.paste 的 submit_key=none 只粘贴；失败不得回退到会解码
+    字面反斜杠 n/r/t 的 CLI send。RPC 成功只证明传输接受，不是入站回执。
     """
-    _run("send", "--surface", surface, "--", text)
+    if not isinstance(text, str) or not text:
+        raise ValueError("nonempty paste text required")
+    proof = pin_workspace(surface)
+    _run("rpc", "terminal.paste", json.dumps(dict(
+        text=text, submit_key="none", workspace_id=proof["workspace_uuid"],
+        surface_id=proof["target_surface_uuid"]), ensure_ascii=False))
 
 
 def send_key(surface, key):
