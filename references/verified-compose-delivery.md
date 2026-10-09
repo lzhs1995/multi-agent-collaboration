@@ -105,9 +105,27 @@ Stop/SubagentStop 仅对严格布尔 `stop_hook_active is True` 处理重入；
 
 ## idle 与 CCC 都有明确等待期限
 
-任务 disarm 后，idle Stop 只保存一次持久 idle 状态并允许结束；
-没有求派记录、后台进程或主管答复都不能成为 Stop 阻断理由。
-`cmux_executor_idle_guard.py` 不自动粘贴求派，不要求每 60 秒催派。
+任务 disarm 后，`cmux_executor_idle_guard.py` 只保存一次持久 idle 状态；
+是否允许结束由下节的 60 秒主动求派段决定。
+
+## 空闲 executor 60 秒主动求派，直到主管答复
+
+用户 2026-10-09 明令：executor 空闲时不得死等，也不能因 Codex 主管忙而让任务中断。
+
+- `scripts/executor_reask.py start --supervisor <UUID> [--task T] [--channel DIR]...`
+  开一段；`run` 每 60 秒发一条**新 marker** 的求派，直到答复，单次调用最长 540 秒，
+  返回仍 `WAITING_REPLY` 就再 run。每轮都是新请求，不重贴旧消息，没有轮数上限。
+- 文件通道每轮必写 `<channel>/EXECUTOR_REASK_<caller8>_CURRENT.json`（主管轮内也能读）。
+- 终端通道只在主管 composer 为空、本段旧请求不在排队区时经 journaled bridge 发一次；
+  composer 被占（含被折叠成 `[Pasted Content N chars]` 的草稿）或仍排队就跳过，绝不堵 composer。
+  求派全文限 700 字：实测 1204/1518 字会被 Codex 折叠，bridge 无法认领也不按键。
+- 答复 = 本人 transcript 新增的真实 user turn、mailbox `<mailbox>/<marker>.json`，
+  或通道里引用本段 marker 的主管文件。
+- Stop hook `scripts/cmux_executor_reask_stop_guard.py`：段内一律拦 Stop（含
+  `stop_hook_active` 重入）并给出 run 命令；收到答复拦一次要求按答复执行后放行；
+  idle binding 新进入空闲时自动开段。只有 `executor_reask.py stop`（operator）手动结束。
+- 渠道默认值写在 `~/.local/state/multi-agent-collaboration/executor-reask-v1/config.json`
+  的 `channels.<supervisor UUID>`。
 
 需要主动请求时，显式 `executor_ready.py ask`（旧拼写 `request`）
 最多提交同一原请求一次。未确认保留同一 payload、marker、nonce 和原
