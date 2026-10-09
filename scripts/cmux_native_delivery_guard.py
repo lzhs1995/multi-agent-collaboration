@@ -49,6 +49,39 @@ def _load(path):
     return value, raw
 
 
+def _callback_reconcile_command(pack, pack_path):
+    """提示只能复用冻结包的原 Python/controller；缺少 pin 时不猜当前版本。"""
+    from cmux_callback_queue_resume import canonical
+    skill = canonical(pack['required_skill'])
+    controller = canonical(skill.parent / 'scripts/cmux_bridge.py')
+    if skill.name != 'SKILL.md' or not skill.is_file() or not controller.is_file():
+        raise ValueError('original callback controller unavailable')
+    commands = []
+    if 'completion_command_argv' in pack:
+        commands.append(pack['completion_command_argv'])
+    if 'callback_command' in pack:
+        commands.append(shlex.split(pack['callback_command']))
+    if not commands:
+        raise ValueError('original callback Python/argv is not pinned in the task pack')
+    original = None
+    for command in commands:
+        if not isinstance(command, list) or not all(isinstance(v, str) and v for v in command):
+            raise ValueError('invalid original callback argv')
+        argv = command[:]
+        if argv[:1] == ['rtk']:
+            argv = argv[1:]
+            if argv[:1] == ['proxy']:
+                argv = argv[1:]
+        if (len(argv) != 6 or not Path(argv[0]).is_absolute()
+                or not Path(argv[0]).is_file()
+                or argv[1:] != ['-B', str(controller), 'submit-completion-callback',
+                                '--task-pack', str(pack_path)]
+                or (original is not None and argv != original)):
+            raise ValueError('callback argv differs from the original controller/task pack')
+        original = argv
+    return 'rtk proxy ' + shlex.join(original + ['--reconcile-only'])
+
+
 def _original(call, workspace, caller, root):
     kind = 'task' if call.get('kind') == 'text' and call.get('pack') else call.get('kind')
     pack, pack_raw, pack_path = None, None, None
@@ -81,8 +114,12 @@ def _original(call, workspace, caller, root):
     if not target:
         raise ValueError('dynamic/missing receiver identity')
     import cmux_bridge
-    live = cmux_bridge.pin_workspace(target)
-    if (str(live.get('caller_surface_uuid', '')).upper() != str(caller).upper()
+    callback_observer = kind == 'callback' and call.get('reconcile_only') is True
+    # 原接收方核自己的 callback 时，target 正是自己。先读取固定 journal，
+    # 再由原生观察器认证反向端点；普通发送仍必须先通过正常发送者检查。
+    live = None if callback_observer else cmux_bridge.pin_workspace(target)
+    if live is not None and (
+            str(live.get('caller_surface_uuid', '')).upper() != str(caller).upper()
             or str(live.get('workspace_uuid', '')).upper() != str(workspace).upper()):
         raise ValueError('hook identity differs from the live bridge caller')
     # The bridge's UUID spelling owns the durable key. Hook APIs may lowercase
@@ -100,11 +137,28 @@ def _original(call, workspace, caller, root):
         raise ValueError('original attempt records no input; no submission key can be recovered')
     bound = attempt['binding']
     identity = bound['identity']
-    if (str(identity.get('caller_surface_uuid', '')).upper() != str(caller).upper()
-            or str(identity.get('workspace_uuid', '')).upper() != str(workspace).upper()):
-        raise ValueError('original attempt belongs to a different live caller/workspace')
-    if any(live.get(k) != v for k, v in identity.items()):
-        raise ValueError('current receiver differs from original attempt')
+    if kind == 'callback':
+        if (set(identity) != set(native.IDENTITY_KEYS)
+                or not all(isinstance(v, str) and v for v in identity.values())
+                or not isinstance(pack.get('executor_uuid'), str)
+                or identity['caller_surface_uuid'].upper() != pack['executor_uuid'].upper()):
+            raise ValueError('callback original executor identity differs from task pack')
+    binding = attempt.get('native_binding')
+    if callback_observer:
+        # 反向认证前先核原 binding 身份；后续仍完整核 PASTE_INTENT。
+        native._validate_binding(binding, text)
+        if binding['identity'] != identity:
+            raise native.NativeDeliveryError('NATIVE_JOURNAL_IDENTITY_MISMATCH')
+        live = native.observer_identity(cmux_bridge, target, identity)
+    else:
+        if (str(identity.get('caller_surface_uuid', '')).upper() != str(caller).upper()
+                or str(identity.get('workspace_uuid', '')).upper() != str(workspace).upper()):
+            raise ValueError('original attempt belongs to a different live caller/workspace')
+        if any(live.get(k) != v for k, v in identity.items()):
+            raise ValueError('current receiver differs from original attempt')
+    if (str(live.get('caller_surface_uuid', '')).upper() != str(caller).upper()
+            or str(live.get('workspace_uuid', '')).upper() != str(workspace).upper()):
+        raise ValueError('hook identity differs from the live bridge caller')
     report_path, report_raw = None, None
     if kind == 'callback':
         report_path = Path(pack['report'])
@@ -126,7 +180,6 @@ def _original(call, workspace, caller, root):
         from cmux_message_journal import original_body_pin
         body_pin = original_body_pin(text, attempt)
     # 核收必须沿用输入前留下的身份与 EOF fence；旧 journal 不允许追补。
-    binding = attempt.get('native_binding')
     intent_at, fence = native._original_intent(attempt, binding, text)
     native.require_bound(cmux_bridge, target, binding, text, read_only=True)
     proof = native.probe(binding, text, not_before=intent_at, paste_fence=fence)
@@ -136,16 +189,19 @@ def _original(call, workspace, caller, root):
             or (report_path and read_bytes(report_path) != report_raw)
             or (kind == 'text' and original_body_pin(text, attempt) != body_pin)):
         raise ValueError('original evidence changed during verification')
-    command = [sys.executable, '-B', str(SCRIPT_DIR / 'cmux_bridge.py')]
+    result = dict(proof, attempt=str(path), kind=kind, marker=marker)
     if kind == 'callback':
-        command += ['submit-completion-callback', '--task-pack', str(pack_path)]
+        try:
+            result['reconcile'] = _callback_reconcile_command(pack, pack_path)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            result['reconcile_unavailable'] = str(exc)
     else:
+        command = [sys.executable, '-B', str(SCRIPT_DIR / 'cmux_bridge.py')]
         command += ['submit-task-pack' if kind == 'task' else 'submit-text',
                     '--surface', target, '--text', text, '--marker', marker]
         if pack_path:
             command += ['--task-pack', str(pack_path)]
-    result = dict(proof, attempt=str(path), kind=kind, marker=marker,
-                  reconcile='rtk proxy ' + shlex.join(command + ['--reconcile-only']))
+        result['reconcile'] = 'rtk proxy ' + shlex.join(command + ['--reconcile-only'])
     if body_pin is not None:
         result.update(body_pin=body_pin, confirmation_scope='reference_notice',
                       body_read_confirmed=False)
@@ -219,6 +275,8 @@ def _render(result):
         lines.append(f"{item['state']}: {item.get('reason', '')} {item.get('attempt', '')}".rstrip())
         if item.get('reconcile'):
             lines.append('只读核收原次：' + item['reconcile'])
+        if item.get('reconcile_unavailable'):
+            lines.append('原控制器命令未核实，保留原次交主管核查：' + item['reconcile_unavailable'])
         if item.get('recover'):
             lines.append('原完整草稿仍在时，由控制器核身份和剩余按键预算后恢复：' + item['recover'])
     lines += ['禁止重贴、换 nonce、以按键退出码/屏幕/ACK冒充送达。',

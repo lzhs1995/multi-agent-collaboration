@@ -229,6 +229,53 @@ def target(value):
     return value if value.startswith("surface:") else value.upper()
 
 
+def _callback_call(values):
+    """只保留能证明只读模式的真实 bool；字符串/动态值不能取得反向身份。"""
+    if (not isinstance(values.get("task_pack_path"), str)
+            or not values["task_pack_path"]
+            or type(values.get("confirm_lines", 200)) is not int
+            or values.get("confirm_lines", 200) <= 0
+            or any(type(values.get(key, False)) is not bool
+                   for key in ("reconcile_only", "resume_queue_only"))
+            or (values.get("reconcile_only") and values.get("resume_queue_only"))):
+        return {"kind": "unresolved", "reason": "nonliteral or invalid callback arguments"}
+    return {"kind": "callback", "surface": None, "pack": values["task_pack_path"],
+            "text": None, "marker": None,
+            "reconcile_only": values.get("reconcile_only", False)}
+
+
+def _python_callback(node):
+    names = ("task_pack_path", "confirm_lines")
+    allowed = {*names, "reconcile_only", "resume_queue_only"}
+    try:
+        if len(node.args) > len(names):
+            raise ValueError("extra positional arguments")
+        values = {key: ast.literal_eval(value) for key, value in zip(names, node.args)}
+        for keyword in node.keywords:
+            if keyword.arg not in allowed or keyword.arg in values:
+                raise ValueError("dynamic, duplicate or unknown callback keyword")
+            values[keyword.arg] = ast.literal_eval(keyword.value)
+        return _callback_call(values)
+    except (ValueError, TypeError, SyntaxError, RecursionError):
+        return {"kind": "unresolved", "reason": "nonliteral or invalid callback arguments"}
+
+
+def _cli_callback(args):
+    parser = _LiteralParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--task-pack", dest="task_pack_path", required=True)
+    parser.add_argument("--confirm-lines", type=int, default=200)
+    parser.add_argument("--reconcile-only", action="store_true")
+    try:
+        options = [word.partition("=")[0] for word in args
+                   if word.partition("=")[0] in
+                   ("--task-pack", "--confirm-lines", "--reconcile-only")]
+        if len(options) != len(set(options)):
+            raise ValueError("duplicate callback option")
+        return _callback_call(vars(parser.parse_args(args)))
+    except (ValueError, argparse.ArgumentError):
+        return {"kind": "unresolved", "reason": "nonliteral or invalid callback arguments"}
+
+
 def _python_calls(source):
     try:
         tree = ast.parse(source)
@@ -241,6 +288,9 @@ def _python_calls(source):
         name = node.func.attr if isinstance(node.func, ast.Attribute) else (
             node.func.id if isinstance(node.func, ast.Name) else "")
         if name not in _KINDS:
+            continue
+        if name == "submit_completion_callback":
+            result.append(_python_callback(node))
             continue
         def literal(value):
             try:
@@ -399,6 +449,9 @@ def delivery_calls(command, depth=0, *, exclude_help=True):
             continue
         name = args[1].replace("-", "_")
         if name not in _KINDS:
+            continue
+        if name == "submit_completion_callback":
+            result.append(_cli_callback(args[2:]))
             continue
         values = {}
         pos = 2

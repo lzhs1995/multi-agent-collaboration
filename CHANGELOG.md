@@ -1,3 +1,16 @@
+# 0.4.11 — 2026-10-10
+
+- Authenticate either original endpoint when explicitly reconciling a callback
+  without input. A supervisor can verify its received callback without being
+  misclassified as a new sender targeting itself. Ordinary sends retain their
+  existing identity checks.
+- Parse callback modes strictly. Dynamic arguments, truthy strings, duplicates
+  and conflicting queue modes cannot obtain receiver-side observation. Preserve
+  original process, session, task, report and pre-input native-journal bindings.
+- Keep reconciliation hints on the frozen task's original Python and controller.
+  Missing or conflicting command metadata leaves an explicit unresolved hint,
+  without discarding genuine native reception or substituting a newer release.
+
 # 0.4.10 — 2026-10-10
 
 - Treat exact bridge CLI help as a read-only operation, including literal

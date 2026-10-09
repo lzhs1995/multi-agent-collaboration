@@ -97,6 +97,19 @@ controller 支持的恢复入口才可在同一 attempt 内补一个现场支持
 该选项。callback 的旧 queue-only Python 接口不提供额外 Tab 配额。不能改 nonce、换会话、删 journal
 或重写旧 attempt 来取得新发送槽。
 
+原 callback 的发送者与已认证原接收者都可以通过原 controller 显式
+`--reconcile-only` 核收。主管观察收到的原回调时，hook 按原 journal 的
+反向端点认证，不把主管误判成一次向自己的新发送。此例外只接受真实布尔
+只读参数；动态值、展开参数、重复选项及与 queue-resume 混用均不接受。
+原 executor、workspace、pane、接收进程、原始 EOF fence、完整消息和
+报告/任务包一致性仍逐项核验；普通发送不享有反向端点例外。
+
+hook 的 callback 核收提示只能采用冻结包中一致的 `required_skill` 与
+`completion_command_argv` / `callback_command`，保留原 Python 和原
+controller，追加 `--reconcile-only`。原命令缺失或冲突时明确报不可用，
+不得猜测当前安装路径；已有真实原生接收证据仍保留。hook 仅作只读观察，
+正式 receipt 仍由原控制器发布。
+
 ## 封口、Stop 与主管报告发现
 
 PostToolUse 成功结果须符合客户端官方 schema：仅通过

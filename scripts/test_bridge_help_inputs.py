@@ -80,6 +80,40 @@ class BridgeHelpInputsTests(unittest.TestCase):
         self.assertFalse(is_bridge_help_command(command))
         self.assertEqual(delivery_calls(command), delivery_calls(CALLBACK))
 
+    def test_callback_reconcile_literal_cli_and_python_have_identical_mode(self):
+        expected = delivery_calls(CALLBACK + " --reconcile-only")
+        self.assertIs(expected[0]["reconcile_only"], True)
+        for source in (
+                "bridge.submit_completion_callback('/offline/task-pack.json', reconcile_only=True)",
+                "bridge.submit_completion_callback(task_pack_path='/offline/task-pack.json', "
+                "confirm_lines=200, reconcile_only=True, resume_queue_only=False)"):
+            with self.subTest(source=source):
+                self.assertEqual(delivery_calls(shlex.join([PYTHON, "-B", "-c", source])), expected)
+        self.assertIs(delivery_calls(CALLBACK)[0]["reconcile_only"], False)
+
+    def test_callback_cli_rejects_false_flags_unknown_modes_and_duplicate_arguments(self):
+        for suffix in (" --reconcile-only=false", " --reconcile-only=True",
+                       " --reconcile-only --resume-queue-only", " --reconcile-onl",
+                       " --reconcile-only --reconcile-only", " --confirm-lines=0",
+                       " --task-pack /different/task-pack.json", " --reconcile-only extra"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(delivery_calls(CALLBACK + suffix)[0]["kind"], "unresolved")
+
+    def test_callback_python_rejects_dynamic_kwargs_false_strings_and_conflicts(self):
+        for arguments in (
+                "'/offline/task-pack.json', reconcile_only='False'",
+                "'/offline/task-pack.json', reconcile_only=1",
+                "'/offline/task-pack.json', reconcile_only=flag",
+                "'/offline/task-pack.json', **{'reconcile_only': True}",
+                "'/offline/task-pack.json', reconcile_only=True, **options",
+                "'/offline/task-pack.json', reconcile_only=True, resume_queue_only=True",
+                "'/offline/task-pack.json', 200, True",
+                "*args, reconcile_only=True",
+                "'/offline/task-pack.json', task_pack_path='/different/task-pack.json', reconcile_only=True"):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(delivery_calls(
+                    "bridge.submit_completion_callback(" + arguments + ")")[0]["kind"], "unresolved")
+
     def test_only_exact_help_argv_qualifies(self):
         for command in (CALLBACK, HELP + " --task-pack /offline/task-pack.json",
                         HELP + " && " + CALLBACK, HELP + "\n" + CALLBACK,
