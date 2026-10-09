@@ -1,8 +1,11 @@
 # 原生投递、原次恢复与有界等待
 
 本页是 prompt、任务包、callback、封口及 idle 等待的统一操作合同。
-`SKILL.md` 和各客户端适配层引用本页；旧屏幕判据、独立 Enter/Tab
-预算和无限求派说明不再作为当前规则。执行使用原任务固定的完整控制器；
+新的普通长消息及握手/复审提示按[短通知与固定正文](long-prompt-delivery.md)
+先固定全文再投递短通知；原生回执只证明通知收到，不证明正文已读或任务已接受。
+`SKILL.md` 和各客户端适配层引用本页；旧屏幕判据与独立 Enter/Tab
+预算不再使用。用户明确授权的每60秒新 marker 求派保留在下述可选入口，
+不与默认有界 persist 混为一谈。执行使用原任务固定的完整控制器；
 文档更新不迁移在途任务，不证明已安装或已在真实客户端通过。
 
 ## 只有原接收端新增的完整 user 记录能确认收到
@@ -50,7 +53,25 @@ Ctrl+Enter 或裸键绕路。Tab 结果仍是 pending，直到原生 user 证据
 首帧和未知 footer 不能证明完整草稿。已测显示等价只用于草稿保护，
 不能降低原生全文比较的严格程度。未知状态不清空，不重复粘贴。
 
+Claude 状态栏的识别只在完整匹配边框之外进行。已测可选计数行
+`CLAUDE.md | 规则 | MCPs | 钩子` 中的规则数不能误算为草稿；相同文字
+出现在输入框内仍是原文。未知字段或残缺边框保留 UNKNOWN，禁止清空绕过。
+空输入与空闲回合分别核验，识别修复不改变完整草稿及原生接收门禁。
+完整边框外的同行时间字段可带精确提示 `new task? /clear to save N tokens`（N 仅为 ASCII 整数，或整数/一位小数加小写 `k`）；正文同字仍是草稿，未知提示及折叠草稿仍不授权输入。
+
 ## 原次恢复共用最多一次补键
+
+### Current status and nested hook identity
+
+同一 hook evaluation 内，外层身份解析与内层 bridge 核收使用同一原生 caller
+采集来源；每次边界仍重新核进程与 cmux 树，不缓存身份、不改写 daemon 环境。
+否则外层识别正确、内层退回继承的 workspace 会错误阻止合法核收。
+
+完整 Claude 边框成立时，只从最新顶格 activity 行判断当前压缩或重连；
+完成报告及 recap 内引用的历史状态不参与。Codex 的 steer queue 标题不属于
+当前状态行；独立 warnings footer 由已测规则识别。真正的 Compacting context、
+Compacting conversation、Reconnecting 以及未知界面仍不准输入。
+这些兼容规则不改变草稿逐字匹配和原 fence 后完整 native user 的验收标准。
 
 先通过**原 sender/controller** 对原 attempt 做零输入核收，检查迟到的
 完整 native user。已收到或已排队时不补键。只有同时满足下列条件，原
@@ -78,6 +99,13 @@ controller 支持的恢复入口才可在同一 attempt 内补一个现场支持
 
 ## 封口、Stop 与主管报告发现
 
+PostToolUse 成功结果须符合客户端官方 schema：仅通过
+`hookSpecificOutput.hookEventName=PostToolUse` 与字符串 `additionalContext`
+传回完整核验结果，不能把内部 `action/results` 直接放在 JSON 顶层。
+Codex 对未知顶层字段拒绝整份输出；原生记录存在与自动 hook 输出被接受
+分别核验。保留未确认时的 stderr/exit 2，普通无关工具保持静默。
+离线核官方 schema 后，再取活跃客户端实际自动调用记录；手动调用不算。
+
 报告完成后先冻结报告、task pack 和原 attempt 既有记录，再走原 callback。
 封口阻止继续扩展测试、改报告、追加科研或重复发送；允许严格 task-bound
 的只读诊断及原 controller 零输入 reconcile。核收如需追加观察或原子
@@ -103,7 +131,7 @@ Stop/SubagentStop 仅对严格布尔 `stop_hook_active is True` 处理重入；
 主管可先独立读固定报告推进工作，再按原证据分别核收通信、裁决业务及
 定向解除原任务。执行者不因回执待核无限续跑；主线不依赖该回执的工作继续。
 
-## idle 与 CCC 都有明确等待期限
+## 默认 idle 观察与 CCC 有明确等待期限
 
 任务 disarm 后，idle Stop 只保存一次持久 idle 状态并允许结束；
 没有求派记录、后台进程或主管答复都不能成为 Stop 阻断理由。
@@ -131,6 +159,23 @@ CCC 在合法报告等待边界与 `WAITING_SUPERVISOR` 同步，并保留有限
 本地 hook 放行或源码修改推断其实际状态。等待结束、工具可用性、任务接受
 和新任务派发分别验收，不通过全局关闭保护来消除循环。
 
+## 用户明确授权的每60秒主动求派
+
+默认 executor_ready 的有界单次观察不撤销用户另行授权的主动求派。
+可选 scripts/executor_reask.py 保留每60秒一个新 marker 的请求，直到主管答复、
+新派发或 operator stop；不重贴旧请求、不重置旧 attempt 的按键预算。
+配套 cmux_executor_reask_stop_guard.py 只约束已授权等待段。单次 run 有调用
+时长上限，不能把“停止一次工具调用”说成“永久放弃任务”。
+
+新求派使用同版 executor_ready、正文存储和 bridge。超过700 UTF-8字节或
+带尾换行时固定完整正文再发送短通知，返回的通知 receipt 不证明正文已读。
+不适合终端输入时使用已配置文件通道；每轮记录实际写入或错误，
+空 channels、轮数增长和历史 marker 均不证明送达。历史 marker 无原次
+receipt 时只保留 UNVERIFIED；真实队列由同版 bridge 的实际结构识别。
+
+这个兼容更新不宣告其他未完成的 reask 生命周期方案已上线。安装须保存原
+active episode、旧控制器与未决证据，不把默认 idle hook 全局改成无限续轮。
+
 ## helper 只保留一个受保护发送入口
 
 普通消息的 helper 必须由 `scripts/render_cmux_agent.py` 从固定基线渲染。
@@ -154,3 +199,15 @@ hook 的退役由受支持安装器限定本包注册，保留其他任务及 fo
 skill 的真实完整 release，在途原次仍保留原 controller。
 离线测试不替代现场；一次成功也不能保证未来所有 UI 传输绝无失败。
 能保证的合同是：未知不报成功、保留原次、恢复有界、证据不被重写。
+
+## 新粘贴必须为单行（0.4.4）
+
+普通消息及握手全文含任意 CR/LF/tab 或超过700 UTF-8字节时，保存完整只读正文，
+再发单行 MESSAGE_REFERENCE_V2；保留全部字节和SHA。新任务使用专用
+TASK_PACK_V2 单行通知并绑定完整任务包SHA；callback保持专用原文，不改成普通引用。
+公共新粘贴门禁同时覆盖三条路径。旧V1四行通知仅沿原controller核收，不能重贴
+或迁移原nonce。短通知原生收到只证明通知；完整正文另核读入，业务另行接受。
+
+完整实机验收分别记录：原fence后完整 native user、真实callback原次及回执、
+活跃客户端自动hook的实际调用。手动hook测试、配置存在和离线套件不能代替自动执行。
+维护通过后接回用户原任务，沿原主管核未完边界，不擅自加派新研究或旧章节。

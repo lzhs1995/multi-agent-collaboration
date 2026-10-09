@@ -36,6 +36,7 @@ import cmux_consensus_stop_guard as STOP_GUARD  # noqa: E402
 import cmux_consensus_round_guard as ROUND_GUARD  # noqa: E402
 import cmux_handshake_receipt_guard as HANDSHAKE_GUARD  # noqa: E402
 import cmux_lease_guard as LEASE_GUARD  # noqa: E402
+import cmux_prompt_reference as REFERENCE  # noqa: E402
 from native_test_support import NativeFixture  # noqa: E402
 
 
@@ -55,6 +56,10 @@ def setUpModule():
     registry_patch = mock.patch.object(HARNESS, "ARTIFACT_REGISTRY_DIR", Path(registry.name))
     registry_patch.start()
     unittest.addModuleCleanup(registry_patch.stop)
+    body_patch = mock.patch.object(REFERENCE, "body_root",
+                                  return_value=Path(registry.name) / "bodies")
+    body_patch.start()
+    unittest.addModuleCleanup(body_patch.stop)
 
 
 def gate(root: Path, task_id="r3-test", executor="surface:2", supervisor="surface:1"):
@@ -116,6 +121,14 @@ class OfflineWorkspaceFixture(unittest.TestCase):
     wired tests in test_cmux_workspace_guard, without this transport mock."""
     def setUp(self):
         super().setUp()
+        # Importing this fixture does not run this module's setUpModule.
+        # Inheriting suites must also keep persisted handshake bodies offline.
+        bodies = tempfile.TemporaryDirectory()
+        self.addCleanup(bodies.cleanup)
+        body_patch = mock.patch.object(REFERENCE, "body_root",
+                                      return_value=Path(bodies.name) / "bodies")
+        body_patch.start()
+        self.addCleanup(body_patch.stop)
         def pin(surface, **kwargs):
             return {"workspace_uuid": "ws-uuid", "caller_surface_uuid": "sup-uuid",
                     "target_surface_uuid": "uuid-" + surface.split(":")[-1]}
@@ -1600,11 +1613,16 @@ class ArtifactBindingTests(unittest.TestCase):
             self.assertEqual(len(prompts), 1)
             prompt, marker = prompts[0]
             self.assertEqual(marker, marker.strip())
-            self.assertIn(str(HARNESS.COLLABORATION_SKILL_PATH), prompt)
+            self.assertLessEqual(len(prompt.encode("utf-8")), REFERENCE.MAX_INLINE_BYTES)
+            reference = REFERENCE.wire_reference(prompt)
+            self.assertIsNotNone(reference)
+            body, _pin = REFERENCE.read_body(reference)
+            self.assertIn(marker, body)
+            self.assertIn(str(HARNESS.COLLABORATION_SKILL_PATH), body)
             self.assertIn("report artifact and a visible DONE sentence are not a callback",
-                          prompt)
+                          body)
             self.assertIn("ROUND_ACK|<task-id>|<round-id>|<agent:identity>|<verdict>|<nonce>",
-                          prompt)
+                          body)
 
     def test_detector_false_negative_waits_for_same_nonce_without_resend(self):
         """A delivered-but-unverified prompt must not be resent behind Claude."""

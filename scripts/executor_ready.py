@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import cmux_prompt_reference as prompt_reference
 
 PREFIX = 'EXECUTOR_READY'
 ASK_INTERVAL = 60.0  # 兼容旧参数：现在仅为原请求的只读核收间隔。
@@ -167,9 +168,13 @@ def build_text(executor_ref, marker, task_id='', note='', attempt=1, mailbox='',
 def write_record(caller_uuid, marker, text, target_surface, task_id='', episode_id=''):
     path = requests_dir() / (request_key(caller_uuid, marker) + '.json')
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    record = dict(version=3, marker=marker, caller_surface_uuid=caller_uuid,
+    prepared = prompt_reference.plan(text, marker, state_root() / 'message-bodies-v1')
+    prompt_reference.persist(prepared['reference'], text)
+    record = dict(version=4, marker=marker, caller_surface_uuid=caller_uuid,
                   target_surface=target_surface, task_id=task_id, episode_id=episode_id,
-                  payload_sha256=digest(text), text=text, created_at_epoch=time.time())
+                  payload_sha256=digest(prepared['text']), text=prepared['text'], created_at_epoch=time.time())
+    if prepared['reference']:
+        record.update(body_reference=prepared['reference'], original_payload_sha256=digest(text))
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as handle:
         json.dump(record, handle, ensure_ascii=False)
@@ -365,6 +370,14 @@ def _original_request(caller_uuid, supervisor, marker):
             or not isinstance(original.get('text'), str)
             or digest(original['text']) != original.get('payload_sha256')):
         raise ValueError('ORIGINAL_REQUEST_REQUIRED: preserve marker; no new request')
+    if original.get('version') == 4 and original.get('body_reference'):
+        full, _pin = prompt_reference.read_body(original['body_reference'])
+        planned = prompt_reference.plan(full, marker, state_root() / 'message-bodies-v1')
+        if (digest(full) != original.get('original_payload_sha256')
+                or planned != dict(text=original['text'], reference=original['body_reference'])):
+            raise ValueError('ORIGINAL_REFERENCE_CHANGED: no input')
+    elif original.get('version') == 4:
+        prompt_reference.require_inline(original['text'])
     return original
 
 
@@ -378,7 +391,11 @@ def advance_ask(bridge, supervisor, caller_uuid, ask, *, allow_send=False):
             raise ValueError('REQUEST_CALLER_CHANGED')
         receipt = _receipt(bridge, supervisor, original['text'], marker)
         if receipt:
+            if _original_request(caller_uuid, supervisor, marker) != original:
+                raise ValueError('ORIGINAL_REQUEST_CHANGED')
             ask.update(outcome='CONFIRMED', receipt=receipt)
+            if original.get('body_reference'):
+                ask.update(confirmation_scope='reference_notice', body_read_confirmed=False)
             return ask
         journal = state_root() / 'message-dispatch-v1' / request_key(live['caller_surface_uuid'], marker)
         attempts = []
@@ -392,13 +409,17 @@ def advance_ask(bridge, supervisor, caller_uuid, ask, *, allow_send=False):
                         raise ValueError('ORIGINAL_ATTEMPT_SCAN_BUDGET_EXHAUSTED')
         if attempts and not all(read_json(p) for p in attempts):
             raise ValueError('ORIGINAL_ATTEMPT_UNREADABLE')
-        if allow_send and not attempts and original.get('version') == 3:
+        if allow_send and not attempts and original.get('version') == 4:
             result = _submit(bridge, supervisor, original['text'], marker)
         elif attempts:
             result = _submit(bridge, supervisor, original['text'], marker, reconcile_only=True)
         else:
             raise ValueError('LEGACY_REQUEST_UNVERIFIABLE: no original attempt; do not resend')
+        if _original_request(caller_uuid, supervisor, marker) != original:
+            raise ValueError('ORIGINAL_REQUEST_CHANGED')
         ask.update(result)
+        if original.get('body_reference'):
+            ask.update(confirmation_scope='reference_notice', body_read_confirmed=False)
     except Exception as exc:
         ask.update(outcome='UNCONFIRMED_DO_NOT_RESEND', detail=str(exc)[:400])
     return ask

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from native_test_support import NativeFixture, ScreenSequence
+import cmux_prompt_reference as reference
 
 
 HARNESS_PATH = Path(__file__).with_name("mac_harness.py")
@@ -33,6 +34,9 @@ def setUpModule():
     patcher = mock.patch.object(HARNESS, "ARTIFACT_REGISTRY_DIR", Path(registry.name))
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
+    bodies = mock.patch.object(reference, 'body_root', return_value=Path(registry.name) / 'bodies')
+    bodies.start()
+    unittest.addModuleCleanup(bodies.stop)
 
 
 class ReceiptOrderingTests(unittest.TestCase):
@@ -70,11 +74,17 @@ class ReceiptOrderingTests(unittest.TestCase):
                 "executor_provider": "claude",
             }))
 
-            def assert_receipt_before_send(_executor, _prompt, marker=None):
+            def assert_receipt_before_send(_executor, prompt, marker=None):
                 receipts = list((root / "round-receipts").glob("R1-*.json"))
                 self.assertEqual(len(receipts), 1)
                 pending = json.loads(receipts[0].read_text())
                 self.assertEqual(pending["status"], "AWAITING_EXECUTOR_ACK")
+                body, pin = reference.read_body(pending['dispatch_body_reference'])
+                self.assertEqual(reference.validate_wire_body(prompt), pin)
+                self.assertEqual(pending['dispatch_payload_sha256'], reference.digest(prompt))
+                self.assertIn('ROUND_NONCE=' + marker, body)
+                self.assertIn('ROUND_ACK|<task-id>|<round-id>|<agent:identity>|<verdict>|<nonce>', body)
+                self.assertLessEqual(len(prompt.encode('utf-8')), reference.MAX_INLINE_BYTES)
 
             evidence = {"executor_nonce_found": True, "screen_hash": "abc123"}
             with (
@@ -124,9 +134,15 @@ class ReceiptOrderingTests(unittest.TestCase):
                 self.assertNotIn("error", receipt)
                 self.assertEqual(receipt["executors"][0]["status"], "HELLO_SENT")
                 self.assertFalse(receipt["prompt_contains_literal_ack"])
-                self.assertIn("ACK_NONCE=", prompt)
-                self.assertIn("entire assistant response must be exactly one compact ACK line", prompt)
-                self.assertNotIn(receipt["ack_line_expected"], prompt)
+                item = receipt['executors'][0]
+                body, pin = reference.read_body(item['dispatch_body_reference'])
+                self.assertEqual(reference.validate_wire_body(prompt), pin)
+                self.assertEqual(item['dispatch_payload_sha256'], reference.digest(prompt))
+                self.assertEqual(item['dispatch_confirmation_scope'], 'reference_notice')
+                self.assertLessEqual(len(prompt.encode('utf-8')), reference.MAX_INLINE_BYTES)
+                self.assertIn('ACK_NONCE=' + marker, body)
+                self.assertIn("entire assistant response must be exactly one compact ACK line", body)
+                self.assertNotIn(receipt["ack_line_expected"], body)
 
             with (
                 mock.patch.object(HARNESS.cmux, "pin_workspace"),
@@ -263,7 +279,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         self.assertEqual(result["retries"], 0)
         send_key.assert_called_once_with("surface:2", "enter")
 
-    def test_first_submit_pending_recovery_budget_and_exact_native_receipt(self):
+    def test_legacy_multiline_pending_recovery_budget_and_exact_native_receipt(self):
         text = "delivery:x\nstatus: work"
         idle = "❯ Ask Claude to do anything\n[Opus 5]"
         with NativeFixture(provider="claude") as native:
@@ -274,7 +290,10 @@ class SubmissionConfirmationTests(unittest.TestCase):
                 mock.patch.object(BRIDGE, "send_key") as send_key,
                 mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
             ):
-                with self.assertRaises(BRIDGE.DispatchUnconfirmed):
+                # Create a legacy attempt with its genuine fixture fence and
+                # one original key, as before the new single-line paste gate.
+                # All recovery and read-only checks below use current guards.
+                with mock.patch("cmux_prompt_reference.require_inline"), self.assertRaises(BRIDGE.DispatchUnconfirmed):
                     BRIDGE.submit_text("surface:2", text, marker="delivery:x")
                 paste.assert_called_once_with("surface:2", text)
                 send_key.assert_called_once_with("surface:2", "enter")

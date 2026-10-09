@@ -209,6 +209,77 @@ class NativeDeliveryGuardTests(unittest.TestCase):
             for path in self.native.home.rglob("*") if path.is_file()
         }
 
+
+    def _reference_case(self, *, received=True):
+        import cmux_prompt_reference as reference
+        marker = f"GUARD_REFERENCE_{self.counter + 1}"
+        full = f"STATUS: {marker}\r\n" + ("原始正文\t  \r\n" * 100)
+        plan = reference.plan(full, marker)
+        pin = reference.persist(plan["reference"], full)
+        case = self._case(text=plan["text"], marker=marker)
+        case.body_path = Path(plan["reference"]["path"])
+        case.attempt.update(body_reference=plan["reference"], body_pin=pin)
+        write_json(case.attempt_path, case.attempt)
+        if received:
+            self.native.append_user(case.text)
+        return case
+
+    def test_reference_hook_confirms_notice_only_and_preserves_body_pin(self):
+        case = self._reference_case()
+        item = self._received(self._evaluate(case), case)
+        self.assertEqual(item["confirmation_scope"], "reference_notice")
+        self.assertIs(item["body_read_confirmed"], False)
+        self.assertEqual(item["body_pin"], case.attempt["body_pin"])
+
+    def test_reference_damage_blocks_even_with_exact_native_notice(self):
+        for damage in ("missing", "writable", "same_byte_replacement", "changed"):
+            with self.subTest(damage=damage):
+                case = self._reference_case()
+                path = case.body_path
+                if damage == "missing":
+                    path.unlink()
+                elif damage == "writable":
+                    path.chmod(0o600)
+                elif damage == "same_byte_replacement":
+                    replacement = path.with_name("replacement.txt")
+                    replacement.write_bytes(path.read_bytes())
+                    replacement.chmod(0o400)
+                    replacement.replace(path)
+                else:
+                    path.chmod(0o600)
+                    path.write_bytes(b"changed")
+                    path.chmod(0o400)
+                self._blocked(self._evaluate(case))
+
+    def test_reference_body_mutation_during_native_probe_blocks(self):
+        case = self._reference_case()
+        probe = native.probe
+        def race(*args, **kwargs):
+            result = probe(*args, **kwargs)
+            case.body_path.chmod(0o600)
+            return result
+        with patch.object(native, "probe", side_effect=race):
+            self._blocked(self._evaluate(case))
+
+    def test_reference_missing_original_pin_cannot_be_reconstructed_by_hook(self):
+        case = self._reference_case()
+        case.attempt.pop("body_pin")
+        write_json(case.attempt_path, case.attempt)
+        self._blocked(self._evaluate(case), reason="MESSAGE_BODY_ORIGINAL_PIN_REQUIRED")
+
+    def test_legacy_long_inline_reconciles_original_bytes_with_zero_input(self):
+        original = "STATUS: LEGACY_REFERENCE_TEST\r\n" + ("旧原文  \t\r\n" * 200)
+        case = self._case(text=original, marker="LEGACY_REFERENCE_TEST", received=True)
+        before = case.attempt_path.read_bytes()
+        result = bridge.submit_text(case.target, original, marker=case.marker, reconcile_only=True)
+        self.assertTrue(result["confirmed"])
+        self.assertTrue(result["reconciled_read_only"])
+        self.assertEqual(case.attempt_path.read_bytes(), before)
+        self.assertNotIn("body_reference", result)
+        self.assertFalse((self.root / "message-bodies-v1").exists())
+        self._received(self._evaluate(case), case)
+
+
     def test_ordinary_tools_skip_without_identity_or_history(self):
         payloads = [
             {},
@@ -604,7 +675,57 @@ class NativeDeliveryGuardTests(unittest.TestCase):
             status = guard.main()
         self.assertEqual(status, 0)
         self.assertEqual(stderr.getvalue(), "")
-        self._received(json.loads(stdout.getvalue()), case)
+        output = json.loads(stdout.getvalue())
+        self._received(self._posttooluse_result(output), case)
+
+    def _posttooluse_result(self, output):
+        # Frozen upstream schema, not the guard's own output definitions. These
+        # assertions cover every field emitted on our successful wire path.
+        schema_path = (Path(__file__).resolve().parent.parent / 'tests/fixtures'
+                       / 'codex-post-tool-use-output.schema.json')
+        schema = json.loads(schema_path.read_text(encoding='utf-8'))
+        self.assertIs(schema['additionalProperties'], False)
+        self.assertEqual(set(output) - set(schema['properties']), set())
+        self.assertEqual(set(output), {'hookSpecificOutput'})
+        specific = output['hookSpecificOutput']
+        spec_schema = schema['definitions']['PostToolUseHookSpecificOutputWire']
+        self.assertIs(spec_schema['additionalProperties'], False)
+        self.assertEqual(set(specific) - set(spec_schema['properties']), set())
+        self.assertTrue(set(spec_schema['required']).issubset(specific))
+        self.assertEqual(specific['hookEventName'],
+                         spec_schema['properties']['hookEventName']['const'])
+        self.assertIsInstance(specific['additionalContext'], str)
+        return json.loads(specific['additionalContext'])
+
+    def test_main_callback_success_preserves_native_proof_for_both_providers(self):
+        for provider in ('codex', 'claude'):
+            with self.subTest(provider=provider):
+                self._use_provider(provider)
+                case = self._case('callback', received=True)
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch.object(sys, 'stdin', io.StringIO(json.dumps(case.payload))), \
+                        patch.object(sys, 'stdout', stdout), patch.object(sys, 'stderr', stderr):
+                    status = guard.main()
+                self.assertEqual(status, 0)
+                self.assertEqual(stderr.getvalue(), '')
+                self._received(self._posttooluse_result(json.loads(stdout.getvalue())), case)
+
+    def test_legacy_success_result_is_rejected_by_official_wire_schema(self):
+        case = self._case(received=True)
+        legacy = self._evaluate(case)
+        self._received(legacy, case)
+        with self.assertRaises(AssertionError):
+            self._posttooluse_result(legacy)
+
+    def test_main_unrelated_tool_emits_no_hook_output(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'stdin', io.StringIO(json.dumps({
+                'tool_name': 'exec_command', 'tool_input': {'cmd': 'rtk git status'}}))), \
+                patch.object(sys, 'stdout', stdout), patch.object(sys, 'stderr', stderr):
+            status = guard.main()
+        self.assertEqual(status, 0)
+        self.assertEqual(stdout.getvalue(), '')
+        self.assertEqual(stderr.getvalue(), '')
 
     def test_main_unconfirmed_exits_two_with_original_reconciliation(self):
         case = self._case("callback")

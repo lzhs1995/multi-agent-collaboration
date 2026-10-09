@@ -9,10 +9,27 @@ from pathlib import Path
 from cmux_callback_journal import write_json
 import cmux_native_delivery as native
 from cmux_evidence_io import read_bytes, attempt_paths, open_regular_lock
+import cmux_prompt_reference as prompt_reference
 
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def original_body_pin(text, attempt):
+    """Recheck the body's original file identity; never re-pin a saved attempt."""
+    reference = prompt_reference.wire_reference(text)
+    if reference is None:
+        if 'body_reference' in attempt or 'body_pin' in attempt:
+            raise ValueError('MESSAGE_BODY_BINDING_CHANGED')
+        return None
+    if (attempt.get('body_reference') != reference
+            or not isinstance(attempt.get('body_pin'), dict)):
+        raise ValueError('MESSAGE_BODY_ORIGINAL_PIN_REQUIRED')
+    pin = prompt_reference.validate_wire_body(text)
+    if pin != attempt['body_pin']:
+        raise ValueError('MESSAGE_BODY_CHANGED: preserve the original attempt')
+    return pin
 
 
 def verified_receipt(bridge, surface, text, marker):
@@ -41,6 +58,12 @@ def verified_receipt(bridge, surface, text, marker):
         if (receipt.get('confirmed') is not True or receipt.get('binding') != binding
                 or attempt.get('binding') != binding):
             return None
+        body_pin = original_body_pin(text, attempt)
+        if body_pin is not None and (
+                receipt.get('body_reference') != attempt['body_reference']
+                or receipt.get('confirmation_scope') != 'reference_notice'
+                or receipt.get('body_read_confirmed') is not False):
+            return None
         events = attempt['events']
         pastes = [e for e in events if e['phase'] == 'PASTE_INTENT']
         if len(pastes) != 1:
@@ -61,10 +84,15 @@ def verified_receipt(bridge, surface, text, marker):
         if not native.receipt_evidence(bridge, surface, text, attempt, receipt):
             return None
         if (attempt_paths(journal) != attempts or any(snapshot(p) != pin for p, pin in pins)
-                or bridge.pin_workspace(surface) != live):
+                or bridge.pin_workspace(surface) != live
+                or original_body_pin(text, attempt) != body_pin):
             return None
-        return dict(source='revalidated_message_dispatch_v1', identity=identity,
-                    attempt=attempt_pin, receipt=receipt_pin)
+        proof = dict(source='revalidated_message_dispatch_v1', identity=identity,
+                     attempt=attempt_pin, receipt=receipt_pin)
+        if body_pin is not None:
+            proof.update(body_pin=body_pin, confirmation_scope='reference_notice',
+                         body_read_confirmed=False)
+        return proof
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
         return None
 
@@ -81,6 +109,8 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
     if not all(isinstance(v, str) and v for v in identity.values()):
         raise bridge.TaskPackContractError('MESSAGE_IDENTITY_REQUIRED')
     binding = dict(identity=identity, marker=marker, payload_sha256=digest(text))
+    body_reference = prompt_reference.wire_reference(text)
+    body_pin = None
     root = Path.home() / '.local/state/multi-agent-collaboration'
     key = digest(json.dumps([identity['caller_surface_uuid'], marker], sort_keys=True))
     journal = root / 'message-dispatch-v1' / key
@@ -90,6 +120,11 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         live = bridge.pin_workspace(surface)
         if any(live.get(k) != v for k, v in identity.items()):
             raise bridge.TaskPackContractError('MESSAGE_IDENTITY_CHANGED')
+        try:
+            if body_pin is not None and prompt_reference.validate_wire_body(text) != body_pin:
+                raise ValueError('MESSAGE_BODY_CHANGED')
+        except (OSError, ValueError) as exc:
+            raise bridge.TaskPackContractError(str(exc)) from exc
 
     with contextlib.ExitStack() as stack:
         # Share the existing generic sender lock, so old and new controllers
@@ -114,6 +149,11 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         old = json.loads(read_bytes(attempts[-1])) if attempts else None
         if old and old.get('binding') != binding:
             raise bridge.TaskPackContractError('MESSAGE_BINDING_CHANGED')
+        if old:
+            try:
+                body_pin = original_body_pin(text, old)
+            except (OSError, ValueError) as exc:
+                raise bridge.TaskPackContractError(str(exc)) from exc
         if (journal / 'receipt.json').exists():
             raise bridge.TaskPackContractError('MESSAGE_RECEIPT_EXISTS: no duplicate send')
         recheck()
@@ -172,8 +212,18 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 raise bridge.TaskPackContractError('MESSAGE_ATTEMPT_EXISTS: use reconcile_only')
             if len(attempts) >= 2:
                 raise bridge.TaskPackContractError('MESSAGE_RETRY_BUDGET_EXHAUSTED')
+            # Fresh ordinary messages must fit before any paste. Existing
+            # native reconciliation and dedicated task/callback paths keep
+            # their original exact payload and contract.
+            try:
+                prompt_reference.require_inline(text)
+                body_pin = prompt_reference.validate_wire_body(text)
+            except (OSError, ValueError) as exc:
+                raise bridge.TaskPackContractError(str(exc)) from exc
             attempt_path = journal / ('attempt-%04d.json' % (len(attempts) + 1))
             attempt = dict(binding=binding, phase='PREPARED', events=[])
+            if body_reference is not None:
+                attempt.update(body_reference=body_reference, body_pin=body_pin)
             write_json(attempt_path, attempt)
 
             def observe(phase, screen=None):
@@ -210,7 +260,11 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         recheck()
         if not native.receipt_evidence(bridge, surface, text, json.loads(read_bytes(attempt_path)), result):
             raise bridge.DispatchUnconfirmed('MESSAGE_NATIVE_PROOF_REQUIRED')
+        recheck()
         result = dict(result, binding=binding, attempt=str(attempt_path), at_epoch=time.time())
+        if body_reference is not None:
+            result.update(confirmation_scope='reference_notice', body_read_confirmed=False,
+                          body_reference=body_reference)
         receipt = journal / 'receipt.json'
         write_json(receipt, result)
         return dict(result, receipt=str(receipt))

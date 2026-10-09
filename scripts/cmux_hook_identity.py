@@ -42,11 +42,17 @@ def identity(payload):
 
 @contextmanager
 def evaluation(payload):
-    token = _current.set(resolve(payload))
-    try:
-        yield
-    finally:
-        _current.reset(token)
+    # PostToolUse reconciliation descends through bridge.pin_workspace() to
+    # caller_snapshot() again. Carry the native hook source into that call;
+    # otherwise a managed daemon can become the caller halfway through the
+    # same evaluation. Each nested snapshot obtains fresh process evidence.
+    collector = lambda: workspace.daemon_identity.collect_hook(os.environ, payload)
+    with workspace.caller_collection(collector):
+        token = _current.set(resolve(payload))
+        try:
+            yield
+        finally:
+            _current.reset(token)
 
 
 ERRORS = (workspace.WorkspaceScopeError, workspace.daemon_identity.IdentityError,

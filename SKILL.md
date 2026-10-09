@@ -9,6 +9,12 @@ For zero-input identity refusals, read [native caller inventory failures](refere
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.
 
+Hook reconciliation carries its authenticated native caller source through nested
+bridge checks and recollects live process evidence at each boundary. It must not
+fall back to the shared daemon's inherited workspace. UI readiness uses current
+provider status chrome; quoted compaction/reconnection text in a completed report
+does not describe the live turn. See the [runtime rules](references/verified-compose-delivery.md#current-status-and-nested-hook-identity).
+
 Use this skill for an explicitly requested supervisor/executor workflow. Do not
 start agents merely because this skill is being installed, edited, or reviewed.
 Requires Python 3.10+ and macOS cmux for live coordination. Offline tests also run
@@ -113,6 +119,19 @@ not an OS sandbox against arbitrary self-written socket clients.
 The current contract for both directions, original-attempt recovery, Stop and idle
 waiting is [verified native delivery](references/verified-compose-delivery.md).
 Historical screen confirmation and separate Enter/Tab retry budgets are superseded.
+New ordinary messages exceeding 700 UTF-8 bytes or containing any CR, LF or tab use the shared
+[short notice and exact body](references/long-prompt-delivery.md) route. A receipt
+for the notice proves neither body reading nor task acceptance. Formal packs and
+callbacks keep their task-bound entrypoints. The explicitly user-authorized
+60-second new-marker reask remains separate from default bounded idle observation.
+
+For new long ordinary messages and handshake/review challenges, use
+[short notices with pinned bodies](references/long-prompt-delivery.md).
+The shared helper and harness persist exact UTF-8 bytes before input; the journal
+and native hook retain the original body pin. Reception confirms the short notice
+only. New formal packs use a dedicated single-line TASK_PACK_V2 notice with the
+full pack SHA; callbacks keep their exact task-bound line. Existing attempts keep
+their original controller and bytes, including historical multiline notices.
 
 Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
 choose zero, one or two executors, apply phase-specific handshake budgets,
@@ -125,6 +144,12 @@ reconciliation remain available. Stop accepts an ordinary honest waiting stateme
 as WAITING_SUPERVISOR (continue:false, suppressOutput:true); no exact STATUS template
 is required. It preserves task/receipt state and rejects unsupported confirmation or
 consensus claims. Missing/in-flight/changed evidence cannot use this boundary.
+
+After a proven sole `attempt-0001` with `NO_INPUT` and `events=[]`, closeout also
+admits the exact synchronous original callback CLI once. The frozen pack chooses
+that controller; the original journal retains its two-attempt limit and all live
+gates. A receipt, legacy pending state, changed pins or any recorded input denies
+this exception. It does not require retrying and never resends a queued callback.
 
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
@@ -143,6 +168,7 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   challenge. It reads that file and the bound skill, then returns the exact ACK;
   no registry search, task audit or formal consensus is part of a handshake.
   A healthy current-task handshake is reused, not repeated for each status turn.
+- After original native reception has been proven, reconcile the existing receipt before waiting again. Preserve the failed receipt, actual reception time and original task/provider/nonce. An earlier observation timeout does not prohibit the executor from returning its genuine ACK; do not generate a replacement nonce for this case.
 - Match the observation budget to the harness phase minimum. A shorter local
   observation is a supervisor budget limitation, not executor silence. Recover a
   late genuine ACK against the original task/provider/nonce without resending.
@@ -214,6 +240,10 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 - On uncertain delivery, inspect the original native evidence without resending.
   Missing original binding/fence cannot be backfilled. Screen activity, ACK,
   empty compose and marker absence never substitute for exact native reception.
+- Claude footer fields are recognized only below matching full composer borders.
+  The observed optional numeric `规则` field is accepted only between `CLAUDE.md`
+  and `MCPs`; footer-like draft text and unknown layouts remain protected.
+  An empty composer does not authorize clearing an active turn or prove delivery.
 - Confirmed product virtual suggestions are not actual compose input. The bridge
   tests exact known shapes in both directions. Unknown text stays occupied.
   Public default is **no force-compose**. Only explicit operator permission may
@@ -227,6 +257,12 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   callbacks retain their dedicated task-bound bridge entrypoints.
 
 ## Enforcement And Evidence
+
+PostToolUse success must use the client-supported `hookSpecificOutput` envelope
+with `hookEventName: PostToolUse` and the verified proof in `additionalContext`.
+Internal `action/results` objects are not valid top-level Codex hook output.
+Validate the wire format against the official schema and then observe automatic
+execution in the active client; a manual script exit is a separate offline check.
 
 - Install guards on both clients through `scripts/manage_install.py`; `doctor`
   checks configuration and benign execution. Installation is not proof that an
@@ -252,7 +288,7 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 ## 双向投递与高效协作维护
 
-执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，封口保留 task-bound 诊断与零输入核收，idle Stop 不要求求派。
+执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，封口保留 task-bound 诊断与零输入核收。默认 idle Stop 不要求求派；另行保留用户明确授权的每60秒新 marker 主动求派及其配套 hook，直到主管答复、新派发或 operator stop。
 
 ### Stop hook reentry
 
@@ -288,3 +324,20 @@ For an ordinary-terminal Hook stopped by a root login permission denial, use the
 [narrow login boundary](references/root-login-permission-boundary.md). Preserve
 the original session and task; a source fix or process probe is not proof that
 the original executor has resumed.
+
+### Single-line new input
+
+All fresh pastes pass `cmux_prompt_reference.require_inline`: at most 700 UTF-8
+bytes with no CR, LF or tab. Ordinary and handshake bodies exceeding that
+constraint use the single-line MESSAGE_REFERENCE_V2 notice. Formal dispatch
+uses `task_pack_notice` through `submit_task_pack`, validating the entire frozen
+pack before input; it cannot be hidden in an ordinary reference. The callback
+retains its dedicated exact line and refuses an oversized or multiline value.
+Legacy V1 four-line notices are readable only for original-attempt reconciliation.
+No new representation can be used to replay a previous attempt.
+
+Claude may fold a multiline paste or expand a tab even when Enter returns success.
+Keep full stable-draft matching and exact new native user proof; never infer
+delivery from keys, partial text, queue banners or composer clearing. Live
+acceptance records the callback and automatic hook invocation in the actual
+client; running a hook manually proves only the invoked test.

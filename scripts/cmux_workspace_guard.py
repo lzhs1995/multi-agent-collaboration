@@ -8,6 +8,8 @@ This guards the supported transport, not arbitrary malicious code execution.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 from pathlib import Path
@@ -113,12 +115,28 @@ def _read_json_command(*args):
 
 
 _UNCOLLECTED = object()
+_caller_collector = ContextVar('cmux_workspace_caller_collector', default=None)
+
+
+@contextmanager
+def caller_collection(collector):
+    """Propagate the hook's native source, never a cached identity/proof.
+
+    Nested bridge calls still recollect and check the live process and cmux
+    tree at every boundary. Restore the outer source even when resolution or
+    transport fails; do not rewrite the inherited daemon environment.
+    """
+    token = _caller_collector.set(collector)
+    try:
+        yield
+    finally:
+        _caller_collector.reset(token)
 
 
 def caller_snapshot(*, collector=None, initial_proof=_UNCOLLECTED):
     """Resolve caller once and recheck the process proof around live cmux reads."""
     try:
-        collect = collector or (lambda: daemon_identity.collect(os.environ))
+        collect = collector or _caller_collector.get() or (lambda: daemon_identity.collect(os.environ))
         proof = collect() if initial_proof is _UNCOLLECTED else initial_proof
         identity = _read_json_command("identify", "--json")
         tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")

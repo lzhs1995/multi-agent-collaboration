@@ -24,6 +24,16 @@
 或研究完成时仍拦截。缺失、在途或漂移证据不能借此出口伪装终态。
 原次 NO_INPUT 真实返回也不强迫执行者消耗一次新发送。
 
+唯一零输入后继：仅当原 journal 只有 `attempt-0001.json`，其 `NO_INPUT`、
+`events=[]`、task/report/attempt SHA 和身份均核符，且 receipt 与历史
+`.pending.json` 均不存在时，允许直接同步运行 `rtk proxy <原Python> -B
+<原required_skill目录>/scripts/cmux_bridge.py submit-completion-callback
+--task-pack <原绝对路径>` 一次。不能用变量、shell包装、后台或附加命令。
+`cmux_callback_no_input_successor.py` 仅作 PreToolUse 判定，不是新发送器。
+原 controller 重新核实时身份、草稿、锁及最多两次 journal 预算；第二次
+仍失败则交主管，不循环。已粘贴、排队、未知、第二份 attempt 或任何回执
+不适用。修复封口后不改旧包、不迁移 controller、不重放已有输入。
+
 ## 原次恢复不会增加新的发送预算
 
 先核迟到 native user，再考虑原 controller 支持的恢复分支。

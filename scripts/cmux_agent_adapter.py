@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cmux_bridge as bridge
 from cmux_message_journal import verified_receipt
 from cmux_evidence_io import snapshot as evidence_snapshot
+import cmux_prompt_reference as prompt_reference
 
 IDENTITY_KEYS = ("workspace_uuid", "caller_surface_uuid", "target_surface_uuid", "target_pane_uuid")
 SCHEMA = "cmux-agent-bridge-adapter-v1"
@@ -160,17 +161,9 @@ class Adapter:
         key = digest(encoded([identity["workspace_uuid"], identity["target_surface_uuid"]]))
         return self.root / "targets" / key
 
-    def request(self, identity, mode, message, request_id):
-        spec = dict(schema=SCHEMA, identity=identity, mode=mode,
-                    message=message, request_id=request_id)
-        marker = "CMUX_HELPER_" + digest(encoded(spec))
-        header = "[CMUX-AGENT][delivery:" + marker + "][from:" + identity["caller_surface_uuid"] + "]\n"
-        text = header + message
-        if mode in ("ask", "broadcast"):
-            # Leave the caller's first content line intact: coordination must
-            # not become TASK, and a real TASK must retain the task-pack gate.
-            text += "\n\nReply with one leading marker: STATUS:, DONE:, or BLOCKED:."
-        return dict(spec, marker=marker, payload=text, payload_sha256=digest(text))
+    def request(self, identity, mode, message, request_id, *, reference=True):
+        return prompt_reference.helper_request(identity, mode, message, request_id,
+                                               home=self.home, reference=reference)
 
     def read_request(self, path, identity):
         value, pin = read_json(path)
@@ -178,9 +171,12 @@ class Adapter:
                 or not isinstance(value.get("message"), str) or not value["message"].strip()
                 or not isinstance(value.get("request_id"), str)):
             raise Unconfirmed("HELPER_REQUEST_CHANGED")
-        expected = self.request(identity, value["mode"], value["message"], value["request_id"])
+        expected = self.request(identity, value["mode"], value["message"], value["request_id"],
+                                reference="body_reference" in value)
         if value != expected or path.name != expected["marker"] + ".json":
             raise Unconfirmed("HELPER_REQUEST_CHANGED")
+        if "body_reference" in value:
+            prompt_reference.verify(value["body_reference"], prompt_reference.original_helper_payload(value))
         return value, pin
 
     def deliver(self, surface, mode, message=None, request_id="", reconcile=False,
@@ -220,20 +216,27 @@ class Adapter:
             else:
                 if not isinstance(message, str) or not message.strip():
                     raise Unconfirmed("HELPER_MESSAGE_REQUIRED")
-                value = self.request(identity, mode, message, request_id)
+                # Locate the original marker before considering a new wire format.
+                # A saved v1 payload is never rewritten, including after a crash.
+                value = self.request(identity, mode, message, request_id, reference=False)
                 path = channel / "intents" / (value["marker"] + ".json")
                 if prior:
                     pointer, _ = read_json(pending)
                     if pointer != dict(marker=value["marker"], identity=identity):
                         raise Unconfirmed("HELPER_PENDING: reconcile the original request; no new input")
-                existed = path.exists()
+                existed = path.exists() or path.is_symlink()
                 if existed:
                     saved, pin = self.read_request(path, identity)
-                    if saved != value:
+                    if any(saved[key] != value[key] for key in
+                           ("schema", "identity", "mode", "message", "request_id", "marker")):
                         raise Unconfirmed("HELPER_REQUEST_CHANGED")
+                    value = saved
                 else:
                     if prior:
                         raise Unconfirmed("HELPER_ORIGINAL_INTENT_MISSING")
+                    value = self.request(identity, mode, message, request_id)
+                    prompt_reference.persist(value.get("body_reference"),
+                                              prompt_reference.original_helper_payload(value))
                     write_json(path, value)
                     pin = snapshot(path)
                 # Save before calling the sole sender. Never regenerate a marker
@@ -247,6 +250,8 @@ class Adapter:
                 pointer, pending_pin = read_json(pending)
                 if pointer != dict(marker=value["marker"], identity=identity):
                     raise Unconfirmed("HELPER_PENDING_CHANGED")
+            body = value.get("body_reference")
+            body_pin = prompt_reference.verify(body) if body else None
 
             def unchanged():
                 if outer_check is not None:
@@ -257,6 +262,8 @@ class Adapter:
                 current_pending = snapshot(pending) if pending.exists() or pending.is_symlink() else None
                 if snapshot(path) != pin or current_pending != pending_pin:
                     raise Unconfirmed("HELPER_STATE_CHANGED")
+                if body and prompt_reference.verify(body) != body_pin:
+                    raise Unconfirmed("HELPER_BODY_CHANGED")
 
             unchanged()
             proof = verified_receipt(bridge, target, value["payload"], value["marker"])
@@ -282,6 +289,9 @@ class Adapter:
             return dict(schema=SCHEMA, confirmed=True, marker=value["marker"],
                         receipt_validation=proof, request=str(path),
                         already_received=result is None, reconciled_read_only=reconcile,
+                        confirmation_scope="reference_notice" if body else "inline_payload",
+                        body_read_confirmed=False if body else None,
+                        body_reference=body,
                         confirmation_source="canonical_message_journal_native_user")
 
     def broadcast(self, message, request_id=""):
