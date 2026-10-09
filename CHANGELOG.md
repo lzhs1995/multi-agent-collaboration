@@ -1,3 +1,12 @@
+# 0.4.10 — 2026-10-10
+
+- Treat exact bridge CLI help as a read-only operation, including literal
+  Python script invocations and individual commands inside Codex tool batches.
+  Help does not require a task pack, caller lookup or native delivery receipt.
+- Continue checking real sends in mixed batches. Help text inside payloads,
+  Python code and dynamically edited commands cannot exempt a send from native
+  verification. Original controllers and in-flight attempts remain unchanged.
+
 # 0.4.9 — 2026-10-10
 
 - Recognize the optional goal-duration suffix on the standalone Claude clear

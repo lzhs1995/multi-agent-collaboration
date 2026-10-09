@@ -15,6 +15,40 @@ from pathlib import Path
 _TARGET = re.compile(r"(?:surface:\d+|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z")
 _KINDS = {"submit_task_pack": "task", "submit_completion_callback": "callback",
           "submit_text": "text", "send": "text", "send_key": "text"}
+_PYTHON_SCRIPT_FLAGS = frozenset(("-B", "-u", "-E", "-I", "-s", "-S"))
+
+
+def is_bridge_help_command(command: str) -> bool:
+    """Recognize one literal help invocation, never help text inside a send.
+
+    Python may precede the script with flags that take no argument. Code/module
+    execution, dynamic shell syntax and additional bridge arguments remain
+    guarded. Called for each literal JS leaf as well as direct shell commands.
+    """
+    if any(char in command for char in ('\n', ';', '|', '&', '`', '$', '<', '>')):
+        return False
+    raw_segments, dynamic = _literal_shell_segments(command)
+    if dynamic or len(raw_segments) != 1:
+        return False
+    try:
+        args = shlex.split(raw_segments[0])
+    except ValueError:
+        return False
+    if args[:1] == ['rtk']:
+        args = args[1:]
+        if args[:1] == ['proxy']:
+            args = args[1:]
+    if args and re.fullmatch(r'python(?:[23](?:\.\d+)?)?', Path(args[0]).name):
+        args = args[1:]
+        while args and args[0] in _PYTHON_SCRIPT_FLAGS:
+            args = args[1:]
+    if not args or Path(args[0]).name not in ('cmux-bridge-toolchain', 'cmux_bridge.py'):
+        return False
+    rest = args[1:]
+    commands = {'submit-text', 'submit_text', 'submit-task-pack', 'submit_task_pack',
+                'submit-completion-callback', 'submit_completion_callback', 'read-screen'}
+    return (rest in (['--help'], ['-h']) or
+            (len(rest) == 2 and rest[0] in commands and rest[1] in ('--help', '-h')))
 
 
 class _LiteralParser(argparse.ArgumentParser):
@@ -137,7 +171,10 @@ def _js_commands(source, depth=0):
                         end = expression_end(j+2, {',', ';'})
                         if possible_delivery(tokens[j+2:end], seen | {value}):
                             return True
-        return any(delivery_calls(value, depth+1) for value in fragments + [' '.join(fragments)])
+        # A help string inside a dynamic expression may be edited into a send.
+        # Only a complete literal invocation receives the help exemption.
+        return any(delivery_calls(value, depth+1, exclude_help=False)
+                   for value in fragments + [' '.join(fragments)])
 
     for i, token in enumerate(tokens):
         if token != ('name', 'exec_command') or tokens[i+1:i+2] != [('punct', '(')]:
@@ -292,14 +329,16 @@ def _literal_shell_segments(command):
     return segments, dynamic or escaped or quote is not None
 
 
-def delivery_calls(command, depth=0):
+def delivery_calls(command, depth=0, *, exclude_help=True):
     if depth > 8:
+        return []
+    if exclude_help and is_bridge_help_command(command):
         return []
     # Codex JS tool wrappers: decode only literal command arguments as data.
     found_js, commands = _js_commands(command, depth)
     if found_js:
         return [call for value in commands for call in (
-            delivery_calls(value, depth+1) if value is not None else
+            delivery_calls(value, depth+1, exclude_help=exclude_help) if value is not None else
             [{'kind': 'unresolved', 'reason': 'dynamic peer-send command'}])]
 
     # A direct Python invocation (including the body of a shell heredoc).
@@ -317,15 +356,19 @@ def delivery_calls(command, depth=0):
         body = _python_calls(heredoc['body']) if header and Path(header[0]).name.startswith('python') else []
         if body and not heredoc['quote'] and any(c in heredoc['body'] for c in '$`'):
             body = [{'kind': 'unresolved', 'reason': 'shell-expanded Python heredoc'}]
-        return (delivery_calls(command[:heredoc.start()], depth+1) + body
-                + delivery_calls(command[heredoc.end():], depth+1))
+        return (delivery_calls(command[:heredoc.start()], depth+1, exclude_help=exclude_help) + body
+                + delivery_calls(command[heredoc.end():], depth+1, exclude_help=exclude_help))
     raw_segments, dynamic_shell = _literal_shell_segments(command)
     try:
         segments = [shlex.split(raw, comments=False, posix=True) for raw in raw_segments]
     except ValueError:
         return []
     result = []
-    for args in segments:
+    for raw, args in zip(raw_segments, segments):
+        # A shell batch can contain both help and a real callback. Exclude only
+        # an exact literal help leaf; never exempt the whole compound command.
+        if exclude_help and not dynamic_shell and is_bridge_help_command(raw):
+            continue
         while args and args[0] in ("rtk", "proxy"):
             args = args[1:]
         if not args:
@@ -334,7 +377,7 @@ def delivery_calls(command, depth=0):
         if executable in ('sh', 'bash', 'zsh') and '-c' in args:
             index = args.index('-c')
             if len(args) > index+1:
-                result.extend(delivery_calls(args[index+1], depth+1))
+                result.extend(delivery_calls(args[index+1], depth+1, exclude_help=exclude_help))
             continue
         if executable.startswith("python") and "-c" in args:
             index = args.index("-c")
@@ -343,7 +386,7 @@ def delivery_calls(command, depth=0):
             continue
         if executable.startswith("python") and len(args) > 1:
             args = args[1:]
-            while args and args[0] in ("-B", "-u", "-E", "-I", "-s", "-S"):
+            while args and args[0] in _PYTHON_SCRIPT_FLAGS:
                 args = args[1:]
             if not args:
                 continue
