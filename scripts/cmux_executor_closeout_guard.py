@@ -10,6 +10,7 @@ from executor_closeout import terminal_report, superseded, closeout_instructions
 from cmux_callback_queue_resume import allowed as queue_resume_allowed
 from cmux_callback_reconcile import allowed as reconcile_allowed
 from cmux_callback_diagnose import allowed as diagnose_allowed
+from cmux_callback_no_input_successor import allowed as no_input_successor_allowed
 
 
 def _evaluate_resolved(payload):
@@ -23,15 +24,18 @@ def _evaluate_resolved(payload):
         if evidence and not superseded(evidence, markers, workspace, surface):
             if (queue_resume_allowed(payload, marker, evidence)
                     or reconcile_allowed(payload, marker, evidence)
-                    or diagnose_allowed(payload, marker, evidence)):
+                    or diagnose_allowed(payload, marker, evidence)
+                    or no_input_successor_allowed(payload, marker, evidence)):
                 continue
             return False, (
                 'EXECUTOR_CLOSEOUT: report frozen; original callback attempt returned. '
                 'Preserve the frozen report and original callback attempt. '
                 'Only the exact task-bound cmux_callback_reconcile.py command '
                 '(zero terminal input), cmux_callback_diagnose.py, '
-                'or the existing guarded queue-resume '
-                'entrypoint is allowed; no new paste, watcher, or retry loop. '
+                'the existing guarded queue-resume entrypoint, or the exact original callback '
+                'CLI once after sole attempt-0001 NO_INPUT/events=[] is allowed. '
+                'A queued/entered/unknown attempt permits no new paste, watcher, or retry loop; '
+                'no alternate sender. '
                 'Otherwise end this turn honestly. The supervisor owns '
                 'acceptance/disarm before another task; typed text cannot lift this '
                 'seal. This is not product acceptance. '

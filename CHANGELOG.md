@@ -1,3 +1,48 @@
+# 0.4.7 — 2026-10-09
+
+- Emit verified PostToolUse results in the official
+  `hookSpecificOutput` / `hookEventName: PostToolUse` / `additionalContext`
+  envelope. Keep internal `action/results` out of the top-level client output.
+- Validate success output against the Codex schema. Preserve silent unrelated
+  calls and the existing failure behavior for unconfirmed delivery.
+- Document configuration installation, automatic client invocation, exact native
+  reception, callback settlement and task acceptance as separate checks.
+
+# 0.4.6 — 2026-10-09
+
+- Permit one synchronous original callback successor only when the sole prior
+  attempt proves `NO_INPUT` with no events, receipt or pending legacy state, and
+  the original task, report, attempt and controller pins still match.
+- Keep the original controller's two-attempt limit and all live identity, draft
+  and native-reception gates. Queued, uncertain or already received callbacks
+  cannot use this exception; in-flight tasks are never migrated or replayed.
+- Recognize the optional numeric rules-count field only outside matching Claude
+  composer borders. Empty input and idle execution remain separate conditions.
+
+# 0.4.5
+
+- Accept exact-width Claude word wrapping and the observed clear-hint footer outside composer borders. Complete, stable, exact payload and native receiver evidence remain required.
+- Preserve recovered original messages and settle genuine late ACKs against the original task/provider/nonce; the observation budget is not proof of executor failure.
+
+# 0.4.4 — single-line fresh input and full native verification
+
+- Preserve 0.4.3 nested native caller identity and current-status layout fixes.
+- New ordinary/handshake messages containing CR/LF/tab or exceeding 700 UTF-8
+  bytes use SHA-pinned single-line V2 references; old V1 attempts remain read-only.
+- Formal packs use dedicated TASK_PACK_V2; callbacks retain exact dedicated text.
+- Apply one shared single-line limit before every fresh paste.
+- Update behavioral fixtures for task early rejection, literal heredocs, and
+  historical multiline recovery without weakening live stable-draft/native gates.
+
+## 0.4.3 — 2026-10-09
+
+- Keep the hook's native caller collector through nested bridge reconciliation,
+  retaining fresh process/tree checks instead of inheriting the daemon workspace.
+- Recognize current Claude activity separately from quoted status in completed
+  reports, and recognize Codex steer headers and the separate warnings footer.
+- Add regression coverage for nested identity drift, real report layouts and
+  active compaction/reconnection states without weakening native delivery proof.
+
 ## 0.4.0 — 2026-10-09
 
 - Preserve literal escapes, tabs and newlines with guarded terminal.paste and

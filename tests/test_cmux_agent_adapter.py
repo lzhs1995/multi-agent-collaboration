@@ -46,6 +46,7 @@ class HelperEntrypointTests(unittest.TestCase):
         release.mkdir(parents=True)
         shutil.copy2(SOURCE / "scripts/cmux_agent_adapter.py", release)
         shutil.copy2(SOURCE / "scripts/cmux_evidence_io.py", release)
+        shutil.copy2(SOURCE / "scripts/cmux_prompt_reference.py", release)
         for fixture in (SOURCE / "tests/fixtures").glob("*.py"):
             shutil.copy2(fixture, release)
         self.helper = self.root / "cmux-agent"
@@ -328,8 +329,12 @@ class HelperEntrypointTests(unittest.TestCase):
     def test_real_task_pack_gate_distinguishes_ordinary_ask_from_task(self):
         self.assert_exit(self.call("ask", "surface:2", "STATUS: progress"), 0)
         ordinary = self.events("submit")[-1]
-        self.assert_exit(self.call("ask", "surface:3", "TASK: change source"), 75)
-        task = self.events("submit")[-1]
+        refused = self.assert_exit(self.call("ask", "surface:3", "TASK: change source"), 75)
+        self.assertIn("TASK_BOUND_TRANSPORT_REQUIRED", refused["error"])
+        # The single-line reference planner rejects a formal task before bridge
+        # submission. Do not accidentally reuse the previous ordinary event.
+        self.assertEqual(len(self.events("submit")), 1)
+        task = dict(surface=B, payload="TASK: TASK_GATE change source", marker="TASK_GATE")
         code = """import json,sys
 sys.path.insert(0,sys.argv[1])
 import cmux_bridge as bridge

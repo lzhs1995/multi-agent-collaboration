@@ -109,6 +109,112 @@ class MessageJournalTests(unittest.TestCase):
             self.assertIsNone(_attempt_evidence(call, 'peer', b))
             paste.assert_not_called(); key.assert_not_called()
 
+
+    def _reference(self):
+        import cmux_prompt_reference as reference
+        full = "STATUS: " + self.marker + "\n" + "原文保留空格  \t\r\n" * 100
+        planned = reference.plan(full, self.marker)
+        self.body_pin = reference.persist(planned["reference"], full)
+        self.text = planned["text"]
+        self.body_reference = planned["reference"]
+        self.body = Path(self.body_reference["path"])
+        self.done = self.idle
+
+    def test_new_oversized_raw_message_refuses_before_paste(self):
+        self.text += "\n" + "中" * 1000
+        with self.assertRaisesRegex(b.TaskPackContractError, "LONG_MESSAGE_REFERENCE_REQUIRED"):
+            self.call()
+        self.native.send.assert_not_called()
+        self.native.key.assert_not_called()
+
+    def test_new_raw_terminal_newline_refuses_before_any_input(self):
+        original = self.text
+        for suffix in ("\n", "\r\n", "\r"):
+            with self.subTest(suffix=repr(suffix)):
+                self.text = original + suffix
+                with self.assertRaisesRegex(b.TaskPackContractError, "TRAILING_NEWLINE_REFERENCE_REQUIRED"):
+                    self.call()
+                self.native.send.assert_not_called()
+                self.native.key.assert_not_called()
+
+    def test_legacy_terminal_newline_attempt_reconciles_exactly_without_input(self):
+        import cmux_prompt_reference as reference
+        self.text += "\r\n"
+        with patch.object(reference, "require_inline"), \
+                patch.object(b, "read_screen", return_value=self.idle), \
+                patch.object(b, "send_text", side_effect=OSError("legacy lost paste ACK")):
+            with self.assertRaises(OSError):
+                self.call()
+        attempts = list((self.home / ".local/state/multi-agent-collaboration/message-dispatch-v1")
+                        .glob("*/attempt-*.json"))
+        self.assertEqual(len(attempts), 1)
+        original_attempt = attempts[0].read_bytes()
+        self.native.append_user(self.text)
+        self.native.send.reset_mock()
+        self.native.key.reset_mock()
+        result = self.call(reconcile_only=True)
+        self.assertTrue(result["confirmed"])
+        self.assertTrue(result["reconciled_read_only"])
+        self.assertEqual(Path(result["attempt"]), attempts[0])
+        self.assertEqual(attempts[0].read_bytes(), original_attempt)
+        saved = json.loads(original_attempt)
+        self.assertEqual(saved["binding"]["payload_sha256"], reference.digest(self.text))
+        self.native.send.assert_not_called()
+        self.native.key.assert_not_called()
+
+    def test_reference_body_change_after_paste_authorizes_no_key(self):
+        self._reference()
+        def mutate(*args, **kwargs):
+            self.body.chmod(0o600)
+        with patch.object(b, "read_screen", side_effect=self.native.ready_screens(
+                self.idle, self.native.draft(self.text), self.done)), \
+                patch.object(b, "send_text", side_effect=mutate) as paste, \
+                patch.object(b, "send_key") as key:
+            with self.assertRaisesRegex(b.TaskPackContractError, "MESSAGE_BODY_CHANGED"):
+                self.call()
+            paste.assert_called_once()
+            key.assert_not_called()
+
+    def test_reference_native_reconciliation_is_zero_input_and_notice_only(self):
+        self._reference()
+        with patch.object(b, "read_screen", return_value=self.idle), \
+                patch.object(b, "send_text", side_effect=OSError("lost paste ACK")):
+            with self.assertRaises(OSError):
+                self.call()
+        self.native.append_user(self.text)
+        self.native.send.reset_mock()
+        self.native.key.reset_mock()
+        result = self.call(reconcile_only=True)
+        self.assertTrue(result["confirmed"])
+        self.assertTrue(result["reconciled_read_only"])
+        self.assertEqual(result["confirmation_scope"], "reference_notice")
+        self.assertIs(result["body_read_confirmed"], False)
+        from cmux_message_journal import verified_receipt
+        proof = verified_receipt(b, "peer", self.text, self.marker)
+        self.assertEqual(proof["body_pin"], self.body_pin)
+        self.assertIs(proof["body_read_confirmed"], False)
+        self.native.send.assert_not_called()
+        self.native.key.assert_not_called()
+
+    def test_changed_reference_cannot_reconcile_or_borrow_saved_receipt(self):
+        self._reference()
+        with patch.object(b, "read_screen", return_value=self.idle), \
+                patch.object(b, "send_text", side_effect=OSError("lost paste ACK")):
+            with self.assertRaises(OSError):
+                self.call()
+        self.native.append_user(self.text)
+        replacement = self.body.with_name("same-byte-replacement.txt")
+        replacement.write_bytes(self.body.read_bytes())
+        replacement.chmod(0o400)
+        replacement.replace(self.body)
+        self.native.send.reset_mock()
+        self.native.key.reset_mock()
+        with self.assertRaisesRegex(b.TaskPackContractError, "MESSAGE_BODY_CHANGED"):
+            self.call(reconcile_only=True)
+        self.native.send.assert_not_called()
+        self.native.key.assert_not_called()
+
+
     def test_task_target_lock_prevents_message_input(self):
         import fcntl
         from cmux_message_journal import digest

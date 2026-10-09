@@ -52,7 +52,11 @@ class HookEnforcementCases(H.HelperGuardCases):
         with mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err):
             code = G.main()
         self.assertEqual(code, 0, err.getvalue())
-        result = json.loads(out.getvalue())
+        wire = json.loads(out.getvalue())
+        self.assertEqual(set(wire), {"hookSpecificOutput"})
+        specific = wire["hookSpecificOutput"]
+        self.assertEqual(specific["hookEventName"], "PostToolUse")
+        result = json.loads(specific["additionalContext"])
         self.assertEqual(result["action"], "pass")
         self.assertEqual(result["results"][0]["state"], "NATIVE_RECEIVED")
         self.assertEqual(result["results"][0]["helper_proof"]["source"], "revalidated_helper_original_intent")

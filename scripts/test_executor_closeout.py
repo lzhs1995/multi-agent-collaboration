@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,7 @@ class CloseoutTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='closeout-test-')
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.native_state = None
         self.workspace, self.surface, self.supervisor = [str(uuid.uuid4()) for _ in range(3)]
         self.marker = dict(task_id='test-task', workspace_uuid=self.workspace,
@@ -88,9 +89,9 @@ class CloseoutTests(unittest.TestCase):
     def evidence(self):
         return closeout.terminal_report(self.marker, self.workspace, self.surface)
 
-    def hook(self, name, event, final=None, env=None, reentry=False):
+    def hook(self, name, event, final=None, env=None, reentry=False, tool_input=None):
         data = dict(hook_event_name=event, tool_name='Bash',
-                    tool_input=dict(command='touch MUST_NOT_RUN'),
+                    tool_input=tool_input if tool_input is not None else dict(command='touch MUST_NOT_RUN'),
                     last_assistant_message=final or self.line, stop_hook_active=reentry)
         script = Path(__file__).with_name(name)
         command = (native_hook_command(script, self.active, self.native_state)
@@ -132,6 +133,95 @@ class CloseoutTests(unittest.TestCase):
         self.write(self.attempt_path, self.attempt)
         self.assert_waiting_stop(self.stop())
         self.assertEqual(self.pre().returncode, 2)
+
+    def no_input_command(self):
+        # A different complete controller remains bound by the frozen pack.
+        original = self.root / 'original-release'
+        (original / 'scripts').mkdir(parents=True)
+        (original / 'SKILL.md').write_text('Original task-bound skill.\n')
+        controller = original / 'scripts/cmux_bridge.py'
+        controller.write_text('raise RuntimeError("HOOK MUST NOT EXECUTE TOOL")\n')
+        argv = [sys.executable, '-B', str(controller),
+                'submit-completion-callback', '--task-pack', str(self.pack_path)]
+        self.pack.update(required_skill=str(original / 'SKILL.md'),
+                         callback_command=shlex.join(argv))
+        self.write(self.pack_path, self.pack)
+        self.attempt.update(phase='NO_INPUT', events=[])
+        self.attempt['binding']['task_pack_sha256'] = self.sha(self.pack_path)
+        self.write(self.attempt_path, self.attempt)
+        return shlex.join(['rtk', 'proxy', *argv])
+
+    def test_no_input_successor_exact_original_cli_allowed_without_mutating_evidence(self):
+        command = self.no_input_command()
+        before = self.snapshot()
+        result = self.pre(tool_input={'command': command})
+        self.assertEqual((result.returncode, result.stderr), (0, ''))
+        self.assertEqual(before, self.snapshot())
+        self.assert_waiting_stop(self.stop())
+        self.assertEqual(self.pre().returncode, 2)
+
+    def test_no_input_successor_rejects_shell_wrappers_and_other_targets(self):
+        command = self.no_input_command()
+        for bad in (command + ' &', command + '; true', 'env ' + command,
+                    'sh -c ' + shlex.quote(command), command.replace(str(self.pack_path), '$PACK'),
+                    command.replace(str(self.pack_path), str(self.root / 'other.json')),
+                    command.replace('original-release', 'current-release'),
+                    command + ' --reconcile-only'):
+            with self.subTest(command=bad):
+                self.assertEqual(self.pre(tool_input={'command': bad}).returncode, 2)
+        self.assertEqual(self.pre(tool_input={'command': command, 'run_in_background': True}).returncode, 2)
+
+    def test_no_input_successor_rejects_receipt_and_legacy_pending_even_broken_symlinks(self):
+        command = self.no_input_command()
+        for target in (self.receipt, Path(str(self.receipt) + '.pending.json')):
+            for broken in (False, True):
+                with self.subTest(path=target.name, broken=broken):
+                    if broken:
+                        target.symlink_to(self.root / 'missing')
+                    else:
+                        target.write_text('{}')
+                    try:
+                        self.assertIsNotNone(self.evidence())
+                        self.assertEqual(self.pre(tool_input={'command': command}).returncode, 2)
+                    finally:
+                        target.unlink()
+
+    def test_no_input_successor_second_attempt_exhausts_budget(self):
+        command = self.no_input_command()
+        self.write(self.journal / 'attempt-0002.json', self.attempt)
+        self.assertIsNotNone(self.evidence())
+        self.assertEqual(self.pre(tool_input={'command': command}).returncode, 2)
+
+    def test_no_input_successor_entered_queued_unknown_never_repastes(self):
+        command = self.no_input_command()
+        for phase in ('PASTE_INTENT', 'POST_ENTER_OBSERVATION', 'POST_QUEUE_TAB_OBSERVATION'):
+            with self.subTest(phase=phase):
+                self.attempt.update(phase=phase, events=[{'phase': phase, 'at_epoch': 2.0}])
+                self.write(self.attempt_path, self.attempt)
+                self.assertIsNotNone(self.evidence())
+                self.assertEqual(self.pre(tool_input={'command': command}).returncode, 2)
+
+    def test_no_input_successor_rechecks_original_evidence_pins(self):
+        from cmux_callback_no_input_successor import allowed
+        command = self.no_input_command()
+        evidence = self.evidence()
+        payload = {'tool_name': 'Bash', 'tool_input': {'command': command}}
+        for target in (self.report, self.pack_path, self.attempt_path):
+            raw = target.read_bytes()
+            try:
+                target.write_bytes(raw + b' ')
+                self.assertFalse(allowed(payload, self.marker, evidence))
+            finally:
+                target.write_bytes(raw)
+        for bad in ({**payload, 'tool_name': 'Write'},
+                    {**payload, 'tool_input': None}):
+            self.assertFalse(allowed(bad, self.marker, evidence))
+
+    def test_no_input_successor_missing_original_controller_does_not_choose_new_release(self):
+        command = self.no_input_command()
+        (self.root / 'original-release/scripts/cmux_bridge.py').unlink()
+        self.assertIsNotNone(self.evidence())
+        self.assertEqual(self.pre(tool_input={'command': command}).returncode, 2)
 
     def test_confirmed_return_still_prevents_new_work(self):
         self.confirmed_callback()

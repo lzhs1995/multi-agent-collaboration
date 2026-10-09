@@ -2,7 +2,7 @@
 
 只替换外部进程观测，不替换 active marker、terminal_report、身份求值或诊断结果。
 """
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import copy
 from datetime import datetime, timedelta, timezone
 import fcntl
@@ -102,13 +102,11 @@ class CallbackDiagnoseTests(unittest.TestCase):
         )
         self.write(self.attempt_path, self.attempt)
         self.receipt_seeded = False
-        patches = ExitStack()
-        self.addCleanup(patches.close)
-        patches.enter_context(patch.object(daemon.sys, "platform", "darwin"))
-        self.process_reader = patches.enter_context(patch.object(
+        self.enterContext(patch.object(daemon.sys, "platform", "darwin"))
+        self.process_reader = self.enterContext(patch.object(
             daemon, "process", side_effect=_ordinary_process))
-        patches.enter_context(patch.object(stop_guard, "ACTIVE_DIR", self.active))
-        patches.enter_context(patch.dict(os.environ, {
+        self.enterContext(patch.object(stop_guard, "ACTIVE_DIR", self.active))
+        self.enterContext(patch.dict(os.environ, {
             "CMUX_WORKSPACE_ID": self.workspace, "CMUX_SURFACE_ID": self.executor,
         }))
         self.forbidden = []
@@ -117,7 +115,7 @@ class CallbackDiagnoseTests(unittest.TestCase):
             (bridge, "_run"), (workspace_guard, "_read_json_command"),
             (subprocess, "Popen"),
         ):
-            self.forbidden.append(patches.enter_context(patch.object(
+            self.forbidden.append(self.enterContext(patch.object(
                 module, name, side_effect=AssertionError("diagnosis must not call " + name))))
         self.frozen = closeout.terminal_report(self.marker, self.workspace, self.executor)
         self.assertIsInstance(self.frozen, dict, "真实文件夹具必须先满足封口证据条件")

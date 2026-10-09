@@ -119,6 +119,12 @@ def _original(call, workspace, caller, root):
     if pack is not None and (bound.get('task_id') != pack['task_id']
             or bound.get('task_pack_sha256') != hashlib.sha256(pack_raw).hexdigest()):
         raise ValueError('task pack differs from original attempt')
+    # 普通引用通知也必须核原次正文的文件身份。仅看到通知的原生入站，
+    # 不能把丢失、被换成同字节 inode 或后来可写的正文算作有效交接。
+    body_pin = None
+    if kind == 'text':
+        from cmux_message_journal import original_body_pin
+        body_pin = original_body_pin(text, attempt)
     # 核收必须沿用输入前留下的身份与 EOF fence；旧 journal 不允许追补。
     binding = attempt.get('native_binding')
     intent_at, fence = native._original_intent(attempt, binding, text)
@@ -127,7 +133,8 @@ def _original(call, workspace, caller, root):
     native.require_bound(cmux_bridge, target, binding, text, read_only=True)
     if (attempt_paths(journal) != paths or read_bytes(path) != attempt_raw
             or (pack_path and read_bytes(pack_path) != pack_raw)
-            or (report_path and read_bytes(report_path) != report_raw)):
+            or (report_path and read_bytes(report_path) != report_raw)
+            or (kind == 'text' and original_body_pin(text, attempt) != body_pin)):
         raise ValueError('original evidence changed during verification')
     command = [sys.executable, '-B', str(SCRIPT_DIR / 'cmux_bridge.py')]
     if kind == 'callback':
@@ -139,6 +146,9 @@ def _original(call, workspace, caller, root):
             command += ['--task-pack', str(pack_path)]
     result = dict(proof, attempt=str(path), kind=kind, marker=marker,
                   reconcile='rtk proxy ' + shlex.join(command + ['--reconcile-only']))
+    if body_pin is not None:
+        result.update(body_pin=body_pin, confirmation_scope='reference_notice',
+                      body_read_confirmed=False)
     # 只有普通消息控制器支持这个参数；提示也不能为未发送、未知或已排队的
     # 原次提供补键。真正恢复时控制器仍须复核原身份、历史和完整草稿。
     phases = [event.get('phase') for event in attempt.get('events', [])]
@@ -229,7 +239,14 @@ def main():
         sys.stderr.write(_render(result))
         return 2
     if result['action'] == 'pass':
-        sys.stdout.write(json.dumps(result, ensure_ascii=False) + '\n')
+        # Codex rejects unknown top-level keys in PostToolUse output. Keep the
+        # verified proof intact inside the shared client additionalContext field;
+        # evaluate() remains an internal result, never a hook wire envelope.
+        output = {'hookSpecificOutput': {
+            'hookEventName': 'PostToolUse',
+            'additionalContext': json.dumps(result, ensure_ascii=False),
+        }}
+        sys.stdout.write(json.dumps(output, ensure_ascii=False) + '\n')
     return 0
 
 

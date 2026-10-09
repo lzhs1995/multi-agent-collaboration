@@ -4,6 +4,12 @@ Evidence-bound collaboration for Codex and Claude Code in macOS cmux.
 中文：复用完整上下文会话，明确分工，以真实报告和主动 callback 完成协作；
 压缩故障及时干预，不以重开会话、假 ACK 或反复轮询代替恢复。
 
+Current source: **0.4.7**. New messages use bounded single-line notices for pinned
+bodies; formal packs and callbacks retain their dedicated task-bound routes.
+Enter or Tab only requests submission. Reception requires the complete exact
+payload in a new record of the bound receiver's native journal. See the
+[delivery contract](references/verified-compose-delivery.md).
+
 ## Install
 
 Requirements: Python 3.10+, macOS, cmux, and existing CLI agent sessions.
@@ -12,7 +18,7 @@ No provider credentials or agent subscriptions are included.
 ```sh
 git clone https://github.com/lzhs1995/multi-agent-collaboration.git
 cd multi-agent-collaboration
-git checkout v0.1.0
+git checkout main
 python3 scripts/manage_install.py install
 python3 scripts/manage_install.py install --apply
 python3 scripts/manage_install.py doctor

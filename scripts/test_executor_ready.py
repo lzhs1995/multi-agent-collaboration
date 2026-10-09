@@ -257,7 +257,12 @@ class FiniteReadyTests(unittest.TestCase):
         record = self.ask()
         request = json.loads(Path(record['asks'][0]['record']).read_text())
         self.assertEqual(request['episode_id'], record['episode_id'])
-        template = request['text'].split(' containing ', 1)[1].split('}.', 1)[0] + '}'
+        import cmux_prompt_reference as reference
+        body, pin = reference.read_body(request['body_reference'])
+        self.assertEqual(reference.validate_wire_body(request['text']), pin)
+        self.assertLessEqual(len(request['text'].encode('utf-8')), reference.MAX_INLINE_BYTES)
+        self.assertIn(request['marker'], body)
+        template = body.split(' containing ', 1)[1].split('}.', 1)[0] + '}'
         body = json.loads(template)
         self.assertEqual(body['episode_id'], record['episode_id'])
         ready.write_json(Path(record['mailbox']) / (body['marker'] + '.json'), body)

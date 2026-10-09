@@ -14,6 +14,7 @@ from uuid import UUID
 
 from cmux_message_journal import verified_receipt
 from cmux_evidence_io import snapshot as evidence_snapshot
+import cmux_prompt_reference as prompt_reference
 
 SCHEMA = "cmux-agent-bridge-adapter-v1"
 IDENTITY_KEYS = ("workspace_uuid", "caller_surface_uuid", "target_surface_uuid", "target_pane_uuid")
@@ -80,16 +81,8 @@ def _unchanged(pins):
 
 
 def _request(identity, mode, message, request_id):
-    if mode not in ("ask", "send", "broadcast") or not isinstance(message, str) or not message.strip():
-        raise ValueError("original helper message is missing")
-    if not isinstance(request_id, str):
-        raise ValueError("original helper request id is invalid")
-    spec = dict(schema=SCHEMA, identity=identity, mode=mode, message=message, request_id=request_id)
-    marker = "CMUX_HELPER_" + _digest(_encoded(spec))
-    text = "[CMUX-AGENT][delivery:" + marker + "][from:" + identity["caller_surface_uuid"] + "]\n" + message
-    if mode in ("ask", "broadcast"):
-        text += "\n\nReply with one leading marker: STATUS:, DONE:, or BLOCKED:."
-    return dict(spec, marker=marker, payload=text, payload_sha256=_digest(text))
+    # First locate the original marker; the saved intent chooses its format.
+    return prompt_reference.helper_request(identity, mode, message, request_id, reference=False)
 
 
 def _channel(root, identity):
@@ -103,8 +96,18 @@ def _intent(root, identity, request, pins, explicit=None):
     if explicit is not None and Path(explicit) != expected_path:
         raise ValueError("reconcile intent is not the original caller/target request")
     saved = _read(expected_path, pins)
-    if saved != request:
+    expected = prompt_reference.helper_request(identity, request['mode'], request['message'],
+        request['request_id'], home=root.parents[3], reference='body_reference' in saved)
+    if saved != expected:
         raise ValueError("original helper intent does not match invocation")
+    request = saved
+    body = request.get('body_reference')
+    if body:
+        verified = prompt_reference.verify(body, prompt_reference.original_helper_payload(request))
+        pin = _pin(Path(body['path']))
+        if pin['identity'] != verified['identity'] or pin['sha256'] != verified['sha256']:
+            raise ValueError('helper body changed during verification')
+        pins.append(pin)
     pending = channel / "pending.json"
     if pending.exists() or pending.is_symlink():
         pointer = _read(pending, pins)
@@ -115,6 +118,9 @@ def _intent(root, identity, request, pins, explicit=None):
     return {"kind": "helper_text", "surface": identity["target_surface_uuid"].upper(),
             "text": request["payload"], "marker": request["marker"],
             "helper_identity": identity, "helper_pins": list(pins),
+            "confirmation_scope": "reference_notice" if body else "inline_payload",
+            "body_read_confirmed": False if body else None,
+            "body_reference": body,
             "helper_intent": str(expected_path)}
 
 
@@ -192,4 +198,6 @@ def verify(call, bridge):
     if not proof or proof.get("source") != "revalidated_message_dispatch_v1" or _identity(proof.get("identity", {})) != identity:
         return None
     return dict(source="revalidated_helper_original_intent", intent=call["helper_intent"],
+                confirmation_scope=call.get('confirmation_scope', 'inline_payload'),
+                body_read_confirmed=call.get('body_read_confirmed'),
                 intent_pins=pins, native_message_proof=proof)

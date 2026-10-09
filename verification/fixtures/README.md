@@ -1,1 +1,5 @@
 Fixtures preserve measured footer shapes. Task payloads, paths and unrelated transcript content are replaced with synthetic examples; these are regression fixtures, not live delivery proof.
+
+`codex-compacting-behind-queued-followups-20261009.txt` and `codex-stranded-below-queued-followups-20261009.txt` are the PASTE_INTENT and POST_ENTER screens of one measured attempt (2026-10-09 01:15 +0800): Codex was compacting while an earlier ask sat in "• Queued follow-up inputs", and the next payload stayed in the composer. Rows from "• Compacting context" down are kept verbatim except the caller UUID, task id and path; the transcript above them is synthetic.
+
+The five Claude fixtures added for 2026-10-09 are minimal synthetic reconstructions. They retain the tested border/footer fields, folded-draft shape, active spinner and historical status lookalikes; raw private transcripts and machine paths are excluded. Their names identify regression origins, not live proof or current session identities.

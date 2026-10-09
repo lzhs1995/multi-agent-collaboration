@@ -38,7 +38,31 @@ def _first_payload_line(text):
 
 def _looks_like_task_dispatch(text):
     first = _first_payload_line(text)
-    return bool(re.match(r"^(?:TASK|TASK_PACK|TASK PACK)\s*[:=]", first, re.I))
+    return bool(re.match(r"^(?:(?:TASK|TASK_PACK|TASK PACK)\s*[:=]|TASK_PACK_V2(?:\s|$))", first, re.I))
+
+
+def _task_pack_notice(path, pack, raw):
+    """Exact single-line wire contract; all scope and callback bytes stay in pack."""
+    from cmux_prompt_reference import require_inline
+    notice = (
+        "TASK_PACK_V2 TASK=" + json.dumps(pack["task_id"], ensure_ascii=False)
+        + " PACK=" + json.dumps(str(path), ensure_ascii=False)
+        + " SHA256=" + hashlib.sha256(raw).hexdigest()
+        + " READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; "
+          "write report then call cmux_bridge.submit_completion_callback(pack)."
+    )
+    require_inline(notice)
+    return notice
+
+
+def task_pack_notice(task_pack_path):
+    """Read-only rendering; does not dispatch, receive, or accept a task."""
+    path = Path(task_pack_path)
+    pack = validate_task_pack_contract(path)
+    raw = path.read_bytes()
+    if json.loads(raw.decode("utf-8")) != pack:
+        raise TaskPackContractError("TASK_PACK_CHANGED_DURING_NOTICE")
+    return _task_pack_notice(path, pack, raw)
 
 
 def validate_task_pack_contract(task_pack_path, prompt_text=None):
@@ -50,7 +74,8 @@ def validate_task_pack_contract(task_pack_path, prompt_text=None):
             "TASK_PACK_NOT_DISPATCHABLE: task_pack_path must be an existing absolute file"
         )
     try:
-        pack = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        pack = json.loads(raw.decode("utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise TaskPackContractError(
             f"TASK_PACK_NOT_DISPATCHABLE: unreadable task pack: {exc}"
@@ -99,7 +124,13 @@ def validate_task_pack_contract(task_pack_path, prompt_text=None):
     elif Path(receipt).parent.resolve() != path.parent.resolve():
         problems.append("completion_receipt must be a sibling of the task pack")
 
-    if prompt_text is not None:
+    if prompt_text is not None and str(prompt_text).startswith("TASK_PACK_V2"):
+        try:
+            if str(prompt_text) != _task_pack_notice(path, pack, raw):
+                problems.append("task notice must exactly bind the whole pack; extra instructions forbidden")
+        except (ValueError, KeyError) as exc:
+            problems.append("invalid single-line task notice: " + str(exc))
+    elif prompt_text is not None:
         prompt = str(prompt_text)
         required_fragments = (
             f"TASK_PACK={path}",
@@ -526,6 +557,11 @@ _PENDING_QUEUE_RE = re.compile(
     r"queued message",
     re.IGNORECASE,
 )
+# Codex 排队区的标题行（实测 2026-10-09 01:15，EXECUTOR_READY_73c025c0/ff5ade80）：
+# 顶格「• Queued follow-up inputs」，其下是缩进的 ↳ 排队正文，最后才是
+# 「shift+← edit last queued message」。排队正文一律缩进，顶格才是 TUI 自己画的标题；
+# 正文里引用这个标题名不能冒充排队区。
+_QUEUED_FOLLOWUP_HEADER_RE = re.compile(r"^•\s+Queued follow-up inputs\b", re.I)
 
 
 def compose_contains(screen, marker):
@@ -624,6 +660,7 @@ _PROVIDER_HINT_ROW_RE = re.compile(
     r")?)?"
     r"|"
     r"tab to " + _clipped_prefix_pattern("queue message") +
+    r"|⚠\s*\d+\s*" + _clipped_prefix_pattern("warnings · f2 to view") +
     r")\s*",
     re.IGNORECASE,
 )
@@ -693,15 +730,29 @@ def _claude_bordered_compose(screen):
             r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?", fields[1]):
         return None
     elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
-    if len(fields) == 3 and not re.fullmatch(elapsed, fields[2]):
+    # Measured 2026-10-09: only the inline time field carries this exact
+    # optional hint. Its count is an integer or k with at most one decimal;
+    # unknown suffixes and matching text inside the borders remain untouched.
+    inline_elapsed = (elapsed + r"(?: +new task\? /clear to save "
+                      r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens)?")
+    if len(fields) == 3 and not re.fullmatch(inline_elapsed, fields[2]):
         return None
     if len(footer) > 1:
         rest = footer[1:]
+        # The same measured hint can occupy its own row AFTER the complete
+        # footer. Never remove an occurrence inside the composer, or permit
+        # arbitrary text after the normal bypass row.
+        if rest and re.fullmatch(
+                r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens",
+                rest[-1]):
+            rest = rest[:-1]
         if rest and re.fullmatch(elapsed, rest[0]):
             rest = rest[1:]
         if (len(rest) < 3
                 or not re.fullmatch(r"上下文\s+[█░▒▓▏▎▍▌▋▊▉▐]+\s+(?:100|\d{1,2})%", rest[0])
-                or not re.fullmatch(r"\d+\s+CLAUDE\.md\s*\|\s*\d+\s+MCPs\s*\|\s*\d+\s+(?:钩子|hooks)", rest[1])
+                or not re.fullmatch(
+                    r"\d+\s+CLAUDE\.md\s*\|\s*(?:\d+\s+规则\s*\|\s*)?"
+                    r"\d+\s+MCPs\s*\|\s*\d+\s+(?:钩子|hooks)", rest[1])
                 or not re.fullmatch(r"⏵⏵\s+bypass permissions on \(shift\+tab to cycle\)(?:\s*·\s*← for agents)?", rest[-1])
                 or not all(_CLAUDE_SUMMARY_RE.fullmatch(row)
                            or _CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in rest[2:-1])):
@@ -800,7 +851,10 @@ def pending_queue_holds(screen, marker):
     if not starts:
         return False
     limit = starts[-1]
-    banners = [i for i in range(limit) if _PENDING_QUEUE_RE.search(lines[i])]
+    # Codex 的排队正文在标题之下、「edit last queued message」提示之上；
+    # 只认提示行会漏掉真排队的原次（0.4.0 实测 ff5ade80 判为未排队）。
+    banners = [i for i in range(limit) if _PENDING_QUEUE_RE.search(lines[i])
+               or _QUEUED_FOLLOWUP_HEADER_RE.match(lines[i])]
     for pos, index in enumerate(banners):
         end = banners[pos + 1] if pos + 1 < len(banners) else limit
         region = lines[index + 1:end]
@@ -1053,8 +1107,12 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
                             if cells(previous) + cells(part[0]) > width:
                                 separators += ("",)
                             word = re.match(r"[^\s]+", part)
+                            # Measured Claude editor: a word that would exactly
+                            # fill the available cells starts the next row too.
+                            # Consume only this one boundary separator; never
+                            # normalize the payload or any other whitespace.
                             if (word and not previous[-1].isspace()
-                                    and cells(previous) + 1 + cells(word.group()) > width):
+                                    and cells(previous) + 1 + cells(word.group()) >= width):
                                 separators += (" ",)
                         positions = {pos + len(sep) + len(part)
                                      for pos in positions for sep in separators
@@ -1147,7 +1205,7 @@ def require_original_draft(attempt, screen, text):
     return expected
 
 
-_RECEIVER_UNSUBMITTABLE_RE = re.compile(r"Compacting context|Reconnecting", re.I)
+_RECEIVER_UNSUBMITTABLE_RE = re.compile(r"Compacting (?:context|conversation)|Reconnecting", re.I)
 
 
 def _current_status_region(screen):
@@ -1157,13 +1215,34 @@ def _current_status_region(screen):
     scrollback above later "• Working" turns. Judging the whole screen made Tab
     permanently unavailable and stranded a pasted payload in the composer.
     Without a status bullet the whole pre-composer screen is used (fail closed).
+
+    Measured 2026-10-09 01:15 +0800 (EXECUTOR_READY_73c025c0): Codex draws its
+    "• Queued follow-up inputs" block between the status bullet and the
+    composer. Taking that header as the status hid "• Compacting context", so
+    every compaction gate passed and the payload was pasted and Entered into a
+    compacting receiver. The live queue block is the last top-level bullet
+    above the composer; it is cut off and the status is searched above it.
+    Queued payload rows are indented, so their text never becomes the status.
     """
+    # Claude reports can quote Codex status bullets and then render a completed
+    # turn summary followed by a multiline recap. Only its latest top-level
+    # activity row is current chrome; neither the report nor recap is a Codex
+    # status region. The full bordered editor/footer authenticates this branch.
+    claude = _claude_bordered_compose(screen)
+    if claude is not None:
+        row = next((row for row in reversed(claude["before"])
+                    if re.match(r"^(?:⏺|✻|✢|✳|✶|✽|◐|◑|◒|◓)(?:\s|$)", row)), "")
+        return row if not row.startswith("⏺") else ""
     rows = screen.splitlines()
     start = next((i for i in range(len(rows) - 1, -1, -1)
                   if _PROMPT_GLYPH_RE.match(rows[i])), len(rows))
-    bullet = next((i for i in range(start - 1, -1, -1)
+    top = next((i for i in range(start - 1, -1, -1)
+                if re.match(r"^•\s", rows[i])), None)
+    end = top if top is not None and (_QUEUED_FOLLOWUP_HEADER_RE.match(rows[top])
+                                      or _PENDING_QUEUE_RE.search(rows[top])) else start
+    bullet = next((i for i in range(end - 1, -1, -1)
                    if re.match(r"^\s*•\s", rows[i])), 0)
-    return "\n".join(rows[bullet:start])
+    return "\n".join(rows[bullet:end])
 
 
 def receiver_cannot_submit_now(screen):
@@ -1504,6 +1583,10 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
         require_action(pack["task_id"], "dispatch", pack)
     elif _looks_like_task_dispatch(text):
         raise TaskPackContractError("TASK_PACK_REQUIRED")
+    # One gate covers ordinary messages, formal tasks and exact callbacks.
+    # Historical read-only reconciliation never enters this new-paste path.
+    from cmux_prompt_reference import require_inline
+    require_inline(text)
     require_bound(sys.modules[__name__], surface, native_binding, text)
     before = read_screen(surface, lines=confirm_lines)
     require_agent_input(before, surface)
@@ -1801,6 +1884,8 @@ def _cli_main(argv=None):
     subs.add_parser("ping")
     subs.add_parser("whoami")
     subs.add_parser("surfaces")
+    notice = subs.add_parser("task-notice")
+    notice.add_argument("--task-pack", required=True)
 
     read = subs.add_parser("read-screen", aliases=["read_screen"])
     read.add_argument("--surface", required=True)
@@ -1854,6 +1939,9 @@ def _cli_main(argv=None):
             result = {"command": "whoami", "value": whoami()}
         elif args.command == "surfaces":
             result = {"command": "surfaces", "value": list_surfaces()}
+        elif args.command == "task-notice":
+            print(task_pack_notice(args.task_pack))
+            return 0
         elif args.command in {"read-screen", "read_screen"}:
             # Screen text is intentionally not JSON-escaped into a nested
             # field: callers use it as the raw input to the classifier.

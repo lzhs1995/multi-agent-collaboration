@@ -269,8 +269,19 @@ class HelperGuardCases(unittest.TestCase):
         self.assertEqual(self.guard(command)["action"], "block")
 
     def test_unquoted_python_heredoc_is_not_literal_receipt_input(self):
-        self.receive(message="$BODY")
-        body = "import cmux_bridge\ncmux_bridge.submit_text(" + repr(F.PINS["target_surface_uuid"]) + ", " + repr(self.payload) + ", marker=" + repr(self.request["marker"]) + ")"
+        # Helper envelopes now use a reference notice, so $BODY would live only
+        # in the pinned body file. Exercise shell expansion on the actual wire
+        # through the same real bridge/journal/native implementation instead.
+        self.payload = "STATUS: HEREDOC_LITERAL $BODY"
+        marker = "HEREDOC_LITERAL"
+        def receive(key, count):
+            self.append_native()
+            self.view = self.compose("")
+        self.on_key = receive
+        result = B.submit_text(F.PINS["target_surface_uuid"], self.payload, marker=marker)
+        self.assertTrue(result["confirmed"])
+        body = "import cmux_bridge\ncmux_bridge.submit_text(" + repr(F.PINS["target_surface_uuid"]) + ", " + repr(self.payload) + ", marker=" + repr(marker) + ")"
+        self.assertIn("$BODY", body)
         self.assertEqual(self.guard("python3 - <<'PY'\n" + body + "\nPY\n")["action"], "pass")
         self.assertEqual(self.guard("python3 - <<PY\n" + body + "\nPY\n")["action"], "block")
 

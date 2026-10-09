@@ -1670,10 +1670,19 @@ def _handshake_one(args, root, gate, item, per_executor):
     _write_handshake_receipt(root, per_executor)
     _info(f"Sending handshake to {executor_ref} (EXECUTOR_{ordinal})...")
     try:
+        # Only this newly created challenge is prepared as a bounded notice.
+        # Old nonces/attempts retain their original bytes and late-ACK path.
+        import cmux_prompt_reference as prompt_reference
+        prepared = prompt_reference.plan(hello_msg, ack_nonce)
+        prompt_reference.persist(prepared['reference'], hello_msg)
+        receipt['dispatch_payload_sha256'] = prompt_reference.digest(prepared['text'])
+        receipt['dispatch_body_reference'] = prepared['reference']
+        receipt['dispatch_confirmation_scope'] = 'reference_notice' if prepared['reference'] else 'inline_payload'
+        _write_handshake_receipt(root, per_executor)
         submit_kwargs = {"marker": ack_nonce}
         if getattr(args, "force_compose", False):
             submit_kwargs["force_compose"] = True
-        cmux.submit_text(executor_ref, hello_msg, **submit_kwargs)
+        cmux.submit_text(executor_ref, prepared['text'], **submit_kwargs)
         receipt["dispatch_submitted_at"] = _now()
         receipt["updated_at"] = _now()
         _write_handshake_receipt(root, per_executor)
@@ -2777,13 +2786,19 @@ def _record_round_one(args, root, entry, item, artifact_path, artifact_sha256):
     _write(round_receipt_path, round_receipt)
     _info(f"Requesting executor round-ack from {executor_ref} (nonce={round_nonce})...")
     try:
-        # Preserve the original transport call shape for the default path.
-        # The override is meaningful only when explicitly requested; passing a
-        # false keyword broke compatible test doubles and alternate transports.
+        # This newly created review challenge uses the same bounded notice as
+        # the handshake. Preserve the original nonce and complete body on disk.
+        import cmux_prompt_reference as prompt_reference
+        prepared = prompt_reference.plan(prompt, round_nonce)
+        prompt_reference.persist(prepared['reference'], prompt)
+        round_receipt['dispatch_payload_sha256'] = prompt_reference.digest(prepared['text'])
+        round_receipt['dispatch_body_reference'] = prepared['reference']
+        round_receipt['dispatch_confirmation_scope'] = 'reference_notice' if prepared['reference'] else 'inline_payload'
+        _write(round_receipt_path, round_receipt)
         submit_kwargs = {"marker": round_nonce}
         if getattr(args, "force_compose", False):
             submit_kwargs["force_compose"] = True
-        cmux.submit_text(executor_ref, prompt, **submit_kwargs)
+        cmux.submit_text(executor_ref, prepared['text'], **submit_kwargs)
         round_receipt["dispatch_submitted_at"] = _now()
         round_receipt["updated_at"] = _now()
         _write(round_receipt_path, round_receipt)
