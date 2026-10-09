@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 import copy
 import hashlib
 import io
@@ -48,10 +49,12 @@ class NativeDeliveryGuardTests(unittest.TestCase):
         self.fixtures = []
         self._use_provider("codex")
         self.counter = 0
-        self.resolve = self.enterContext(patch.object(
+        patches = ExitStack()
+        self.addCleanup(patches.close)
+        self.resolve = patches.enter_context(patch.object(
             guard.cmux_hook_identity, "resolve",
             side_effect=lambda _: self.hook_identity))
-        self.screen = self.enterContext(patch.object(
+        self.screen = patches.enter_context(patch.object(
             bridge, "read_screen",
             side_effect=AssertionError("guard must not read a live screen")))
 
