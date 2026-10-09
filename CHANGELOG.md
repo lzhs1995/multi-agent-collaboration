@@ -1,3 +1,20 @@
+# 0.4.8 — 2026-10-10
+
+- Add one optional launchd configuration guardian for immutable releases. Repair
+  only owned Claude/Codex hooks and cc-switch Claude profiles, including imports;
+  preserve provider selection, credentials, foreign hooks and unrelated settings.
+- Bind executor replies to caller, supervisor, task, episode and an actually
+  issued marker. Preserve late replies and unresolved terminal attempts after
+  bounded history rollover; never replay an uncertain message.
+- Share a nonblocking episode lock between explicit reasks and the optional Stop
+  hook. Keep operator stops, authenticated task transitions and actual delivery
+  counts separate from attempts and file writes.
+- Add a bounded durable supervisor inbox to the existing PostToolUse hook, even
+  without an active task marker. Resolve the native caller once per hook; file
+  discovery is not native delivery or task acceptance.
+- Document configuration restoration, current-client adoption, native receipt,
+  callback settlement and return to the original task as separate evidence.
+
 # 0.4.7 — 2026-10-09
 
 - Emit verified PostToolUse results in the official

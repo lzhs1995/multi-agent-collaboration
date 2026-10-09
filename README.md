@@ -4,7 +4,7 @@ Evidence-bound collaboration for Codex and Claude Code in macOS cmux.
 中文：复用完整上下文会话，明确分工，以真实报告和主动 callback 完成协作；
 压缩故障及时干预，不以重开会话、假 ACK 或反复轮询代替恢复。
 
-Current source: **0.4.7**. New messages use bounded single-line notices for pinned
+Current source: **0.4.8**. New messages use bounded single-line notices for pinned
 bodies; formal packs and callbacks retain their dedicated task-bound routes.
 Enter or Tab only requests submission. Reception requires the complete exact
 payload in a new record of the bound receiver's native journal. See the
@@ -38,6 +38,13 @@ Uninstall removes only entries and links owned by this checkout. JSON backups
 remain beside the original configs and may contain credentials: keep them private.
 Other settings and hooks survive. Use `--home /absolute/sandbox` to test installation
 without touching real client configuration.
+
+For explicitly authorized 60-second executor follow-ups, add `--executor-reask`
+to installation and doctor. To preserve owned hooks across cc-switch changes,
+use the single [configuration guardian](references/configuration-and-reasks.md)
+with a complete immutable release and its pinned CURRENT manifest. It repairs
+hook registrations only; Markdown guidance does not itself register a hook, and
+configuration repair does not prove a running client has loaded it.
 
 ## Use
 

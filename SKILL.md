@@ -5,6 +5,11 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+For provider switching, global hook ownership, explicitly authorized 60-second
+follow-ups and per-session adoption, follow
+[configuration and request lifecycle](references/configuration-and-reasks.md).
+Keep one guardian and one shared sender; a queued request is still pending.
+
 For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.

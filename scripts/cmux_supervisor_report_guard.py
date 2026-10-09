@@ -16,6 +16,7 @@ import cmux_hook_identity as hook_identity
 import cmux_consensus_stop_guard as stop_guard
 from cmux_evidence_io import MAX_EVIDENCE_BYTES, read_bytes
 from executor_closeout import terminal_report
+import supervisor_inbox
 
 MAX_MARKERS = 32
 MAX_NOTICES = 8
@@ -130,11 +131,18 @@ def discover(payload, state_root=None):
     if (payload.get('hook_event_name') != 'PostToolUse'
             or not stop_guard.ACTIVE_DIR.exists()):
         return []
+    with hook_identity.evaluation(payload):
+        return discover_bound(*hook_identity.identity(payload), state_root=state_root)
+
+
+def discover_bound(workspace, caller, state_root=None):
+    """Use the caller authenticated once by this hook; no terminal input."""
+    if not stop_guard.ACTIVE_DIR.exists():
+        return []
     root = Path(state_root or Path.home() / '.local/state/multi-agent-collaboration'
                 / 'supervisor-report-discovery-v1')
     notices = []
-    with hook_identity.evaluation(payload), ExitStack() as directories:
-        workspace, caller = hook_identity.identity(payload)
+    with ExitStack() as directories:
         if not caller or workspace == 'default':
             return []
         deadline = time.monotonic() + SCAN_SECONDS
@@ -192,20 +200,37 @@ def discover(payload, state_root=None):
 
 
 def main():
+    payload = {}
+    notices, requests = [], []
     try:
         payload = json.load(sys.stdin)
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or payload.get('hook_event_name') != 'PostToolUse':
             return 0
-        notices = discover(payload)
+        # Resolve once under the existing identity deadline. Two independent
+        # scans must not spend two 2.5-second identity budgets in a 5-second hook.
+        with hook_identity.evaluation(payload):
+            workspace, caller = hook_identity.identity(payload)
+            try:
+                notices = discover_bound(workspace, caller)
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
+                pass
+            try:
+                requests = supervisor_inbox.discover_bound(workspace, caller)
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
+                pass
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError) + hook_identity.ERRORS:
         # 发现失败不阻止主管纠错；也不生成任何已送达或已验收信号。
-        return 0
+        pass
+    lines = []
     if notices:
         lines = ['REPORT_DISCOVERED: frozen executor reports need supervisor review. '
                  'This discovery is not native delivery, acceptance or disarm.']
         for item in notices:
             lines.append('TASK_ID=' + item['task_id'] + ' REPORT=' + item['report']
                          + ' ATTEMPT=' + item['attempt'])
+    if requests:
+        lines.append(supervisor_inbox.context(requests))
+    if lines:
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse',
                           'additionalContext': '\n'.join(lines)}}, ensure_ascii=False))
     return 0
