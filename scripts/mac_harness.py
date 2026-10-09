@@ -61,6 +61,7 @@ from pathlib import Path
 _dir = Path(__file__).parent
 sys.path.insert(0, str(_dir))
 import cmux_bridge as cmux
+import cmux_claude_interruption as interrupted_probe
 import render_cmux_agent
 
 # ---------------------------------------------------------------------------
@@ -1089,6 +1090,19 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         "preexisting_compose_preview": preexisting_compose[:240] if compose_was_occupied else None,
         "preexisting_compose_lines": len(preexisting_compose.splitlines()) if compose_was_occupied else 0,
     }
+    boundary = None
+    boundary_error = None
+
+    def input_busy(screen):
+        # 只用于本次不提交的 probe。正式投递和全局 busy 判定不变。
+        # 中断例外每次都重核原生尾部及进程；失效后不降回普通屏幕判断。
+        return (not boundary.check(screen) if boundary is not None
+                else cmux._queued_or_active_input(screen))
+
+    def boundary_evidence():
+        return {"interrupted_bash_boundary": boundary.evidence if boundary else None,
+                "interrupted_bash_refusal": boundary_error}
+
     def refuse_input(reason):
         _fail(
             "COMPOSE_OCCUPIED — " + reason + ". Refusing to type or clear; "
@@ -1111,6 +1125,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
             "active_or_queued_before_send": cmux._queued_or_active_input(pre_screen),
             "token_sent": False,
             "override": override,
+            **boundary_evidence(),
             "note": (
                 "Pre-paste observation refused the token. No bridge token was "
                 "typed or submitted; any prior authorized clear actions are "
@@ -1123,7 +1138,14 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
     # can expose an empty bordered editor while a Bash tool is still running.
     # Even an explicit compose override does not authorize input to that task.
     if cmux._queued_or_active_input(pre_screen):
-        return refuse_input("active/queued work owns the executor")
+        if not compose_was_occupied and not forced_compose:
+            try:
+                boundary = interrupted_probe.InterruptedBashBoundary(
+                    cmux, executor_ref, pre_screen, token)
+            except interrupted_probe.PROBE_ERRORS as exc:
+                boundary_error = (type(exc).__name__ + ": " + str(exc))[:240]
+        if boundary is None:
+            return refuse_input("active/queued work owns the executor")
     if compose_was_occupied and not forced_compose:
         return refuse_input("the executor's live compose block is not empty")
 
@@ -1215,7 +1237,11 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         override["clear_confirmed"] = cmux.compose_block_is_empty(pre_screen)
         override["clear_verified_at"] = _now() if override["clear_confirmed"] else None
 
-    if cmux._queued_or_active_input(pre_screen):
+    if boundary is not None:
+        pre_screen = cmux.read_screen(executor_ref, lines=args.lines)
+        if not cmux.compose_block_is_empty(pre_screen):
+            return refuse_input("compose changed while verifying the native interruption")
+    if input_busy(pre_screen):
         return refuse_input("active/queued work appeared before the bridge token")
 
     # Only the actual pre-paste screen can prove restoration of an explicitly
@@ -1232,14 +1258,14 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
     observed = token in screen
 
     def cleared(screen):
-        if cmux._queued_or_active_input(screen):
+        if input_busy(screen):
             return None
         if cmux.compose_block_is_empty(screen):
             return "EMPTY_COMPOSE"
         if (
             restore_text is not None
             and cmux.compose_rendered_text(screen) == restore_text
-            and not cmux._queued_or_active_input(screen)
+            and not input_busy(screen)
         ):
             return "AUTHORIZED_PRE_PASTE_RESTORED"
         return None
@@ -1259,15 +1285,32 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         body = cmux.compose_rendered_text(post_clear_screen)
         owned = (
             bool(body) and token.startswith(body)
-            and not cmux._queued_or_active_input(post_clear_screen)
+            and not input_busy(post_clear_screen)
         )
         delete_count = 0
         if not cleared(post_clear_screen) and owned:
-            delete_count = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(body))
-            cmux.send_key(executor_ref, "end")
-            for _ in range(delete_count):
-                cmux.send_key(executor_ref, "backspace")
-                time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
+            limit = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(body))
+            if boundary is None:
+                cmux.send_key(executor_ref, "end")
+                for _ in range(limit):
+                    cmux.send_key(executor_ref, "backspace")
+                    time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
+                delete_count = limit
+            else:
+                # 用户可随时输入。中断 HUD 的例外逐键重读；仅删仍完整可见的
+                # 自有 token 前缀，不用刚才的屏幕为后续按键继续授权。
+                fresh = cmux.read_screen(executor_ref, lines=args.lines)
+                if not input_busy(fresh) and cmux.compose_rendered_text(fresh) == body:
+                    cmux.send_key(executor_ref, "end")
+                    for _ in range(limit):
+                        fresh = cmux.read_screen(executor_ref, lines=args.lines)
+                        current_body = cmux.compose_rendered_text(fresh)
+                        if (input_busy(fresh) or not current_body
+                                or not token.startswith(current_body)):
+                            break
+                        cmux.send_key(executor_ref, "backspace")
+                        delete_count += 1
+                        time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
             clear_key_count += delete_count
         clear_observations.append({
             "attempt": attempt,
@@ -1299,6 +1342,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         "compose_was_empty_before_send": not compose_was_occupied,
         "token_sent": True,
         "override": override,
+        **boundary_evidence(),
         "note": (
             "observed_in_screen is advisory — some TUIs hide unsubmitted input. "
             "clear_confirmed is the load-bearing field: handshake requires it. "

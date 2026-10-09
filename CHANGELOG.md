@@ -1,3 +1,16 @@
+# 0.4.9 — 2026-10-10
+
+- Recognize the optional goal-duration suffix on the standalone Claude clear
+  hint only outside the complete composer borders. Draft text and unknown
+  suffixes retain the existing zero-input refusal.
+- Permit the non-submitting short bridge probe after an authenticated native
+  Bash rejection/interruption chain with an empty composer and no surviving
+  tool process. Recheck the bound transcript, process identities and owned draft
+  before each cleanup key; any drift permanently invalidates the attempt.
+- Keep formal submission, queue and native-reception rules unchanged. A residual
+  Bash display is not a reason to restart a session or repeat a rejected tool.
+  Preserve zero-input failures and continue the same task through its safe phase.
+
 # 0.4.8 — 2026-10-10
 
 - Add one optional launchd configuration guardian for immutable releases. Repair

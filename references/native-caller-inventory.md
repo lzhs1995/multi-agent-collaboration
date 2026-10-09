@@ -50,3 +50,32 @@ basename selection, missing/duplicate sessions and identity drift;
 `test_cmux_workspace_guard.py` preserves workspace and UUID boundaries.
 `test_caller_inventory_boundaries.py` covers typed exit evidence, stable excluded
 candidates, changed/unknown/duplicate caller candidates, and nested global docks.
+
+## Interrupted Claude with a residual Bash display
+
+The current interruption line and an empty composer can coexist with an old
+Bash status display. Neither the display alone nor the absence of one child
+process establishes a safe boundary. `cmux_claude_interruption.py` permits only
+the harness's non-submitting `B<ordinal>_<8hex>` probe when all of these agree:
+
+- The designated native Claude session, process, terminal and workspace binding.
+- A complete bordered empty composer, the current interruption line, one Bash
+  status display and no queued input. The exact optional goal-duration suffix
+  on the standalone clear hint is accepted outside the composer only.
+- The final three native records: Bash tool use, the matching rejected result,
+  and user interruption, with matching session, record parents, tool id,
+  assistant id, literal error flag and ordered timestamps.
+- A bounded unchanged transcript tail and unchanged process identities; every
+  remaining descendant or process-group peer must predate the rejected tool.
+
+The harness rechecks these facts before typing and before every cleanup key.
+Cleanup removes only the still-visible prefix of its own short probe. Native
+appends, changed identities, foreign input or a new queue permanently invalidate
+that attempt; it never clears user text, presses Enter or resumes the rejected
+tool. Continue the original task after a valid probe. Do not recreate its id,
+repeat an already submitted challenge or migrate an in-flight controller.
+
+`test_claude_interrupted_probe.py` covers native-chain corruption, file/process
+drift, queued or foreign drafts and cleanup races. Formal messages and callbacks
+retain their existing one-attempt and exact native-reception rules. Passing this
+probe is not an ACK, successful delivery or business acceptance.

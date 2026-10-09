@@ -14,6 +14,12 @@ For zero-input identity refusals, read [native caller inventory failures](refere
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.
 
+For an empty Claude composer with a residual Bash display after interruption,
+use the [authenticated non-submitting probe](references/native-caller-inventory.md#interrupted-claude-with-a-residual-bash-display).
+Preserve the rejected tool and original zero-input evidence. Only the harness
+may test and remove its short owned token; formal delivery still requires its
+normal gates and new complete native reception.
+
 Hook reconciliation carries its authenticated native caller source through nested
 bridge checks and recollects live process evidence at each boundary. It must not
 fall back to the shared daemon's inherited workspace. UI readiness uses current
