@@ -136,27 +136,36 @@ If any command fails, do not dispatch. `bridge-test` is intentionally non-submit
 
 ## Submission Confirmation (Mandatory)
 
-Treat prompt delivery as a protocol, not a single successful CLI call:
+Follow [verified native delivery](verified-compose-delivery.md) through the original
+guarded bridge. Pin the exact receiver workspace/surface/process/session/transcript,
+full payload and fresh EOF fence at the original PASTE_INTENT. Paste once, wait for
+the complete stable draft, and submit once using the supported UI action. Busy
+Codex with the exact tab-to-queue hint uses Tab directly; other clear states use Enter.
 
-1. Persist a unique delivery id (or the handshake/round nonce) before sending. Put it in the first line of the envelope so it is easy to locate without changing the task semantics.
-2. Submit the finalized task or callback only through its guarded bridge entrypoint.
-   The bridge owns paste, lowercase `enter`, and post-submit observation. Do not
-   reconstruct this sequence with raw cmux commands or helper fallbacks.
-3. Confirm the exact current marker outside compose, plus related receiver
-   activity, using the original bridge's classifier. A prompt echo, queued text,
-   unrelated tool line or successful key call does not prove consumption.
-4. If the result is unknown or queued, retain the original attempt and use its
-   read-only reconciliation entrypoint. Do not manually add Enter, clear compose,
-   resend the payload, or run a second dispatch process. Any supported in-attempt
-   key recovery remains the bridge's responsibility under its exact guards.
-5. Read and accept a completed, identity-bound report independently of transport
-   closeout. Keep the missing receipt visible; do not make the executor poll for
-   it or redo accepted work. Continue other authorized work while observing the
-   original callback at bounded checkpoints.
+Only a new complete native user after that fence, exactly equal to the payload,
+establishes NATIVE_RECEIVED. Preserve whitespace and newlines. Screen activity,
+ACK, exit zero, empty compose, queue text and Claude queued_command do not confirm
+reception. Missing original binding/fence cannot be backfilled.
 
-The external helper is a separate implementation; a helper exit code does not
-replace the task-bound bridge receipt. The canonical SKILL and receiver-input
-rules take precedence over historical raw-send or force-compose examples.
+Unknown or queued delivery preserves the same attempt. Use its zero-input
+reconciliation entrypoint; any supported recovery shares at most one additional
+key across automatic and explicit paths. Do not manually paste, clear compose,
+press keys, switch controllers or start another dispatch.
+
+Read frozen reports through authenticated active markers with bounded supervisor
+PostToolUse report discovery (`scripts/cmux_supervisor_report_guard.py`). Discovery is not delivery,
+acceptance or disarm. Independently review the original artifacts and keep missing
+receipts visible. A bound executor can honestly stop in WAITING_SUPERVISOR; it need
+not run a watcher or redo accepted work. Continue independent authorized work.
+
+The helper supports inventory/read-only inspection. Its direct ordinary-message
+routes are allowed only through an absolute executable whose complete rendered bytes,
+same-release adapter and Python pass the guard. It uses the sole guarded bridge;
+formal task packs and callbacks retain their dedicated entrypoints. Shell/env
+wrappers, redirection, nesting and raw senders remain refused.
+The canonical native-proof contract takes precedence over the historical transport
+attribution and waiting examples below, including raw-send, screen-confirmation,
+fresh-nonce retry and force-compose advice.
 
 ## Role Map Schema
 

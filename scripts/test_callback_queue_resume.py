@@ -16,6 +16,9 @@ import cmux_callback_queue_resume as recovery
 import cmux_executor_closeout_guard as guard
 import executor_closeout
 import offline_test_hook
+import cmux_bridge as bridge
+import cmux_native_delivery as native
+from native_test_support import NativeFixture, native_hook_command
 
 
 class QueueResumeTests(unittest.TestCase):
@@ -60,6 +63,23 @@ class QueueResumeTests(unittest.TestCase):
                                 "identity":dict(workspace_uuid=self.workspace,
                                     caller_surface_uuid=self.executor,
                                     target_surface_uuid=self.supervisor, target_pane_uuid="PANE")})
+        self.native = NativeFixture.attach(self, home=self.root,
+            identity=self.attempt['binding']['identity'])
+        # CLI 子进程使用真实 provider 目录结构，不导入夹具以免提前加载 bridge。
+        native_root = self.root / '.codex/sessions'
+        native_root.mkdir(parents=True)
+        self.native.transcript = self.native.transcript.rename(
+            native_root / self.native.transcript.name)
+        self.native.native_root = native_root
+        # 保留原用例 1..5 的时间语义；绑定和 fence 都由真实实现生成。
+        with mock.patch.object(native.time, 'time', return_value=1):
+            self.attempt['native_binding'] = native.bind_target(
+                bridge, self.pack['callback_target'], self.pack['completion_callback'])
+        with mock.patch.object(native.time, 'time', return_value=2):
+            fence = native.capture_paste_fence(self.attempt['native_binding'])
+        screen = self.native.draft('')
+        self.attempt['events'][0].update(screen=screen, screen_sha256=bridge.screen_hash(screen),
+                                        native_paste_fence=fence)
         self.write(self.attempt_path, self.attempt)
         self.command = shlex.join(["rtk", "proxy", str(Path(recovery.__file__).resolve()),
                                    "--task-pack", str(self.pack_path)])
@@ -90,11 +110,35 @@ class QueueResumeTests(unittest.TestCase):
         active = self.root / "active"
         active.mkdir()
         self.write(active / (self.workspace + ".json"), self.marker)
-        result = subprocess.run(offline_test_hook.command(Path(guard.__file__), active),
+        state = self.native.export_state(self.root / 'native-state.json')
+        result = subprocess.run(native_hook_command(Path(guard.__file__), active, state),
                                 input=json.dumps(self.payload), text=True, capture_output=True,
                                 env=dict(os.environ, CMUX_WORKSPACE_ID=self.workspace,
                                          CMUX_SURFACE_ID=self.executor), timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_original_binding_or_fence_denies_without_traceback(self):
+        active = self.root / 'active'
+        active.mkdir()
+        self.write(active / (self.workspace + '.json'), self.marker)
+        for missing in ('native_binding', 'native_paste_fence'):
+            with self.subTest(missing=missing):
+                attempt = copy.deepcopy(self.attempt)
+                if missing == 'native_binding':
+                    attempt.pop(missing)
+                else:
+                    attempt['events'][0].pop(missing)
+                self.write(self.attempt_path, attempt)
+                self.assertFalse(self.evaluate())
+                before = self.attempt_path.read_bytes()
+                result = subprocess.run(offline_test_hook.command(Path(guard.__file__), active),
+                    input=json.dumps(self.payload), text=True, capture_output=True,
+                    env=dict(os.environ, CMUX_WORKSPACE_ID=self.workspace,
+                             CMUX_SURFACE_ID=self.executor), timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+                self.assertEqual(self.attempt_path.read_bytes(), before)
+                self.assertFalse(self.receipt.exists())
 
     def test_arbitrary_tool_or_shell_tail_stays_sealed(self):
         for suffix in ["; true", " && true", "\ntrue", " --reconcile-only", " > /tmp/output"]:
@@ -179,7 +223,8 @@ class QueueResumeTests(unittest.TestCase):
             "    return {'confirmed': False}\n")
         result = subprocess.run([sys.executable, str(Path(recovery.__file__)),
                                  "--task-pack", str(self.pack_path)],
-                                text=True, capture_output=True, timeout=10)
+                                text=True, capture_output=True, timeout=10,
+                                env=dict(os.environ, HOME=str(self.root)))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(log.read_text()),
                          [str(self.pack_path), {"resume_queue_only":True}])
@@ -191,7 +236,8 @@ class QueueResumeTests(unittest.TestCase):
                           "    raise RuntimeError('ORIGINAL_COMPOSER_NOT_RECOVERABLE')\n")
         result = subprocess.run([sys.executable, str(Path(recovery.__file__)),
                                  "--task-pack", str(self.pack_path)],
-                                text=True, capture_output=True, timeout=10)
+                                text=True, capture_output=True, timeout=10,
+                                env=dict(os.environ, HOME=str(self.root)))
         self.assertEqual(result.returncode, 2)
         self.assertIn("ORIGINAL_COMPOSER_NOT_RECOVERABLE", result.stderr)
         self.assertFalse(self.receipt.exists())

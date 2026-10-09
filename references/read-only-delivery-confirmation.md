@@ -1,84 +1,69 @@
 # Read-only submission confirmation and native receipts
 
-Both supervisor prompts and executor callbacks require evidence after Enter.
-An editor echo, queued input, tool exit zero, or unrelated activity is not proof
-of consumption. Inspect the original attempt before recovery; do not repaste an
-uncertain delivery or modify a callback's frozen report.
+The detailed current contract is [verified native delivery](verified-compose-delivery.md).
+Screen inspection protects the draft. Only one new native user record after the
+fresh EOF fence saved by the original PASTE_INTENT, from the same authenticated
+workspace/surface/process/session/transcript, with the complete payload unchanged,
+establishes `NATIVE_RECEIVED`. Claude `queued_command` remains pending. Preserve
+spaces, tabs, blank lines and literal escapes; never concatenate records, search
+other sessions or treat an ACK/activity/queue entry as receipt.
 
-`scripts/cmux_submit_confirmation_guard.py` is a read-only PostToolUse checker.
-It resolves each actual call separately through `cmux_submission_inputs.py`;
-quoted examples and tool output do not supply targets. Dynamic unresolved input
-remains unverified. Current compose/queue evidence overrides historical success.
-Confirmed task/callback evidence must match the full payload, original identity,
-attempt, and unchanged file pins. The checker never sends keys or writes receipts.
-It is a client hook, not an operating-system sandbox. `manage_install.py` registers
-it on PostToolUse for both clients; doctor and harness wiring checks require it.
-Installing a configuration does not hot-reload existing clients. Tests exercise
-installation, removal and missing registration in temporary configuration roots.
+## The current hook reads the current original attempt
 
-`scripts/delivery_receipts.py` can reconcile an exact callback already present as
-a native Codex user message. It checks the original task, receiver session,
-workspace binding, report, finalization time, and available durable attempt. It
-locks that attempt and atomically publishes a receipt without consuming a send
-retry. Tool echoes, assistant quotes, changed reports, and boolean schema versions
-are rejected. Native receipt proves reception, not acceptance of report claims.
+`scripts/cmux_native_delivery_guard.py` is the read-only PostToolUse entrypoint.
+It resolves each actual invocation independently through `cmux_submission_inputs.py`;
+quoted examples, tool output and unresolved dynamic arguments do not identify a
+recipient. It checks the original controller's journal, live identity, full payload,
+native binding/fence and applicable task/report pins. Missing or changed evidence
+remains unconfirmed. Ordinary tools do not trigger scans of unrelated old attempts.
+The hook sends no keys, writes no receipts and has no disable/advisory success mode.
 
-Compatibility is intentionally limited: an existing `*-attempts` journal or
-`.pending.json` requires the original reconciliation controller. It must not be
-silently interpreted as an absent attempt. An old bound bridge remains subject
-to its original task skill; this module does not migrate sender state. The legacy
-sender and its bounded late-ACK recovery are unchanged.
+`manage_install.py` registers the native guard for both clients; supported retirement
+of this package's old screen-only/send-proof hooks preserves foreign configuration.
+Install the sender, reader, wrappers and hooks as one complete fixed release.
+Configuration edits, actual hook execution, loaded client modules and native receipt
+are separate evidence. This is a client hook, not an operating-system sandbox.
 
-### Existing journal: exact native reception
+## Preserve the original controller and budget
 
-`callback_native_evidence.validate` checks an existing journal against the exact
-native receiver user record. It creates evidence only. Explicit receiver-side
-`reconcile_received` may publish a receipt using the original bound bridge and
-existing delivery lock: authenticate the receiver session and live participants,
-check original pack/report/attempt hashes and post-send native text, revalidate
-the evidence and lock inode, then atomically publish without overwriting. It never
-pastes, presses Enter, disarms a task, or changes availability. A legacy pending
-file, active sender lock, replaced inode or existing receipt refuses settlement.
+Use the original sender/controller for zero-input reconciliation. It can append a
+pinned observation and atomically publish a receipt under the original persistent
+lock only after exact native proof. It does not alter the report, task pack or prior
+attempt records. A missing original binding/fence, changed file identity, truncated
+transcript, incompatible legacy journal or active sender lock is not permission to
+fabricate a baseline, migrate the attempt or resend. There is no standalone
+`cmux_native_delivery.py` CLI; use only the original controller's supported entrypoint.
 
-The journal reader revalidates native evidence before accepting this receipt.
-Do not install that reader alone over an incompatible bridge. Preserve fixed
-task controllers; test their receipt contract separately. A real receiver-side
-settlement proves receipt, not a subsequent executor Stop invocation, global
-deployment, report acceptance, or success of the underlying research. Record
-those results independently. This is explicit recovery for already-delivered
-messages, not permission to fabricate a missing attempt or replay a callback.
+First input pastes once, waits for the full stable draft and submits once: busy Codex
+with the verified `tab to queue message` hint uses Tab directly; other clear supported
+states use Enter. Both automatic and explicit recovery share at most one additional
+key, consumed when its intent is persisted. Unknown state/history, queue, compaction,
+reconnection, changed structure or an altered draft bars that key. Display equivalence
+can protect visible draft ownership; it cannot normalize native receipt text.
 
-Validation: `python3 -B -m unittest discover -s scripts -p 'test_*.py' -q`.
-The semantic command checker runs in a subprocess to prevent a script-level
-`sys.exit` from prematurely terminating test discovery. All examples are synthetic.
-Offline test results, hook registration, loaded runtime, live delivery and final
-report acceptance must be recorded separately.
+The public `--recover-stranded` option belongs only to `submit-text` and requires the
+original `NATIVE_PENDING` state, `PASTE_INTENT`/`ENTER_SENT`, unused shared budget and
+all live/native/draft gates. Task dispatch and callbacks use zero-input reconciliation.
+A historical queue-only callback API does not create another Tab allowance.
 
+## Closeout, diagnostics and discovery
 
-## Full visible draft ownership
+A frozen bound report and returned original callback can end with an ordinary honest
+waiting statement. Stop returns `WAITING_SUPERVISOR`, `continue:false` and
+`suppressOutput:true` without inventing a receipt or disarming the task. Strict
+task-bound `scripts/cmux_callback_diagnose.py --task-pack <original absolute path>`
+and original-controller reconciliation remain available after closeout; arbitrary
+tools and report changes do not.
 
-The sender now uses the exact-composer renderer when deciding whether an additional Enter or the displayed Codex Tab action belongs to its original payload. It no longer deletes all whitespace before comparison. Full content, indentation and unknown footer rows are preserved; known wrapping, empty model-footer gaps and the measured single Claude cursor cell are display equivalences, not access to native editor bytes. Whitespace-only content rows are not empty footer gaps. Folded paste summaries and extra content cannot authorize another key. This selectively changes draft ownership; the original callback journal and late-ACK controller remain authoritative. It does not certify a new native delivery or migrate the complete installed sender.
+The supervisor's PostToolUse `scripts/cmux_supervisor_report_guard.py` performs
+bounded discovery through authenticated active markers and records
+`REPORT_DISCOVERED`. Discovery is not delivery, acceptance or disarm.
+Idle Stop writes one durable notice and permits exit. Explicit `executor_ready.py
+persist` observes only the original request and bound reply for at most 300 seconds.
+CCC waits have a deadline; native Goal behavior needs separate validation.
 
-## Ordinary handshake and status messages
-
-The public submit-text entry now requires a visible stable marker and persists
-payload, caller, workspace, receiver and pane identity in message-dispatch-v1.
-Paste and Enter intentions are written before terminal input. A queued or
-uncertain attempt must use the same marker with --reconcile-only; it must never
-be repasted. Only a recorded zero-input failure permits one explicit retry.
-Changed payload or identity, existing receipts, and legacy attempts fail closed.
-Forced compose replacement is refused for ordinary messages.
-
-The post-submit hook independently reads the original receipt and observations,
-checks their hashes and complete received payload, and performs no terminal input.
-Task dispatch, callbacks and ordinary messages share the existing deliveries-v1
-receiver lock; task journals additionally retain their historical target lock.
-This prevents different message classes from simultaneously typing into one
-receiver. Low-level observer calls are reserved for those original controllers.
-
-These are source behavior changes. Passing offline tests does not establish
-that a pinned installed release or running client has loaded them. Preserve old
-controllers and journals until a separately verified runtime transition.
+The historical mixed-version findings below are retained verbatim. They do not
+certify a new installation, live hook, current native receipt or research acceptance.
 
 ## Keep the reader and bridge in one version root
 

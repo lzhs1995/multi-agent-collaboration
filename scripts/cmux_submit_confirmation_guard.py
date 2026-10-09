@@ -535,8 +535,53 @@ def _attempt_evidence(call: dict[str, Any], surface: str, bridge) -> dict[str, A
     return None
 
 
+_STATE_ROOT = Path(os.environ.get("HOME", "/tmp")) / ".local/state/multi-agent-collaboration"
+
+
+def stranded_attempts(caller: str | None, reader: Callable[[str, int], str], bridge,
+                      window_seconds: float = 900.0, now: float | None = None) -> list[dict[str, Any]]:
+    """Enter ≠ 送达：本 caller 的原 attempt 已按 Enter、无 receipt、marker 仍在接收端 compose。
+
+    2026-10-08 实测：自定义 marker（非 16-hex、非协议形状）的普通消息卡在 Codex
+    compose 框，形状判据全部漏判，本 guard 静默放行。这里改以原 journal 为准：
+    不看命令长相，只看本 caller 自己的未确认 attempt 与接收端当前 compose。
+    """
+    if not caller or bridge is None:
+        return []
+    now = time.time() if now is None else now
+    out: list[dict[str, Any]] = []
+    for folder in ("message-dispatch-v1", "task-dispatch-v1"):
+        for path in (_STATE_ROOT / folder).glob("*/attempt-*.json"):
+            try:
+                if now - path.stat().st_mtime > window_seconds:
+                    continue
+                if (path.parent / "receipt.json").exists():
+                    continue
+                attempt = json.loads(path.read_text(encoding="utf-8"))
+                binding = attempt.get("binding") or {}
+                identity = binding.get("identity") or {}
+                if str(identity.get("caller_surface_uuid", "")).upper() != caller.upper():
+                    continue
+                phases = [e.get("phase") for e in attempt.get("events", [])]
+                marker = binding.get("marker")
+                target = identity.get("target_surface_uuid")
+                if (attempt.get("phase") == "CONFIRMED" or "ENTER_SENT" not in phases
+                        or not isinstance(marker, str) or not marker or not target):
+                    continue
+                screen = reader(target, _window_lines())
+                if not bridge.compose_contains(screen, marker):
+                    continue
+                used = "QUEUE_TAB_INTENT" in phases or "EXTRA_ENTER_INTENT" in phases
+                out.append({"journal": folder, "attempt": str(path), "marker": marker,
+                            "target": target, "task_id": binding.get("task_id"),
+                            "recovery_used": used})
+            except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+                continue
+    return out
+
+
 def evaluate(payload: dict[str, Any], reader: Callable[[str, int], str] | None = None,
-             bridge=None) -> dict[str, Any]:
+             bridge=None, caller: str | None = None) -> dict[str, Any]:
     """返回 {'action': 'skip'|'pass'|'warn', ...}。reader 可注入以便测试。"""
     command = _extract_command(payload)
     if not command or not looks_like_delivery(command):
@@ -555,7 +600,19 @@ def evaluate(payload: dict[str, Any], reader: Callable[[str, int], str] | None =
         surface = call.get("surface")
         if surface and surface not in surfaces:
             surfaces.append(surface)
+    if caller is None:
+        caller = os.environ.get("CMUX_SURFACE_ID")
+    journal_bridge = bridge if bridge is not None else _bridge()
+    journal_read = reader
+    if journal_read is None and journal_bridge is not None and callable(getattr(journal_bridge, "read_screen", None)):
+        def journal_read(surface: str, n: int, _fn=journal_bridge.read_screen) -> str:  # type: ignore[misc]
+            return _fn(surface, lines=n)
+    stranded = (stranded_attempts(caller, journal_read, journal_bridge)
+                if journal_read is not None else [])
     if not surfaces:
+        if stranded:
+            return {"action": "warn", "surfaces": {}, "stranded": stranded, "markers": [],
+                    "confirm_lines": _window_lines()}
         return {"action": "pass", "reason": "INDETERMINATE: delivery command has no resolvable target; "
                 "submission was NOT verified", "indeterminate": True, "surfaces": {}}
 
@@ -613,8 +670,9 @@ def evaluate(payload: dict[str, Any], reader: Callable[[str, int], str] | None =
         pending_any = pending_any or verdict["verdict"] == "PENDING_UNSUBMITTED"
 
     return {
-        "action": "warn" if pending_any else "pass",
+        "action": "warn" if pending_any or stranded else "pass",
         "surfaces": findings,
+        "stranded": stranded,
         "markers": markers,
         "confirm_lines": lines,
     }
@@ -648,6 +706,19 @@ def _render(result: dict[str, Any]) -> str:
             lines.append(f"    compose 摘录           = {excerpt!r}")
         for marker, state in (evidence.get("marker_states") or {}).items():
             lines.append(f"    marker {marker}: {json.dumps(state, ensure_ascii=False)}")
+        lines.append("    完成回调卡在 compose：原执行者用 submit_completion_callback(pack, "
+                     "resume_queue_only=True) 只补一次 Tab；普通消息用 --recover-stranded。")
+    for item in result.get("stranded") or []:
+        lines.append(f"  STRANDED_IN_COMPOSE  marker={item['marker']}  target={item['target']}")
+        lines.append(f"    原 attempt = {item['attempt']}")
+        lines.append("    已按 Enter 但 payload 仍在接收端 compose：未送达，不是「已排队」。")
+        if item.get("recovery_used"):
+            lines.append("    恢复键预算已用尽：只读 --reconcile-only 核收，不再补键。")
+        elif item["journal"] == "message-dispatch-v1":
+            lines.append("    恢复（同一 attempt、只补一键、不重贴）：cmux_bridge.py submit-text "
+                         "--surface <同一目标> --text <原文> --marker <原 marker> --recover-stranded")
+        else:
+            lines.append("    任务包投递：由原发送器只读核收；不得重贴。")
     lines += [
         "",
         "  沿原 attempt 只读核收，保留原 payload、nonce、身份与发送预算。",
@@ -698,6 +769,7 @@ def main() -> int:
         "markers": result.get("markers"),
         "confirm_lines": result.get("confirm_lines"),
         "surfaces": {k: v.get("verdict") for k, v in result.get("surfaces", {}).items()},
+        "stranded": [item["marker"] for item in result.get("stranded") or []],
     })
 
     if result["action"] == "warn":

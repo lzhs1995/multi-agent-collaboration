@@ -12,6 +12,8 @@ import unittest
 import uuid
 from unittest import mock
 import offline_test_hook
+import cmux_bridge as BRIDGE
+from native_test_support import NativeFixture, native_hook_command
 
 HOOK = Path(os.environ.get('STOP_GUARD_UNDER_TEST', Path(__file__).with_name('cmux_consensus_stop_guard.py')))
 
@@ -21,6 +23,7 @@ class StopReentryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='stop-reentry-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.native_state = None
         self.workspace = 'stop-reentry-test-' + uuid.uuid4().hex
         self.surface = uuid.uuid4().hex
         self.active = self.root / 'active'
@@ -37,7 +40,8 @@ class StopReentryTests(unittest.TestCase):
     def call(self, payload, check_file=False):
         data = dict(hook_event_name='Stop', last_assistant_message='Report written; callback unconfirmed.')
         data.update(payload)
-        command = offline_test_hook.command(HOOK, self.active)
+        command = (native_hook_command(HOOK, self.active, self.native_state)
+                   if self.native_state else offline_test_hook.command(HOOK, self.active))
         if check_file:
             path = self.root / 'input.json'
             path.write_text(json.dumps(data))
@@ -81,11 +85,36 @@ class StopReentryTests(unittest.TestCase):
         self.assertEqual(self.call(dict(stop_hook_active=False)).returncode, 2)
 
     def test_valid_callback_passes_but_report_drift_blocks(self):
-        receipt = {k: self.pack[k] for k in ('task_id', 'completion_nonce', 'completion_callback', 'callback_target', 'report')}
-        receipt.update(confirmed=True, report_sha256=hashlib.sha256(self.report.read_bytes()).hexdigest(), report_bytes=self.report.stat().st_size,
-                       task_pack_sha256=hashlib.sha256((self.root / 'task-pack.json').read_bytes()).hexdigest())
-        Path(self.pack['completion_receipt']).write_text(json.dumps(receipt))
-        self.assertEqual(self.call(dict(stop_hook_active=False)).returncode, 0)
+        # 成功回执来自真实 public callback、原 journal 与同一 JSONL user 记录。
+        self.pack.update(executor_uuid=self.surface, callback_target='surface:1',
+                         required_skill=str(BRIDGE.COLLABORATION_SKILL_PATH),
+                         completion_callback=f'DONE|offline-test|test-nonce|REPORT={self.report}',
+                         completion_delivery=dict(transport='cmux_bridge.submit_completion_callback',
+                                                  require_confirmed=True))
+        pack_path = self.root / 'task-pack.json'
+        pack_path.write_text(json.dumps(self.pack))
+        native = NativeFixture.attach(self, home=self.root / 'home', provider='claude',
+            identity=dict(workspace_uuid=self.workspace, caller_surface_uuid=self.surface,
+                          target_surface_uuid='supervisor-uuid', target_pane_uuid='pane-uuid'))
+        callback = self.pack['completion_callback']
+        idle = native.draft('', provider='claude')
+        with mock.patch.object(BRIDGE, 'read_screen', side_effect=native.ready_screens(
+                idle, native.draft(callback, provider='claude'), idle)):
+            native.key.side_effect = native.receipt_on_key(callback)
+            receipt = BRIDGE.submit_completion_callback(pack_path)
+        self.assertTrue(receipt['confirmed'])
+        native.send.assert_called_once()
+        native.key.assert_called_once()
+        self.native_state = native.export_state(self.root / 'native-state.json')
+        before = self.snapshot()
+        result = self.call(dict(stop_hook_active=False))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(before, self.snapshot())
+        # 子进程重新验证原 proof；user 记录被截断时不能沿用 confirmed 字段。
+        transcript = native.transcript.read_bytes()
+        native.transcript.write_bytes(transcript.splitlines(keepends=True)[0])
+        self.assertEqual(self.call(dict(stop_hook_active=False)).returncode, 2)
+        native.transcript.write_bytes(transcript)
         self.report.write_text('Changed report\n')
         self.assertEqual(self.call(dict(stop_hook_active=False)).returncode, 2)
 

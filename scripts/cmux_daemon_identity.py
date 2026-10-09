@@ -303,7 +303,8 @@ def collect_hook(env, payload):
         session = str(uuid.UUID(payload['session_id']))
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise IdentityError('managed hook lacks a valid session_id') from exc
-    if payload.get('hook_event_name') not in ('PreToolUse', 'Stop', 'SubagentStop'):
+    if payload.get('hook_event_name') not in ('PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
+                                             'SessionStart', 'UserPromptSubmit'):
         raise IdentityError('managed hook event is missing or unsupported')
     selectors = [p['env']['CODEX_THREAD_ID'] for p in chain[:-1]
                  if p['env'].get('CODEX_THREAD_ID')]

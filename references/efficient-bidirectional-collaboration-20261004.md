@@ -1,6 +1,6 @@
 # 高效握手、多执行者与双向投递
 
-维护版本 efficient-bidirectional.2026.10.04.4。本文是本次维护后的有效入口；同日其他握手/Enter文档保留为历史，不再作为并列操作说明。
+协作节奏沿用本文；投递、恢复、封口与等待的唯一现行操作合同见[原生投递与有界等待](verified-compose-delivery.md)。旧屏幕消费和分立 Enter/Tab 预算不再授予操作权限；下列注明日期的历史验证保留原范围。
 
 ## 先备任务，再握手
 
@@ -14,25 +14,34 @@
 
 明确retryable服务故障在原尝试结束后同会话有限重试、每次至少60秒；认证、欠费、额度失败不盲试。投递不确定也不能重贴。重试次数不证明失效：须按[失败窗口规则](availability-and-resources.md#retryable-claude-api-failures-evidence-before-takeover)从首次真实API失败起连续至少300秒、阈值处有新鲜失败且当前尝试已终态，期间任一真实成功即重置；排队、静屏、未知投递和握手超时都不计入。满足后沿用户既有授权固定原终态、冻结executor写入并转solo_self_review，继续本机能做的工作。保留原会话，不clear、不新建替代。恢复协作在安全边界使用原UUID。
 
-## 双向发送铁律：Enter后必须读回
+## 双向发送铁律：核原生全文记录
 
-supervisor→executor的prompt和executor→supervisor的callback都通过受保护bridge。每次粘贴/按键前重核caller、同workspace、指定目标UUID；首次输入前SHELL/UNKNOWN零输入；已有paste_intent后若识别失败，记为投递未确认，停止按键并核收原次，不能改判为从未发送。按键返回0、文字出现在旧转录块、marker消失或无关新工具输出均不能证明本次消息已消费。
+prompt、任务包和 callback 均使用原受保护 bridge。原 `PASTE_INTENT`
+固定真实 caller、同 workspace/surface/process/session/transcript、完整
+payload 与新鲜 EOF fence。只有该 fence 后新增、全文完全相等的 native
+user 才为 `NATIVE_RECEIVED`；保留全部空白，不拼接记录或查 marker 代替。
+Claude `queued_command` 和 UI queue 仍 pending。活动、ACK、空 composer、
+按键成功与报告已读均不能代替原生接收证据。
 
-当前bridge粘贴一次并按Enter，随后必须读同一接收端；发送命令成功本身不作送达证据。确认需要：本次新marker关联的新活动、输入框空、marker不在compose或pending queue。排队、已消费、报告已审阅分别记录。若完整待提交文字仍逐字匹配自己的payload，且没有用户新增、排队、压缩或重连，bridge至多补一次Enter，不重新粘贴。
-
-实测Codex忙时可显示`tab to queue message`：仅精确提示、Codex字形、完整自身payload均匹配且没有压缩/重连/队列时，允许一次Tab，之后再读回；进入队列仍不算消费。该路径目前有离线测试，不能称全部真实UI版本均已验证。未知多行输入按用户草稿保护，不通过force清除。
+首次只粘贴一次，有界等待完整稳定原草稿。忙碌 Codex 明示
+`tab to queue message` 且完整原文匹配时首次直接 Tab；其他清晰受支持
+状态 Enter。自动/显式恢复共用最多一次补键，意图落盘即耗用。
+当前 `--recover-stranded` 只属于 `submit-text`，须满足原 `NATIVE_PENDING`、
+`PASTE_INTENT`/`ENTER_SENT` 及全部原绑定/历史/草稿门禁；任务和 callback
+只读核原次。缺原绑定或 fence 不追补，UNKNOWN、压缩、排队、重连或
+结构改变不补键，不重贴、不换 nonce。详细条件以统一合同为准。
 
 ## 回调日志与旧任务收尾
 
 先保存固定报告，再调用`submit-completion-callback --task-pack /absolute/task-pack.json`。实际尝试目录与任务包的`completion_receipt`同目录，名称为回执stem加`-attempts/`。新版journal绑定任务包SHA、报告SHA、nonce、原executor UUID与目标，并先写PASTE_INTENT后输入；同inode锁避免两个进程重复回调。记录为零输入的失败最多另试一次；任何可能已粘贴的尝试禁止重贴。
 
-`--reconcile-only`只读取已有真实尝试和接收端，终端输入为0；可以持久化本次观察，且仅在真实消费证据满足原绑定时保存回执。不另发恢复消息。若旧`<receipt>.pending.json`存在，即使内容损坏也拒绝新发送和自动迁移，交supervisor按原证据结案。缺journal不能补造历史尝试，报告SHA出现在supervisor文件只能证明该报告被核查，不能自动生成transport receipt。滚屏丢失证据时如实保留未确认。
+`--reconcile-only`只读取已有真实尝试和接收端，终端输入为0；可以持久化本次观察，且仅在原 fence 后新增的完整精确 native user 满足原绑定时保存回执。不另发恢复消息。若旧`<receipt>.pending.json`存在，即使内容损坏也拒绝新发送和自动迁移，交supervisor按原证据结案。缺journal不能补造历史尝试，报告SHA出现在supervisor文件只能证明该报告被核查，不能自动生成transport receipt。原生记录不可核验时如实保留未确认；滚屏和屏幕活动不改变核收条件。
 
 旧任务若真实callback已经进入supervisor会话且报告已独立核收，可由supervisor保存原marker及核收依据后，仅`disarm --task-id`该已终态任务。明确记录正式bridge receipt缺失；不得伪造receipt、反复回调、全局禁用Stop hook或让已完成executor无限修复回调。Stop hook提供完成门禁，supervisor负责真实旧任务的有据结案。
 
 ## 安装、复测与版本
 
-维护源与实际安装两边都保留本文及对应入口。实体目录安装若被manage_install.py判为foreign，保留目录；按已授权窄维护调用现有mutation_locks及replace_bytes，先核原字节，备份后安装，保留mode与before/after SHA。不得将实体目录强换symlink或整树覆盖。回调journal先安装、bridge后安装。
+维护源与实际安装两边都保留本文及对应入口。实体目录安装若被manage_install.py判为foreign，保留目录；按已授权窄维护调用现有mutation_locks及replace_bytes，先核原字节，备份后安装，保留mode与before/after SHA。不得将实体目录强换symlink或整树覆盖。发送器、journal reader、hook、启动器和文档适配须来自同一完整固定版本，不拆开覆盖；历史任务沿原控制器。
 
 安装完成、测试通过、新进程实际导入和旧客户端热加载是四件事；不为更新skill重启正在工作的应用。已冻结任务包保留旧pins，后继显式记录维护版本，不冒称旧输入未变。通用文档不含研究数据；本机维护patch另归档，无Git元数据不得声称已提交或发布。
 
@@ -47,7 +56,7 @@ A `DELIVERY_UNVERIFIED_BY_DETECTOR` or `DELIVERY_QUEUED_AT_RECEIVER` result must
 
 ## Complete-message post-submit confirmation
 
-Both directions require the complete submitted payload in one receiver prompt block, followed by receiver activity. A marker alone, appended foreign content, fragments across prompt blocks, or activity preceding the payload cannot confirm delivery. Read-only callback reconciliation applies the same rule and must not send text or keys. Transcript whitespace normalization is display equivalence only, not byte-exact native receipt proof. Preserve the original attempt journal on uncertainty; do not repaste.
+Both directions require one new native user record after the fresh EOF fence saved by the original PASTE_INTENT, from the same bound workspace/surface/process/session/transcript, exactly equal to the complete payload. Screen activity, ACKs, queue records, fragments across records and whitespace normalization cannot confirm reception. Read-only reconciliation applies the same native rule and sends no input. Missing original binding/fence cannot be backfilled; preserve the original attempt without repasting.
 
 
 ## Durable task dispatch
@@ -56,8 +65,8 @@ Both directions require the complete submitted payload in one receiver prompt bl
 workspace/caller/target/pane UUIDs and each input intent under
 `~/.local/state/multi-agent-collaboration/task-dispatch-v1/` before terminal input.
 The post-submit hook must read this same journal format. It revalidates the
-original pack, payload, live UUIDs, receipt, attempt and complete before/after
-observation; read-only reconciliation also requires its pinned observation.
+original pack, payload, live UUIDs, receipt, attempt, original native binding/fence
+and exact new native user; read-only reconciliation retains its pinned observation.
 A new sender journal without a matching hook reader is an incomplete upgrade:
 do not deploy it merely because sender-only tests pass. Missing or changed
 evidence remains unconfirmed, and the hook never creates a receipt or sends input.
@@ -70,8 +79,8 @@ does not migrate or replace them.
 
 After an uncertain attempt, invoke the same `submit-task-pack` command with
 `--reconcile-only`, preserving surface, text, pack and marker. This only observes:
-no paste, Enter or Tab. It requires the complete original prompt and subsequent
-receiver activity, then writes a receipt. A queued, partial or cross-block message
+no paste, Enter or Tab. It requires an exact whole new native user after the original
+PASTE_INTENT fence before writing a receipt. A queued, partial or cross-record message
 remains unconfirmed. An existing receipt rejects another dispatch. The default
 marker is the task ID and must occur literally in the prompt; an explicit marker
 must also occur in the prompt. Forced composer replacement is refused for durable
@@ -83,7 +92,8 @@ that every legacy sender has been migrated or that a running client hot-reloaded
 
 The post-submit hook also reads the canonical callback's original `*-attempts`
 journal and completion receipt. It revalidates the task pack, report bytes/hash,
-executor and receiver identity, original attempt, and full message observations.
+executor and receiver identity, original attempt, original native binding/fence,
+and the exact complete new native user record.
 Read-only reconciliation must bind its zero-input observation. A receipt flag
 alone is insufficient. Missing or changed evidence remains unconfirmed; the hook
 never resends input or manufactures a receipt. This prevents a valid callback

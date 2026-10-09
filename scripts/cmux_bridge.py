@@ -140,7 +140,23 @@ def pin_workspace(surface, *, workspace_uuid=None, target_uuid=None, caller_uuid
 def _run(*args, check=True, capture=True):
     """Run cmux with given args, return stdout string."""
     args = list(args)
-    if args and args[0] in {"send", "send-key"}:
+    if args[:2] == ["rpc", "terminal.paste"]:
+        if len(args) != 3:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit paste parameters required")
+        try:
+            params = json.loads(args[2])
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: invalid paste parameters") from exc
+        if (not isinstance(params, dict) or params.get("submit_key") != "none"
+                or set(params) != {"text", "submit_key", "workspace_id", "surface_id"}
+                or not isinstance(params.get("text"), str) or not params["text"]):
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: literal paste must not implicitly submit")
+        proof = pin_workspace(params["surface_id"])
+        if uuid_value(params["workspace_id"]) != uuid_value(proof["workspace_uuid"]):
+            raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: paste workspace changed")
+        params.update(workspace_id=proof["workspace_uuid"], surface_id=proof["target_surface_uuid"])
+        args[2] = json.dumps(params, ensure_ascii=False)
+    elif args and args[0] in {"send", "send-key"}:
         if "--surface" not in args:
             raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit surface required")
         index = args.index("--surface") + 1
@@ -484,6 +500,8 @@ class DispatchUnconfirmed(RuntimeError):
 SUPERVISOR_DID_NOT_SUBMIT = "SUPERVISOR_DID_NOT_SUBMIT"
 SUBMISSION_ABORTED_BUSY = "SUBMISSION_ABORTED_BUSY"
 COMPOSE_OCCUPIED = "COMPOSE_OCCUPIED"
+# Enter was sent but our exact payload is still the receiver's draft.
+STRANDED_IN_COMPOSE = "STRANDED_IN_COMPOSE"
 DELIVERY_UNVERIFIED_BY_DETECTOR = "DELIVERY_UNVERIFIED_BY_DETECTOR"
 DELIVERY_QUEUED_AT_RECEIVER = "DELIVERY_QUEUED_AT_RECEIVER"
 
@@ -638,6 +656,64 @@ _COMPOSE_CHROME_RE = re.compile(
 )
 
 
+_CLAUDE_BORDER_RE = re.compile(r"─{8,}")
+_CLAUDE_DURATION = r"(?:\d+h(?:\s+\d+m)?|\d+m(?:\s+\d+s)?|\d+s)"
+_CLAUDE_TOOL = r"[A-Za-z][\w.:-]*"
+_CLAUDE_COUNTS = rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
+_CLAUDE_ACTIVE_TOOL_RE = re.compile(
+    rf"[◐◑◒◓]\s+{_CLAUDE_TOOL}:\s+[^|\n]+(?:\s*\|\s*{_CLAUDE_COUNTS})?")
+_CLAUDE_SUMMARY_RE = re.compile(
+    rf"(?:{_CLAUDE_COUNTS}|✓\s+{_CLAUDE_TOOL}(?:\s+\[[\w.-]+\])?:\s+"
+    rf"[^|\n]+\((?:<)?{_CLAUDE_DURATION}\)|▸\s+[^\n]+\(\d+/\d+\))")
+
+
+def _claude_bordered_compose(screen):
+    """仅解析完整 Claude 边框；正文绝不参与 footer 正则过滤。"""
+    rows = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen).splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    if (start is None or start == 0 or not rows[start].lstrip().startswith("❯")
+            or not _CLAUDE_BORDER_RE.fullmatch(rows[start - 1].strip())):
+        return None
+    end = next((i for i in range(start + 1, len(rows))
+                if rows[i].strip() == rows[start - 1].strip()), None)
+    if end is None:
+        return None
+    footer = [row.strip() for row in rows[end + 1:] if row.strip()]
+    if not footer:
+        return None
+    # 当前实屏的 model/cwd/time/goal 同行；cwd 可以没有 git 信息。
+    model_row = re.sub(rf"\s+◎\s+/goal active\s+\({_CLAUDE_DURATION}\)$", "", footer[0])
+    fields = [part.strip() for part in model_row.split("│")]
+    if (not 1 <= len(fields) <= 3 or not re.fullmatch(
+            r"(?:\[claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
+            r"\[(?:Opus|Sonnet|Claude)\s+[^\]\n]+\])", fields[0], re.I)):
+        return None
+    if len(fields) >= 2 and not re.fullmatch(
+            r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?", fields[1]):
+        return None
+    elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
+    if len(fields) == 3 and not re.fullmatch(elapsed, fields[2]):
+        return None
+    if len(footer) > 1:
+        rest = footer[1:]
+        if rest and re.fullmatch(elapsed, rest[0]):
+            rest = rest[1:]
+        if (len(rest) < 3
+                or not re.fullmatch(r"上下文\s+[█░▒▓▏▎▍▌▋▊▉▐]+\s+(?:100|\d{1,2})%", rest[0])
+                or not re.fullmatch(r"\d+\s+CLAUDE\.md\s*\|\s*\d+\s+MCPs\s*\|\s*\d+\s+(?:钩子|hooks)", rest[1])
+                or not re.fullmatch(r"⏵⏵\s+bypass permissions on \(shift\+tab to cycle\)(?:\s*·\s*← for agents)?", rest[-1])
+                or not all(_CLAUDE_SUMMARY_RE.fullmatch(row)
+                           or _CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in rest[2:-1])):
+            return None
+    elif len(fields) != 1 or model_row != footer[0]:
+        # 历史的单 model 行有独立回归；完整多字段 footer 不能截断成它。
+        return None
+    first = re.sub(r"^\s*❯[ \u00a0]?", "", rows[start], count=1)
+    return {"body": "\n".join([first, *rows[start + 1:end]]),
+            "footer": footer, "before": rows[:start - 1], "start": start, "end": end}
+
+
 def compose_block_text(screen):
     """Body of the CURRENT compose block, or None when no block is open.
 
@@ -647,6 +723,9 @@ def compose_block_text(screen):
     earlier block as live was a real bug fixed once already, and a second parse
     would be free to regress independently.
     """
+    claude = _claude_bordered_compose(screen)
+    if claude is not None:
+        return claude["body"]
     block = []
     in_prompt = False
     for line in screen.splitlines():
@@ -675,49 +754,24 @@ def delivery_compose_text(screen):
     return "\n".join([_PROMPT_GLYPH_RE.sub("", lines[i], count=1), *lines[i+1:]])
 
 
-# Measured 2026-10-08: the running-tool footer is below the editor border.
-# Do not broadly strip its glyph from drafts; recognize a complete bordered
-# Claude editor and its known footer before separating content from chrome.
-_CLAUDE_RUNNING_TOOL_FOOTER_RE = re.compile(r"^\s*◐\s+Bash:\s+\S[^\n]*$", re.I)
-
-
-def _claude_bordered_compose(screen):
-    lines = screen.splitlines()
-    prompts = [i for i, line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
-    if not prompts:
-        return None
-    start = prompts[-1]
-    border = re.compile(r"^\s*─{8,}\s*$")
-    if start == 0 or not border.fullmatch(lines[start - 1]):
-        return None
-    end = next((i for i in range(start + 1, len(lines))
-                if border.fullmatch(lines[i])), None)
-    if end is None:
-        return None
-    footer = [line for line in lines[end + 1:] if line.strip()]
-    model = re.compile(
-        r"^\s*\[claude-[\w.-]+(?:\[\d+m\])?\]"
-        r"(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
-    if not footer or not model.fullmatch(footer[0]):
-        return None
-    if any(not (_COMPOSE_CHROME_RE.fullmatch(line.strip()) or
-                _CLAUDE_RUNNING_TOOL_FOOTER_RE.fullmatch(line))
-           for line in footer[1:]):
-        return None
-    body = [_PROMPT_GLYPH_RE.sub("", lines[start], count=1),
-            *lines[start + 1:end]]
-    return "\n".join(body).strip(), footer
-
-
 def compose_rendered_text(screen):
     """Conservative editor text, stripping footer chrome; None is unobserved."""
-    bordered = _claude_bordered_compose(screen)
-    if bordered is not None:
-        return bordered[0]
+    claude = _claude_bordered_compose(screen)
+    if claude is not None:
+        return claude["body"].strip(" \t\r\n")
     body = delivery_compose_text(screen)
     if body is None:
         return None
     lines = body.splitlines()
+    prompt = next((row for row in reversed(screen.splitlines())
+                   if _PROMPT_GLYPH_RE.match(row)), "")
+    if prompt.lstrip().startswith("❯"):
+        # 无完整边框时只保留历史单 model 行布局；多行草稿和未知 footer 不裁切。
+        if len(lines) == 2 and re.fullmatch(
+                r"\s*\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\](?: context \d+%)?\s*",
+                lines[-1], re.I):
+            return lines[0].strip(" \t\r\n")
+        return body.strip(" \t\r\n")
     # Never discard a typed first line, even when it resembles footer chrome.
     while len(lines) > 1 and (not lines[-1].strip() or _COMPOSE_CHROME_RE.fullmatch(lines[-1].strip())):
         lines.pop()
@@ -738,11 +792,25 @@ def pending_queue_holds(screen, marker):
     marker must appear at or after the pending-queue banner; a marker elsewhere
     on screen is a different state entirely.
     """
+    if not isinstance(marker, str) or not marker:
+        return False
     lines = screen.splitlines()
-    for index, line in enumerate(lines):
-        if _PENDING_QUEUE_RE.search(line):
-            if "".join(marker.split()) in "".join("\n".join(lines[index:]).split()):
-                return True
+    # 队列只存在于 live composer 上方；不能用别人的 banner 认领下面的草稿。
+    starts = [i for i, line in enumerate(lines) if _PROMPT_GLYPH_RE.match(line)]
+    if not starts:
+        return False
+    limit = starts[-1]
+    banners = [i for i in range(limit) if _PENDING_QUEUE_RE.search(lines[i])]
+    for pos, index in enumerate(banners):
+        end = banners[pos + 1] if pos + 1 < len(banners) else limit
+        region = lines[index + 1:end]
+        # 新活动或新的已提交消息结束该 queue 区域。
+        for j, row in enumerate(region):
+            if _ACTIVITY_LINE_RE.match(row) or _PROMPT_GLYPH_RE.match(row):
+                region = region[:j]
+                break
+        if "".join(marker.split()) in "".join("\n".join(region).split()):
+            return True
     return False
 
 
@@ -801,6 +869,9 @@ def _prompt_block_pending(screen, marker):
     as a second block opened, which inverted exactly that case -- measured on a
     real callback that Codex had already received and was actively working on.
     """
+    claude = _claude_bordered_compose(screen)
+    if claude is not None:
+        return "".join(marker.split()) in "".join(claude["body"].split())
     block = []
     in_prompt = False
     for line in screen.splitlines():
@@ -855,14 +926,19 @@ def require_exact_composer(screen, surface, text):
         end = next((i for i in range(start+1, len(rows))
                     if rows[i] == rows[start-1]), None)
         if (end is None or end+1 >= len(rows)
-                or not re.fullmatch(r"\s*\[(?:claude|opus|sonnet)[^\]]*\](?:\])?\s*",
-                                    rows[end+1], re.I)
+                or _claude_bordered_compose(screen) is None
                 or not rows[end-1].endswith(" ")
                 or len(rows[end-1]) < 2 or rows[end-1][-2].isspace()):
             raise
         # Exactly one terminal cell on the final content row, never strip().
         rows[end-1] = rows[end-1][:-1]
         return _require_exact_composer_without_cursor_cell("\n".join(rows), surface, text)
+
+
+def _display_cells(value):
+    return sum(0 if unicodedata.combining(c) else
+               (2 if unicodedata.east_asian_width(c) in "WF" else 1)
+               for c in value)
 
 
 def _require_exact_composer_without_cursor_cell(screen, surface, text):
@@ -919,20 +995,34 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
                 continue
             # Preserve every content character. Only the two-column gutter
             # and hard/soft visual row boundaries are renderer-dependent.
+            # Measured 2026-10-08 (C2596 r22 status): Codex word-wraps at a
+            # space and drops that space from both rows, so "only because"
+            # renders as "...only" / "  because...". A single " " separator is
+            # accepted only where the previous row is wide enough that the
+            # next word could not have fit on it (a real word wrap).
+            widest = max((len(row) for row in rows), default=0)
             positions = {0}
+            previous = ""
             for number, part in enumerate(parts):
                 part = part if number == 0 else part[2:]
                 next_positions = set()
+                word = re.match(r"\S+", part) if part else None
+                wrapped = bool(
+                    number and word and previous and not previous[-1].isspace()
+                    and 2 + _display_cells(previous) + 1 + _display_cells(word.group())
+                    > max(widest - 2, 40))
                 for pos in positions:
                     # Empty continuation rows are explicit blank content,
                     # never a soft wrap that can silently disappear.
                     separators = (("",) if number == 0 else
-                                  (("", "\n") if part else ("\n",)))
+                                  (("", "\n", " ") if wrapped else ("", "\n"))
+                                  if part else ("\n",))
                     for sep in separators:
                         chunk = sep + part
                         if text.startswith(chunk, pos):
                             next_positions.add(pos + len(chunk))
                 positions = next_positions
+                previous = part
             if len(text) in positions:
                 return
     if body == text:
@@ -1009,6 +1099,98 @@ def _exact_pending_text(screen, text):
     return True
 
 
+def _draft_structure(screen, text):
+    """保留全部草稿行、空格和空行；footer 文字可更新，结构不可猜测。"""
+    if not _exact_pending_text(screen, text):
+        raise DispatchUnconfirmed("COMPOSE_CHANGED: no recovery key", state=COMPOSE_OCCUPIED)
+    rows = screen.splitlines()
+    start = next(i for i in range(len(rows) - 1, -1, -1)
+                 if _PROMPT_GLYPH_RE.match(rows[i]))
+    border = rows[start - 1] if start and re.fullmatch(r"─{8,}", rows[start - 1]) else None
+    if border is not None:
+        end = next(i for i in range(start + 1, len(rows)) if rows[i] == border)
+        return (border, tuple(rows[start:end]))
+    body = rows[start:]
+    if body and re.fullmatch(r"\s*tab to queue message\s*", body[-1]):
+        body.pop()
+    if len(body) > 2 and _PROVIDER_HINT_ROW_RE.fullmatch(body[-1]):
+        body.pop()
+    if len(body) > 1 and re.fullmatch(
+            r"\s*(?:\[(?:Opus|Claude|Sonnet|GPT)[^\]]*\](?: context \d+%)?|"
+            r"(?:GPT|claude)-[\w.-]+(?: (?:low|medium|high|xhigh|max|ultra))?"
+            r"(?: · [^\n]+)?)\s*", body[-1], re.I):
+        body.pop()
+    return (None, tuple(body))
+
+
+def require_original_draft(attempt, screen, text):
+    """原 ENTER 后任何不确定或结构变化都撤销补键资格；恢复原样不复权。"""
+    events = attempt.get("events", [])
+    if not isinstance(events, list) or any(not isinstance(e, dict) for e in events):
+        raise TaskPackContractError("ORIGINAL_ENTER_EVIDENCE_REQUIRED")
+    original = [e for e in events if e.get("phase") == "ENTER_INTENT"]
+    if len(original) != 1 or original[0].get("screen_sha256") != screen_hash(original[0].get("screen", "")):
+        raise TaskPackContractError("ORIGINAL_ENTER_EVIDENCE_REQUIRED")
+    expected = _draft_structure(original[0]["screen"], text)
+    samples = [e for e in events[events.index(original[0])+1:] if "screen" in e]
+    for event in samples:
+        if (not isinstance(event["screen"], str)
+                or event.get("screen_sha256") != screen_hash(event["screen"])):
+            raise TaskPackContractError("ORIGINAL_ENTER_EVIDENCE_CHANGED")
+    for observed in [original[0]["screen"], *(e["screen"] for e in samples), screen]:
+        if pending_queue_holds(observed, text):
+            raise DispatchUnconfirmed("ALREADY_QUEUED: no recovery key",
+                                      state=DELIVERY_QUEUED_AT_RECEIVER)
+        if receiver_cannot_submit_now(observed) or _draft_structure(observed, text) != expected:
+            raise DispatchUnconfirmed("COMPOSE_STRUCTURE_CHANGED: preserve draft; no recovery key",
+                                      state=COMPOSE_OCCUPIED)
+    return expected
+
+
+_RECEIVER_UNSUBMITTABLE_RE = re.compile(r"Compacting context|Reconnecting", re.I)
+
+
+def _current_status_region(screen):
+    """Text from the receiver's latest status bullet down to its composer.
+
+    Measured 2026-10-08: a finished "• Compacting context" block stays in
+    scrollback above later "• Working" turns. Judging the whole screen made Tab
+    permanently unavailable and stranded a pasted payload in the composer.
+    Without a status bullet the whole pre-composer screen is used (fail closed).
+    """
+    rows = screen.splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), len(rows))
+    bullet = next((i for i in range(start - 1, -1, -1)
+                   if re.match(r"^\s*•\s", rows[i])), 0)
+    return "\n".join(rows[bullet:start])
+
+
+def receiver_cannot_submit_now(screen):
+    """Codex is compacting/reconnecting: neither Enter nor Tab submits a draft."""
+    return bool(_RECEIVER_UNSUBMITTABLE_RE.search(_current_status_region(screen)))
+
+
+def _compose_is_partial_payload(screen, text):
+    """The composer shows a strict prefix of our payload: still rendering.
+
+    Only decides whether to re-read (never authorizes a key), so the draft is
+    taken as the rows from the last prompt glyph up to the first blank row.
+    """
+    rows = screen.splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    if start is None:
+        return False
+    draft = [re.sub(r"^\s*[›❯][  ]?", "", rows[start], count=1)]
+    for row in rows[start + 1:]:
+        if not row.strip():
+            break
+        draft.append(row)
+    shown, full = "".join("".join(draft).split()), "".join(text.split())
+    return bool(shown) and shown != full and full.startswith(shown)
+
+
 def _codex_tab_queue_allowed(screen, text):
     """Only the measured Codex busy composer with its explicit queue key."""
     return bool(
@@ -1016,12 +1198,12 @@ def _codex_tab_queue_allowed(screen, text):
         and re.search(r"(?m)^\s*tab to queue message\s*$", screen)
         and re.search(r"(?m)^\s*›(?:\s|$)", screen)
         and _exact_pending_text(screen, text)
-        and not re.search(r"Compacting context|Reconnecting", screen, re.I)
+        and not receiver_cannot_submit_now(screen)
         and not pending_queue_holds(screen, text)
     )
 
 
-def _delivery_confirmed(before, after, marker, text=None):
+def _screen_consumption_candidate(before, after, marker, text=None):
     # A reused/stale marker followed by unrelated new activity is not proof
     # of this submission. Nonces must be fresh relative to the pre-paste view.
     from cmux_delivery_evidence import confirmed
@@ -1036,6 +1218,13 @@ def _delivery_confirmed(before, after, marker, text=None):
         and _new_activity_after_submit(before, after)
         and confirmed(sys.modules[__name__], before, after, marker, text)
     )
+
+
+def _delivery_confirmed(before, after, marker, text=None, *, native_binding=None, native_proof=None):
+    # 兼容读取接口也必须带原生回执；屏幕只能用于判断输入所有权。
+    from cmux_native_delivery import validate_proof
+    return bool(marker and text and native_binding and native_proof
+                and validate_proof(native_binding, text, native_proof))
 
 
 def _new_activity_after_submit(before, after):
@@ -1053,13 +1242,17 @@ def _new_activity_after_submit(before, after):
 
 def _queued_or_active_input(screen):
     """Do not issue a blind second Enter while a queued/active task owns the TUI."""
-    bordered = _claude_bordered_compose(screen)
-    if bordered is not None and any(
-            _CLAUDE_RUNNING_TOOL_FOOTER_RE.fullmatch(line)
-            for line in bordered[1]):
+    claude = _claude_bordered_compose(screen)
+    queue_region = "\n".join(claude["before"]) if claude is not None else screen
+    if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", queue_region, re.I | re.M):
         return True
-    if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", screen, re.I | re.M):
-        return True
+    if claude is not None:
+        if any(_CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in claude["footer"]):
+            return True
+        # 活动只读当前边框前的状态，防止历史 spinner 或输入正文冒充活动。
+        screen = next((row for row in reversed(claude["before"]) if row.strip()), "")
+        if re.fullmatch(r"\s*[✻✢✳✶✽◐◑◒◓]\s+[^\n]+(?:…|\.\.\.)\s*\([^\n]+\)\s*", screen):
+            return True
     if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):
         return True
     # Claude uses the same glyph for active and completed summaries. Restrict
@@ -1079,14 +1272,17 @@ def _queued_or_active_input(screen):
 
 
 def send_text(surface, text):
-    """
-    Paste raw text to a surface without consumption confirmation.
+    """原样粘贴 Unicode、字面转义和真实换行，显式禁止隐式提交。
 
-    cmux interprets a literal ``\\n`` in the payload as an Enter event, which is
-    useful for explicit shell startup commands. It is not valid evidence that a
-    task or callback was consumed; use :func:`submit_text` for those messages.
+    terminal.paste 的 submit_key=none 只粘贴；失败不得回退到会解码
+    字面反斜杠 n/r/t 的 CLI send。RPC 成功只证明传输接受，不是入站回执。
     """
-    _run("send", "--surface", surface, "--", text)
+    if not isinstance(text, str) or not text:
+        raise ValueError("nonempty paste text required")
+    proof = pin_workspace(surface)
+    _run("rpc", "terminal.paste", json.dumps(dict(
+        text=text, submit_key="none", workspace_id=proof["workspace_uuid"],
+        surface_id=proof["target_surface_uuid"]), ensure_ascii=False))
 
 
 def send_key(surface, key):
@@ -1147,19 +1343,12 @@ def receiver_input_kind(screen):
         # Claude's current idle UI has a bordered editor followed by several
         # status rows. Bind this case to both borders and the complete known
         # footer; an old model banner or unknown trailing row is insufficient.
-        border = re.compile(r"^\s*─{8,}\s*$")
-        model = re.compile(r"^\s*(?:\[claude-[\w.-]+(?:\[\d+m\])?\]|\[(?:Opus|Sonnet|Claude)\s+[^\]]+\])(?:\s*│\s*[^\n]+\bgit:\([^)]*\)[^\n]*)?\s*$", re.I)
-        footer = re.compile(
-            r"^\s*(?:[^\n]+\bgit:\([^)]*\)[^\n]*|"
-            r"上下文\s+[^\n]+|\d+\s+CLAUDE\.md\s*\|[^\n]+|"
-            r"✓\s+[^\n]+|▸\s+.+\(\d+/\d+\)|"
-            r"⏱\ufe0f?\s+\d+h\s+\d+m|◐\s+Bash:\s+[^\n]+|"
-            r"⏵⏵\s+bypass permissions on[^\n]*)\s*$")
-        if (prompts[-1] > 0 and border.fullmatch(lines[prompts[-1] - 1])
-                and len(tail) >= 4 and border.fullmatch(tail[1])
-                and model.fullmatch(tail[2])
-                and all(footer.fullmatch(row) for row in tail[3:])):
+        if _claude_bordered_compose(clean) is not None:
             return "AGENT_TUI"
+        if (tail[0].lstrip().startswith("❯") and
+                any(_CLAUDE_BORDER_RE.fullmatch(row.strip())
+                    for row in lines[max(prompts[-1] - 1, 0):])):
+            return "UNKNOWN"
         # A historical footer cannot override unknown current input below it.
         # Exactly one measured exception: the provider hint row renders BELOW
         # the model row, so skip that single known row (and nothing else)
@@ -1199,13 +1388,17 @@ def require_clearable_agent_input(screen, surface):
 
 
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
-                force_compose=False, delivery_observer=None, *, reconcile_only=False):
-    """Journal ordinary messages; task/callback controllers retain their journals."""
+                force_compose=False, delivery_observer=None, *, reconcile_only=False,
+                recover_stranded=False, native_binding=None, native_attempt=None):
+    """公开发送统一落原 journal；屏幕变化和按键返回不构成送达。"""
+    if recover_stranded and (task_pack_path is not None or delivery_observer is not None):
+        raise TaskPackContractError('RECOVER_STRANDED_MESSAGE_ONLY')
     if delivery_observer is not None:
         if reconcile_only:
             raise TaskPackContractError('RECONCILE_WITH_ORIGINAL_CONTROLLER')
         return _submit_text_once(surface, text, marker, confirm_lines, task_pack_path,
-                                 force_compose, delivery_observer)
+                                 force_compose, delivery_observer,
+                                 native_binding=native_binding, native_attempt=native_attempt)
     if task_pack_path is not None:
         return submit_task_pack(surface, text, task_pack_path, marker, confirm_lines,
                                 force_compose, reconcile_only=reconcile_only)
@@ -1213,196 +1406,177 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
         raise TaskPackContractError('MESSAGE_PRESERVE_COMPOSE: no forced replacement')
     from cmux_message_journal import deliver
     return deliver(sys.modules[__name__], surface, text, marker, confirm_lines,
-                   reconcile_only=reconcile_only)
+                   reconcile_only=reconcile_only, recover_stranded=recover_stranded)
+
+
+def _delivery_delay(name, default, maximum=5.0):
+    try:
+        value = float(os.environ.get(name, str(default)))
+        return max(0.0, min(maximum, value)) if math.isfinite(value) else default
+    except ValueError:
+        return default
+
+
+def _observe_native(surface, text, native_binding, native_attempt):
+    from cmux_native_delivery import scan_original
+    if native_attempt is None:
+        raise TaskPackContractError('ORIGINAL_NATIVE_JOURNAL_REQUIRED')
+    return scan_original(sys.modules[__name__], surface, text, native_attempt, native_binding)
+
+
+def _stable_owned_draft(surface, text, confirm_lines, observer, *, expected_structure=None):
+    """只读等待两次完整草稿；截断、粘贴摘要、压缩和外来草稿都不授权按键。"""
+    count = 0
+    previous = None
+    screen = ""
+    reads = 20
+    while reads:
+        reads -= 1
+        time.sleep(_delivery_delay("CMUX_AGENT_SUBMIT_DELAY", 0.25, 1.0))
+        screen = read_screen(surface, lines=confirm_lines)
+        if observer:
+            observer("DRAFT_OBSERVATION", screen)
+        if expected_structure is not None and pending_queue_holds(screen, text):
+            raise DispatchUnconfirmed("ALREADY_QUEUED: no recovery key",
+                                      state=DELIVERY_QUEUED_AT_RECEIVER)
+        if not receiver_cannot_submit_now(screen) and _exact_pending_text(screen, text):
+            current = _draft_structure(screen, text)
+            if expected_structure is not None and current != expected_structure:
+                raise DispatchUnconfirmed("COMPOSE_STRUCTURE_CHANGED: no recovery key",
+                                          state=COMPOSE_OCCUPIED)
+            count = count + 1 if current == previous else 1
+            previous = current
+            if count == 2:
+                return screen
+        else:
+            if expected_structure is not None:
+                raise DispatchUnconfirmed("COMPOSE_OWNERSHIP_REVOKED: no recovery key",
+                                          state=COMPOSE_OCCUPIED)
+            count = 0
+            previous = None
+    raise DispatchUnconfirmed(
+        "DRAFT_NOT_READY: original paste preserved; no submission key sent",
+        state=STRANDED_IN_COMPOSE)
+
+
+def _wait_native_after_key(surface, text, marker, confirm_lines, observer,
+                           native_binding, native_attempt, observed):
+    """有限等待同一次输入的原生记录；不重贴、不发键、不按静屏推定失败。"""
+    screen = ""
+    result = {}
+    for _ in range(4):
+        time.sleep(_delivery_delay("CMUX_AGENT_POST_SUBMIT_DELAY", 0.75))
+        screen = read_screen(surface, lines=confirm_lines)
+        if observer:
+            observer(observed, screen)
+        result = _observe_native(surface, text, native_binding, native_attempt)
+        if result.get("confirmed") is True:
+            return screen, result
+        if pending_queue_holds(screen, marker) or result.get("state") == "NATIVE_QUEUED":
+            break
+    return screen, result
+
+
+def _unconfirmed_native(screen, marker, result):
+    if result.get("state") == "NATIVE_QUEUED" or pending_queue_holds(screen, marker):
+        state = DELIVERY_QUEUED_AT_RECEIVER
+    elif _prompt_block_pending(screen, marker):
+        state = STRANDED_IN_COMPOSE
+    else:
+        state = DELIVERY_UNVERIFIED_BY_DETECTOR
+    raise DispatchUnconfirmed(
+        "NATIVE_DELIVERY_UNCONFIRMED: original attempt preserved; key/queue is not reception; "
+        "reconcile original without repasting", state=state)
 
 
 def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
-                      force_compose=False, delivery_observer=None):
-    """Submit text with lowercase Enter and prove the TUI consumed it.
-
-    ``cmux send`` only pastes text.  Submission is deliberately separate so a
-    caller cannot mistake a successful paste for an executed prompt.  When a
-    marker is supplied it must disappear from the active compose block -- the
-    LAST prompt-glyph block on screen, either UI's glyph (see
-    ``_PROMPT_GLYPH_RE``). An earlier block alone is insufficient.
-    Marker-linked new activity AND an empty composer are required. Unrelated
-    tool output or a marker that scrolled away cannot certify consumption.
-    One bounded retry handles a known paste-without-submit event, but queued or
-    active input is never double-submitted.
-    """
+                      force_compose=False, delivery_observer=None, *,
+                      native_binding=None, native_attempt=None):
+    """一次粘贴、有限按键；只有原生目标 user 记录能产生 confirmed=True。"""
+    from cmux_native_delivery import require_bound
+    if native_attempt is None or delivery_observer is None:
+        raise TaskPackContractError("ORIGINAL_NATIVE_JOURNAL_REQUIRED")
+    if force_compose:
+        raise TaskPackContractError("NATIVE_DELIVERY_PRESERVE_COMPOSER")
     if task_pack_path is not None:
         pack = validate_task_pack_contract(task_pack_path, prompt_text=text)
         from availability_contract import require_action
         require_action(pack["task_id"], "dispatch", pack)
     elif _looks_like_task_dispatch(text):
-        raise TaskPackContractError(
-            "TASK_PACK_REQUIRED: task dispatches must use submit_task_pack with a "
-            "finalized pack carrying required_skill and confirmed completion callback"
-        )
-
+        raise TaskPackContractError("TASK_PACK_REQUIRED")
+    require_bound(sys.modules[__name__], surface, native_binding, text)
     before = read_screen(surface, lines=confirm_lines)
     require_agent_input(before, surface)
-    if not force_compose and compose_block_text(before) is not None and not compose_block_is_empty(before):
-        raise DispatchUnconfirmed(
-            f"COMPOSE_OCCUPIED surface={surface}; no input sent; preserve existing text",
-            state=COMPOSE_OCCUPIED,
-        )
-    if force_compose:
-        # The harness enables this supervisor-owned compose replacement by
-        # default for this user; direct library callers must opt in explicitly.
-        compose = compose_block_text(before)
-        if compose and not compose_block_is_empty(before):
-            require_clearable_agent_input(before, surface)
-            send_key(surface, "escape")
-            time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-            cleared = read_screen(surface, lines=confirm_lines)
-            require_clearable_agent_input(cleared, surface)
-            if not compose_block_is_empty(cleared):
-                # Claude's terminal composer may accept Escape without
-                # editing the buffer.  The override is already explicit and
-                # fingerprints the known buffer, so focus its pane and issue
-                # one line-clear request before failing closed.
-                focus_surface(surface)
-                send_key(surface, "ctrl+u")
-                time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-                cleared = read_screen(surface, lines=confirm_lines)
-                require_clearable_agent_input(cleared, surface)
-                if not compose_block_is_empty(cleared):
-                    # Claude's multiline editor can also ignore ctrl+u.  At
-                    # this point the operator explicitly owns the fingerprinted
-                    # idle buffer and both gentler clears failed, so cancel that
-                    # compose once.  Never use ctrl+c on an active command.
-                    send_key(surface, "ctrl+c")
-                    time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-                    cleared = read_screen(surface, lines=confirm_lines)
-                    require_clearable_agent_input(cleared, surface)
-                    if not compose_block_is_empty(cleared):
-                        clear_known_compose_by_delete(surface, compose)
-                        time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-                        cleared = read_screen(surface, lines=confirm_lines)
-                        require_clearable_agent_input(cleared, surface)
-                        if (
-                            not compose_block_is_empty(cleared)
-                            and _queued_or_active_input(cleared)
-                        ):
-                            raise DispatchUnconfirmed(
-                                f"DISPATCH_UNCONFIRMED marker={marker or '<none>'} "
-                                f"surface={surface} (forced compose discard did not clear)",
-                                state=COMPOSE_OCCUPIED,
-                            )
-                        # An idle Claude virtual suggestion is rendered after
-                        # the prompt glyph but is not part of the editable
-                        # buffer. It survives every editing key and is replaced
-                        # atomically by the first pasted character. The user has
-                        # explicitly made force-compose authoritative, so after
-                        # the bounded real-buffer erase we may paste through an
-                        # idle residual rendering. Active/queued input remains
-                        # protected by the branch above.
-            before = cleared
-            require_agent_input(before, surface)
-    if delivery_observer:
-        delivery_observer("PASTE_INTENT", before)
+    if not compose_block_is_empty(before):
+        raise DispatchUnconfirmed("COMPOSE_OCCUPIED: preserve existing text; no input sent",
+                                  state=COMPOSE_OCCUPIED)
+    if receiver_cannot_submit_now(before):
+        raise DispatchUnconfirmed("RECEIVER_COMPACTING: no input sent",
+                                  state=SUBMISSION_ABORTED_BUSY)
+    delivery_observer("PASTE_INTENT", before)
+    require_bound(sys.modules[__name__], surface, native_binding, text)
     send_text(surface, text)
-    if delivery_observer:
-        delivery_observer("PASTED")
-    time.sleep(float(os.environ.get("CMUX_AGENT_SUBMIT_DELAY", "0.25")))
-    if delivery_observer:
-        delivery_observer("ENTER_INTENT")
-    send_key(surface, "enter")
-    if delivery_observer:
+    delivery_observer("PASTED")
+    screen = _stable_owned_draft(surface, text, confirm_lines, delivery_observer)
+
+    # 忙碌 Codex 显示 Tab 排队时直接使用该动作；不先用 Enter 向草稿插入换行。
+    queue = _codex_tab_queue_allowed(screen, text)
+    key = "tab" if queue else "enter"
+    intent = "QUEUE_TAB_INTENT" if queue else "ENTER_INTENT"
+    observed = "POST_QUEUE_TAB_OBSERVATION" if queue else "POST_ENTER_OBSERVATION"
+    if _queued_or_active_input(screen) and not queue and native_binding['provider'] == 'codex':
+        raise DispatchUnconfirmed("STRANDED_IN_COMPOSE: no supported submit action",
+                                  state=STRANDED_IN_COMPOSE)
+    delivery_observer(intent, screen)
+    require_bound(sys.modules[__name__], surface, native_binding, text)
+    send_key(surface, key)
+    if not queue:
         delivery_observer("ENTER_SENT")
-    time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-    if not marker:
-        return {"confirmed": False, "submitted": True, "retries": 0,
-                "state": DELIVERY_UNVERIFIED_BY_DETECTOR}
+    screen, result = _wait_native_after_key(surface, text, marker, confirm_lines,
+        delivery_observer, native_binding, native_attempt, observed)
+    if result.get("confirmed") is True:
+        return dict(result, retries=0, submission_key=key)
+    if queue or pending_queue_holds(screen, marker) or result.get("state") == "NATIVE_QUEUED":
+        _unconfirmed_native(screen, marker, result)
 
+    # 首次提交只有一个键。Enter 可能插入换行，未见原生记录不能自动补键。
+    _unconfirmed_native(screen, marker, result)
+
+
+def recover_stranded_once(surface, text, marker, before, confirm_lines=200,
+                          delivery_observer=None, wait_seconds=None, *,
+                          native_binding=None, native_attempt=None):
+    """原 attempt 最多补一个键；原生绑定缺失不允许补造，也不重新粘贴。"""
+    from cmux_native_delivery import require_bound
+    if native_attempt is None or delivery_observer is None:
+        raise TaskPackContractError("ORIGINAL_NATIVE_JOURNAL_REQUIRED")
+    original = json.loads(Path(native_attempt).read_text())
+    result = _observe_native(surface, text, native_binding, native_attempt)
+    if result.get("confirmed") is True:
+        return dict(result, retries=0, recovered="already_consumed")
+    if result.get('state') != 'NATIVE_PENDING':
+        raise DispatchUnconfirmed('NATIVE_RECOVERY_UNPROVEN: reconcile original without input')
     screen = read_screen(surface, lines=confirm_lines)
-    if delivery_observer:
-        delivery_observer("POST_ENTER_OBSERVATION", screen)
-    # A slow first render is not a failed delivery. Observe the same submission
-    # once more; never paste or press Enter while its outcome is unknown.
-    if (not _submission_confirmed(screen, marker)
-            and not _prompt_block_pending(screen, marker)
-            and not _new_activity_after_submit(before, screen)
-            and not pending_queue_holds(screen, marker)):
-        try:
-            late_delay = float(os.environ.get("CMUX_AGENT_LATE_CONFIRM_DELAY", "3.0"))
-        except ValueError:
-            late_delay = 3.0
-        if not math.isfinite(late_delay):
-            late_delay = 3.0
-        time.sleep(max(0.0, min(5.0, late_delay)))
-        screen = read_screen(surface, lines=confirm_lines)
-        if delivery_observer:
-            delivery_observer("POST_ENTER_OBSERVATION", screen)
-        if _delivery_confirmed(before, screen, marker, text):
-            return {"confirmed": True, "retries": 0, "late_confirmation": True}
-    # This marker's explicit queue entry overrides activity from earlier work.
-    # Check it before inferred consumption as well as before any retry path.
-    if pending_queue_holds(screen, marker):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(delivery queued at receiver; awaiting its tool boundary — wait, do not resend)",
-            state=DELIVERY_QUEUED_AT_RECEIVER,
-        )
-    if _delivery_confirmed(before, screen, marker, text):
-        return {"confirmed": True, "retries": 0}
-    if not _prompt_block_pending(screen, marker):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(marker not visible after submit)",
-            state=DELIVERY_UNVERIFIED_BY_DETECTOR,
-        )
-    # Enter does not queue a message in the measured busy Codex UI. Only
-    # its exact, displayed Tab action and our unchanged full payload authorize
-    # one queue key. Never paste again, press on compaction, or call it consumed.
+    delivery_observer("RECOVERY_OBSERVATION", screen)
+    if result.get("state") == "NATIVE_QUEUED" or pending_queue_holds(screen, marker):
+        _unconfirmed_native(screen, marker, result)
+    structure = require_original_draft(original, screen, text)
+    screen = _stable_owned_draft(surface, text, confirm_lines, delivery_observer,
+                                 expected_structure=structure)
     if _codex_tab_queue_allowed(screen, text):
-        if delivery_observer:
-            delivery_observer("QUEUE_TAB_INTENT", screen)
-        send_key(surface, "tab")
-        time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-        screen = read_screen(surface, lines=confirm_lines)
-        if delivery_observer:
-            delivery_observer("POST_QUEUE_TAB_OBSERVATION", screen)
-        if _delivery_confirmed(before, screen, marker, text):
-            return {"confirmed": True, "retries": 0, "queue_key": "tab"}
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(one explicit Tab queue action observed; inspect original, never repaste)",
-            state=classify_submission_failure(screen, marker, submitted=True))
-
-    if _queued_or_active_input(screen):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(queued/active input; no blind retry)",
-            state=COMPOSE_OCCUPIED,
-        )
-
-    if not _exact_pending_text(screen, text):
-        raise DispatchUnconfirmed(
-            f"COMPOSE_CHANGED surface={surface}; full payload ownership unconfirmed; no extra key",
-            state=COMPOSE_OCCUPIED)
-    require_agent_input(screen, surface)
-    if delivery_observer:
-        delivery_observer("EXTRA_ENTER_INTENT", screen)
-    send_key(surface, "enter")
-    time.sleep(float(os.environ.get("CMUX_AGENT_POST_SUBMIT_DELAY", "0.75")))
-    screen = read_screen(surface, lines=confirm_lines)
-    if delivery_observer:
-        delivery_observer("POST_ENTER_OBSERVATION", screen)
-    if pending_queue_holds(screen, marker):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(delivery queued at receiver after one retry — wait, do not resend)",
-            state=DELIVERY_QUEUED_AT_RECEIVER,
-        )
-    if not _delivery_confirmed(before, screen, marker, text):
-        raise DispatchUnconfirmed(
-            f"DISPATCH_UNCONFIRMED marker={marker} surface={surface} "
-            "(compose still pending or marker missing after one retry)",
-            state=classify_submission_failure(screen, marker, submitted=True),
-        )
-    return {"confirmed": True, "retries": 1}
+        key, intent, observed = "tab", "QUEUE_TAB_INTENT", "POST_QUEUE_TAB_OBSERVATION"
+    elif not _queued_or_active_input(screen):
+        key, intent, observed = "enter", "EXTRA_ENTER_INTENT", "POST_ENTER_OBSERVATION"
+    else:
+        _unconfirmed_native(screen, marker, result)
+    delivery_observer(intent, screen)
+    require_bound(sys.modules[__name__], surface, native_binding, text)
+    send_key(surface, key)
+    screen, result = _wait_native_after_key(surface, text, marker, confirm_lines,
+        delivery_observer, native_binding, native_attempt, observed)
+    if result.get("confirmed") is True:
+        return dict(result, retries=0, recovered=key)
+    _unconfirmed_native(screen, marker, result)
 
 
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
@@ -1638,6 +1812,9 @@ def _cli_main(argv=None):
     submit.add_argument("--marker")
     submit.add_argument("--reconcile-only", action="store_true",
                         help="observe the original ordinary message without terminal input")
+    submit.add_argument("--recover-stranded", action="store_true",
+                        help="Enter was sent but the payload is still in the receiver "
+                             "composer: send one queue/submit key, never repaste")
     submit.add_argument("--confirm-lines", type=int, default=200)
     submit.add_argument(
         "--force-compose",
@@ -1690,6 +1867,7 @@ def _cli_main(argv=None):
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
                 reconcile_only=args.reconcile_only,
+                **({"recover_stranded": True} if args.recover_stranded else {}),
             )
             result = {"command": "submit_text", "surface": args.surface, **result}
         elif args.command in {"submit-task-pack", "submit_task_pack"}:

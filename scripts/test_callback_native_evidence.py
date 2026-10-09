@@ -1,193 +1,345 @@
+"""原 receiver 核收回归：原 attempt 来自真实 submit，不追补 native 证据。"""
+import copy
+import fcntl
 import hashlib
 import json
+import os
 import tempfile
 import unittest
-import fcntl
-from unittest.mock import patch, Mock
 from pathlib import Path
+from unittest.mock import patch
 
+import cmux_bridge as b
 from callback_native_evidence import validate, reconcile_received
+from cmux_callback_journal import verified_receipt
+from cmux_native_delivery import NativeDeliveryError
 from delivery_receipts import ReceiptError
+from native_test_support import NativeFixture
 
 
-class NativeEvidenceTests(unittest.TestCase):
+IDLE = '› Ask Codex to do anything\nGPT-6-Astra high\n? for shortcuts'
+
+
+class _NativeCallbackCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.packfile = self.root / 'pack.json'
         self.report = self.root / 'report.md'
         self.report.write_text('frozen report')
         self.gatefile = self.root / 'gate.json'
-        self.gate = dict(status='PASS', task_id='task', supervisor_surface_uuid='SUP', workspace_uuid='WS')
+        self.gate = dict(status='PASS', task_id='task', supervisor='surface:1',
+                         supervisor_surface_uuid='SUP', workspace_uuid='WS',
+                         executor='surface:2', executor_surface_uuid='EXEC')
         self.write(self.gatefile, self.gate)
-        self.pack = dict(task_id='task', completion_nonce='nonce', callback_target='surface:1',
-                         completion_callback='DONE|task|nonce|REPORT=' + str(self.report),
-                         completion_receipt=str(self.root / 'receipt.json'), report=str(self.report),
-                         identity_gate=str(self.gatefile), executor_uuid='EXEC',
-                         finalized_at='2026-01-01T00:00:00+00:00')
+        self.pack = dict(
+            draft=False, task_id='task', completion_nonce='nonce12345',
+            callback_target='surface:1', executor='surface:2', executor_uuid='EXEC',
+            completion_callback='DONE|task|nonce12345|REPORT=' + str(self.report),
+            completion_receipt=str(self.root / 'receipt.json'), report=str(self.report),
+            identity_gate=str(self.gatefile), finalized_at='2026-01-01T00:00:00+00:00',
+            required_skill=str(b.COLLABORATION_SKILL_PATH),
+            completion_delivery=dict(transport='cmux_bridge.submit_completion_callback',
+                                     require_confirmed=True),
+            availability_state=str(self.root / 'availability.json'))
         self.write(self.packfile, self.pack)
-        journal = self.root / 'receipt-attempts'
-        journal.mkdir()
-        self.attemptfile = journal / 'attempt-0001.json'
-        binding = {k: self.pack[k] for k in ('task_id', 'completion_nonce', 'callback_target',
-                                            'completion_callback', 'report')}
-        binding.update(task_pack_sha256=self.sha(self.packfile), report_sha256=self.sha(self.report),
-                       report_bytes=self.report.stat().st_size,
-                       identity=dict(caller_surface_uuid='EXEC', target_surface_uuid='SUP',
-                                     workspace_uuid='WS', target_pane_uuid='PANE'))
-        self.attempt = dict(binding=binding, events=[
-            dict(phase='PASTE_INTENT', screen='idle', screen_sha256=hashlib.sha256(b'idle').hexdigest()[:16]),
-            dict(phase='ENTER_INTENT', at_epoch=1767225601)])
-        self.write(self.attemptfile, self.attempt)
-        self.transcript = self.root / 'native.jsonl'
-        self.record = dict(timestamp='2026-01-01T00:00:02Z', type='response_item',
-                           payload=dict(type='message', role='user', content=[
-                               dict(type='input_text', text=self.pack['completion_callback'])]))
-        self.transcribe()
+        self.receipt = Path(self.pack['completion_receipt'])
+        self.original_identity = dict(
+            caller_surface_uuid='EXEC', target_surface_uuid='SUP',
+            workspace_uuid='WS', target_pane_uuid='PANE')
+        self.native = NativeFixture.attach(self, home=self.root,
+                                           identity=copy.deepcopy(self.original_identity))
+        # 在原绑定产生之前选定 receiver 的真实原生目录；之后不改 binding/fence。
+        self.native.native_root = self.root / '.codex/sessions'
+        self.native.native_root.mkdir(parents=True)
+        destination = self.native.native_root / self.native.transcript.name
+        self.native.transcript.rename(destination)
+        self.native.transcript = destination
+        self.transcript = destination
+        self.meta = destination.read_bytes()
+        self.native.pin.side_effect = lambda *args, **kwargs: copy.deepcopy(self.native.identity)
+        self.journal = self.receipt.with_name(self.receipt.stem + '-attempts')
 
-    def write(self, p, v):
-        p.write_text(json.dumps(v))
+        # task-pack、availability、native 绑定、PASTE fence、journal 都走真实实现。
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(self.pack['completion_callback']), IDLE)):
+            with self.assertRaises(b.DispatchUnconfirmed):
+                b.submit_completion_callback(self.packfile)
+        self.native.send.assert_called_once_with('surface:1', self.pack['completion_callback'])
+        self.native.key.assert_called_once_with('surface:1', 'enter')
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(len(list(self.journal.glob('attempt-*.json'))), 1)
+        self.attemptfile = self.journal / 'attempt-0001.json'
+        self.attempt = json.loads(self.attemptfile.read_text())
+        self.lockfile = self.journal / 'delivery.lock'
+        pastes = [e for e in self.attempt['events'] if e['phase'] == 'PASTE_INTENT']
+        self.assertEqual(len(pastes), 1)
+        self.assertIn('native_paste_fence', pastes[0])
+        self.assertIn('native_binding', self.attempt)
 
-    def sha(self, p):
-        return hashlib.sha256(p.read_bytes()).hexdigest()
+        # 首次提交没有 user 入站；核收用例必须显式追加完整 user 记录。
+        self.native.append_user(self.pack['completion_callback'])
+        self.record = json.loads(self.transcript.read_bytes().splitlines()[1])
+        self.native.send.reset_mock()
+        self.native.key.reset_mock()
+        guard = patch.object(b, 'read_screen',
+                             side_effect=AssertionError('native settlement must not read screen'))
+        self.screen = guard.start()
+        self.addCleanup(guard.stop)
+        env = patch.dict(os.environ, {'CODEX_THREAD_ID': self.native.session_id})
+        env.start()
+        self.addCleanup(env.stop)
+
+    @staticmethod
+    def write(path, value):
+        path.write_text(json.dumps(value))
 
     def transcribe(self):
-        self.transcript.write_text(json.dumps(dict(type='session_meta', payload=dict(id='session'))) +
-                                   '\n' + json.dumps(self.record) + '\n')
+        # 仅修改待校验的原生记录；保留原 inode、meta 和原 fence 之前的字节。
+        self.transcript.write_bytes(self.meta + json.dumps(self.record).encode() + b'\n')
 
-    def check(self):
-        return validate(self.packfile, self.attemptfile, self.transcript, 2, 'session')
+    def files(self, excluding=()):
+        excluded = {Path(p) for p in excluding}
+        result = {}
+        for path in sorted(self.root.rglob('*')):
+            if path in excluded:
+                continue
+            stat = path.lstat()
+            if path.is_dir():
+                value = ('directory', stat.st_dev, stat.st_ino, stat.st_mode)
+            else:
+                value = ('file', stat.st_dev, stat.st_ino, stat.st_mode,
+                         stat.st_mtime_ns, stat.st_ctime_ns, path.read_bytes())
+            result[str(path.relative_to(self.root))] = value
+        return result
 
-    def test_exact_native_record_needs_no_visible_screen_and_creates_no_receipt(self):
-        self.assertEqual(self.check()['status'], 'EXACT_NATIVE_RECEPTION')
-        self.assertFalse(Path(self.pack['completion_receipt']).exists())
+    def assert_no_input(self):
+        self.native.send.assert_not_called()
+        self.native.key.assert_not_called()
+        self.screen.assert_not_called()
+
+    def check(self, *, line=2, session_id=None):
+        return validate(self.packfile, self.attemptfile, self.transcript, line,
+                        session_id or self.native.session_id)
+
+    def assert_rejected(self, action=None, error=(ReceiptError, NativeDeliveryError)):
+        before = self.files()
+        with self.assertRaises(error):
+            (action or self.check)()
+        self.assertEqual(self.files(), before)
+        self.assert_no_input()
+
+    def omit_binding(self):
+        self.attempt.pop('native_binding')
+        self.write(self.attemptfile, self.attempt)
+
+    def omit_fence(self):
+        paste = next(e for e in self.attempt['events'] if e['phase'] == 'PASTE_INTENT')
+        paste.pop('native_paste_fence')
+        self.write(self.attemptfile, self.attempt)
+
+    def write_legacy_attempt(self):
+        # 故意保留旧人工 journal 形状作为负例，绝不伪造原 binding/fence。
+        self.write(self.attemptfile, dict(binding=self.attempt['binding'], events=[
+            dict(phase='PASTE_INTENT', screen='idle',
+                 screen_sha256=hashlib.sha256(b'idle').hexdigest()[:16]),
+            dict(phase='ENTER_INTENT', at_epoch=1767225601)]))
+
+
+class NativeEvidenceTests(_NativeCallbackCase):
+    def test_exact_native_record_requires_original_fence_and_creates_no_receipt(self):
+        before = self.files()
+        evidence = self.check()
+        self.assertEqual(evidence['status'], 'EXACT_NATIVE_RECEPTION')
+        self.assertEqual(evidence['native_proof']['session_id'], self.native.session_id)
+        self.assertEqual(evidence['native_proof']['path'], str(self.transcript))
+        self.assertEqual(evidence['native_proof']['sha256'],
+                         hashlib.sha256(self.transcript.read_bytes().splitlines(keepends=True)[1]).hexdigest())
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(self.files(), before)
+        self.assert_no_input()
 
     def test_quote_or_tool_output_is_not_reception(self):
         for role in ('assistant', 'tool'):
-            self.record['payload']['role'] = role
-            self.transcribe()
-            with self.assertRaises(ReceiptError): self.check()
+            with self.subTest(role=role):
+                self.record['payload']['role'] = role
+                self.transcribe()
+                self.assert_rejected()
 
     def test_truncated_or_extended_payload_is_not_exact(self):
-        for text in ('DONE|task|nonce|…', self.pack['completion_callback'] + ' extra'):
-            self.record['payload']['content'][0]['text'] = text
-            self.transcribe()
-            with self.assertRaises(ReceiptError): self.check()
+        for text in ('DONE|task|nonce12345|…', self.pack['completion_callback'] + ' extra'):
+            with self.subTest(text=text):
+                self.record['payload']['content'][0]['text'] = text
+                self.transcribe()
+                self.assert_rejected()
 
-    def test_pre_send_record_rejected(self):
-        self.record['timestamp'] = '2026-01-01T00:00:00Z'
+    def test_record_after_finalization_but_before_original_paste_is_rejected(self):
+        self.record['timestamp'] = '2026-01-01T00:00:02Z'
         self.transcribe()
-        with self.assertRaises(ReceiptError): self.check()
+        self.assert_rejected()
 
     def test_changed_report_rejected(self):
         self.report.write_text('changed report')
-        with self.assertRaises(ReceiptError): self.check()
+        self.assert_rejected()
 
     def test_changed_pack_rejected(self):
         self.packfile.write_text(self.packfile.read_text() + ' ')
-        with self.assertRaises(ReceiptError): self.check()
+        self.assert_rejected()
 
     def test_wrong_original_sender_rejected(self):
         self.attempt['binding']['identity']['caller_surface_uuid'] = 'OTHER'
         self.write(self.attemptfile, self.attempt)
-        with self.assertRaises(ReceiptError): self.check()
+        self.assert_rejected()
 
     def test_no_enter_or_duplicate_paste_rejected(self):
-        original = self.attempt['events'][:]
-        for events in ([original[0]], [original[0], original[0], original[1]]):
-            self.attempt['events'] = events
-            self.write(self.attemptfile, self.attempt)
-            with self.assertRaises(ReceiptError): self.check()
+        original = copy.deepcopy(self.attempt['events'])
+        paste = next(e for e in original if e['phase'] == 'PASTE_INTENT')
+        for events in ([e for e in original if e['phase'] != 'ENTER_INTENT'],
+                       original + [copy.deepcopy(paste)]):
+            with self.subTest(phases=[e['phase'] for e in events]):
+                self.attempt['events'] = events
+                self.write(self.attemptfile, self.attempt)
+                self.assert_rejected()
 
     def test_newer_attempt_rejected(self):
         self.write(self.attemptfile.with_name('attempt-0002.json'), self.attempt)
-        with self.assertRaises(ReceiptError): self.check()
+        self.assert_rejected()
+
+    def test_missing_original_binding_rejected_without_backfill(self):
+        self.omit_binding()
+        self.assert_rejected()
+
+    def test_missing_original_fence_rejected_without_backfill(self):
+        self.omit_fence()
+        self.assert_rejected()
+
+    def test_missing_original_paste_time_rejected_without_backfill(self):
+        paste = next(e for e in self.attempt['events'] if e['phase'] == 'PASTE_INTENT')
+        paste.pop('at_epoch')
+        self.write(self.attemptfile, self.attempt)
+        self.assert_rejected()
+
+    def test_manual_legacy_journal_cannot_gain_native_confirmation(self):
+        self.write_legacy_attempt()
+        self.assert_rejected()
+
+    def test_wrong_session_rejected(self):
+        self.assert_rejected(lambda: self.check(session_id='other-session'))
+
+    def test_other_transcript_with_identical_content_rejected(self):
+        other = self.transcript.with_name('copy-' + self.transcript.name)
+        other.write_bytes(self.transcript.read_bytes())
+        self.transcript = other
+        self.assert_rejected()
+
+    def test_matching_later_user_does_not_replace_the_explicit_line(self):
+        self.record['payload']['role'] = 'assistant'
+        self.transcribe()
+        self.native.append_user(self.pack['completion_callback'])
+        self.assert_rejected()
+        self.assertEqual(self.check(line=3)['status'], 'EXACT_NATIVE_RECEPTION')
+        self.assert_no_input()
+
+    def test_replaced_transcript_inode_rejected(self):
+        data = self.transcript.read_bytes()
+        self.transcript.rename(self.transcript.with_suffix('.original'))
+        self.transcript.write_bytes(data)
+        self.assert_rejected()
 
 
-class NativeSettlementTests(NativeEvidenceTests):
+class NativeSettlementTests(_NativeCallbackCase):
     def setUp(self):
         super().setUp()
-        sessions = self.root / '.codex/sessions'
-        sessions.mkdir(parents=True)
-        self.transcript = sessions / 'native.jsonl'
-        self.transcribe()
-        self.lockfile = self.attemptfile.parent / 'delivery.lock'
-        self.lockfile.touch()
-        self.bridge = Mock()
-        self.bridge.validate_task_pack_contract.return_value = self.pack
-        self.live = dict(caller_surface_uuid='SUP', target_surface_uuid='EXEC', workspace_uuid='WS')
-        for mock in (patch('pathlib.Path.home', return_value=self.root),
-                     patch.dict('os.environ', {'CODEX_THREAD_ID': 'session'}),
-                     patch('delivery_receipts.bind', return_value=self.live),
-                     patch('availability_contract.require_action')):
-            mock.start()
-            self.addCleanup(mock.stop)
+        self.live = dict(caller_surface_uuid='SUP', target_surface_uuid='EXEC',
+                         workspace_uuid='WS', caller_pane_uuid='PANE',
+                         target_pane_uuid='EXEC-PANE')
+        self.native.identity = self.live
 
     def settle(self):
-        return reconcile_received(self.packfile, self.bridge, transcript=self.transcript, line=2)
+        return reconcile_received(self.packfile, b, transcript=self.transcript, line=2)
 
-    def test_publish_preserves_attempt_and_lock(self):
-        before = self.attemptfile.read_bytes()
-        inode = self.lockfile.stat().st_ino
+    def read_receipt(self):
+        before = self.files()
+        result = verified_receipt(b, 'surface:1', self.packfile)
+        self.assertEqual(self.files(), before)
+        self.assert_no_input()
+        return result
+
+    def test_publish_preserves_original_attempt_lock_and_send_budget(self):
+        before = self.files()
         receipt = self.settle()
         self.assertTrue(receipt['confirmed'])
+        self.assertEqual(receipt['confirmation_source'], 'native_user_message_v1')
         self.assertEqual(receipt['input_operations'], 0)
-        self.assertEqual(before, self.attemptfile.read_bytes())
-        self.assertEqual(inode, self.lockfile.stat().st_ino)
-        self.assertEqual(self.bridge.method_calls, [unittest.mock.call.validate_task_pack_contract(self.packfile)])
+        self.assertEqual(receipt['native_binding'], self.attempt['native_binding'])
+        self.assertEqual(receipt['native_proof']['session_id'], self.native.session_id)
+        self.assertEqual(self.files(excluding=(self.receipt,)), before)
+        self.assert_no_input()
 
     def test_active_sender_lock_rejects(self):
-        with self.lockfile.open('rb') as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            with self.assertRaises(ReceiptError): self.settle()
-        self.assertFalse(Path(self.pack['completion_receipt']).exists())
+        with self.lockfile.open('rb') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assert_rejected(self.settle)
+        self.assertFalse(self.receipt.exists())
 
     def test_wrong_receiver_rejects(self):
         self.live['caller_surface_uuid'] = 'OTHER'
-        with self.assertRaises(ReceiptError): self.settle()
+        self.assert_rejected(self.settle)
 
     def test_replaced_lock_during_validation_rejects_without_receipt(self):
-        original = validate
-        def replace_lock(*args, **kwargs):
-            result = original(*args, **kwargs)
-            self.lockfile.unlink()
-            self.lockfile.touch()
-            return result
-        with patch('callback_native_evidence.validate', side_effect=replace_lock):
+        original_attempt = self.attemptfile.read_bytes()
+        original_inode = self.lockfile.stat().st_ino
+        retired = self.lockfile.with_suffix('.original')
+        real_open = os.open
+        replaced = []
+
+        def replace_lock(path, *args, **kwargs):
+            descriptor = real_open(path, *args, **kwargs)
+            if Path(path) == self.transcript and not replaced:
+                # 只在原生文件 I/O 边界注入锁替换；proof/validate 均运行真实代码。
+                self.lockfile.rename(retired)
+                new_fd = real_open(self.lockfile, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                os.close(new_fd)
+                replaced.append(True)
+            return descriptor
+
+        with patch.object(os, 'open', side_effect=replace_lock):
             with self.assertRaisesRegex(ReceiptError, 'lock was replaced'):
                 self.settle()
-        self.assertFalse(Path(self.pack['completion_receipt']).exists())
+        self.assertEqual(replaced, [True])
+        self.assertEqual(retired.stat().st_ino, original_inode)
+        self.assertEqual(self.attemptfile.read_bytes(), original_attempt)
+        self.assertFalse(self.receipt.exists())
+        self.assert_no_input()
 
     def test_duplicate_settlement_preserves_receipt(self):
         self.settle()
-        p = Path(self.pack['completion_receipt'])
-        before = p.read_bytes()
-        with self.assertRaises(ReceiptError): self.settle()
-        self.assertEqual(before, p.read_bytes())
+        self.assert_rejected(self.settle)
 
     def test_wrong_session_rejects(self):
-        with patch.dict('os.environ', {'CODEX_THREAD_ID': 'other'}):
-            with self.assertRaises(ReceiptError): self.settle()
+        with patch.dict(os.environ, {'CODEX_THREAD_ID': 'other'}):
+            self.assert_rejected(self.settle)
 
     def test_missing_original_lock_never_creates_one(self):
         self.lockfile.unlink()
-        with self.assertRaises(FileNotFoundError): self.settle()
-        self.assertFalse(self.lockfile.exists())
+        self.assert_rejected(self.settle, error=FileNotFoundError)
 
-    def read_receipt(self):
-        from cmux_callback_journal import verified_receipt
-        self.bridge.pin_workspace.return_value = self.attempt['binding']['identity']
-        self.bridge.screen_hash.side_effect = lambda s: hashlib.sha256(s.encode()).hexdigest()[:16]
-        return verified_receipt(self.bridge, 'surface:1', self.packfile)
+    def test_missing_original_binding_never_publishes_or_backfills(self):
+        self.omit_binding()
+        self.assert_rejected(self.settle)
 
-    def test_reader_accepts_native_receipt_without_screen_or_input(self):
+    def test_missing_original_fence_never_publishes_or_backfills(self):
+        self.omit_fence()
+        self.assert_rejected(self.settle)
+
+    def test_manual_legacy_journal_never_publishes_or_backfills(self):
+        self.write_legacy_attempt()
+        self.assert_rejected(self.settle)
+
+    def test_reader_accepts_unified_native_receipt_without_screen_or_input(self):
         self.settle()
-        result = self.read_receipt()
-        self.assertEqual(result['source'], 'revalidated_native_callback_journal')
-        self.bridge.read_screen.assert_not_called()
-        self.bridge.send_text.assert_not_called()
-        self.bridge.send_key.assert_not_called()
+        self.assertEqual(self.read_receipt()['source'], 'revalidated_callback_journal')
 
     def test_reader_rejects_changed_native_record(self):
         self.settle()
@@ -202,15 +354,41 @@ class NativeSettlementTests(NativeEvidenceTests):
 
     def test_reader_rejects_receipt_identity_or_evidence_tampering(self):
         self.settle()
-        p = Path(self.pack['completion_receipt'])
-        original = p.read_text()
-        for field in ('receiver', 'hash', 'input'):
-            r = json.loads(original)
-            if field == 'receiver': r['receiver_identity']['caller_surface_uuid'] = 'OTHER'
-            elif field == 'hash': r['native_evidence']['native']['record_sha256'] = '0' * 64
-            else: r['input_operations'] = True
-            self.write(p, r)
-            with self.subTest(field=field): self.assertIsNone(self.read_receipt())
+        original = json.loads(self.receipt.read_text())
+        for field in ('receiver', 'hash', 'input', 'proof', 'binding'):
+            with self.subTest(field=field):
+                value = copy.deepcopy(original)
+                if field == 'receiver':
+                    value['receiver_identity']['caller_surface_uuid'] = 'OTHER'
+                elif field == 'hash':
+                    value['native_evidence']['native']['record_sha256'] = '0' * 64
+                elif field == 'input':
+                    value['input_operations'] = True
+                elif field == 'proof':
+                    value['native_proof']['sha256'] = '0' * 64
+                else:
+                    value['native_binding']['session_id'] = 'other'
+                self.write(self.receipt, value)
+                self.assertIsNone(self.read_receipt())
+
+    def test_reader_rejects_old_confirmation_sources_even_with_new_proof(self):
+        self.settle()
+        original = json.loads(self.receipt.read_text())
+        for source in ('original_journal_native_user_record', 'supervisor_native_user_record'):
+            with self.subTest(source=source):
+                value = dict(original, confirmation_source=source)
+                self.write(self.receipt, value)
+                self.assertIsNone(self.read_receipt())
+
+    def test_reader_rejects_removed_original_fence(self):
+        self.settle()
+        self.omit_fence()
+        self.assertIsNone(self.read_receipt())
+
+    def test_reader_accepts_unrelated_later_native_records(self):
+        self.settle()
+        self.native.append_user('unrelated later message')
+        self.assertIsNotNone(self.read_receipt())
 
 
 if __name__ == '__main__':

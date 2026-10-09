@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 from cmux_callback_journal import write_json
+import cmux_native_delivery as native
+from cmux_evidence_io import read_bytes, attempt_paths, open_regular_lock
 
 
 def digest(value):
@@ -29,13 +31,13 @@ def verified_receipt(bridge, surface, text, marker):
         journal = root / digest(json.dumps([identity["caller_surface_uuid"], marker], sort_keys=True))
         receipt_path = journal / 'receipt.json'
         receipt_pin = snapshot(receipt_path)
-        receipt = json.loads(receipt_path.read_text())
-        attempts = sorted(journal.glob('attempt-*.json'))
+        receipt = json.loads(read_bytes(receipt_path))
+        attempts = attempt_paths(journal)
         if not attempts or receipt.get('attempt') != str(attempts[-1]):
             return None
         attempt_path = attempts[-1]
         attempt_pin = snapshot(attempt_path)
-        attempt = json.loads(attempt_path.read_text())
+        attempt = json.loads(read_bytes(attempt_path))
         if (receipt.get('confirmed') is not True or receipt.get('binding') != binding
                 or attempt.get('binding') != binding):
             return None
@@ -52,23 +54,14 @@ def verified_receipt(bridge, surface, text, marker):
             if observation_path.parent != journal or not observation_path.name.startswith('observation-'):
                 return None
             observation_pin = snapshot(observation_path)
-            observation = json.loads(observation_path.read_text())
+            observation = json.loads(read_bytes(observation_path))
             if type(observation.get('input_operations')) is not int or observation['input_operations'] != 0:
                 return None
             pins.append((observation_path, observation_pin))
-        else:
-            if attempt.get('phase') != 'CONFIRMED':
-                return None
-            observations = [e for e in events if e['phase'] in
-                            ('POST_ENTER_OBSERVATION', 'POST_QUEUE_TAB_OBSERVATION')]
-            if not observations:
-                return None
-            observation = observations[-1]
-        after = observation['screen']
-        if (observation.get('screen_sha256') != bridge.screen_hash(after)
-                or not bridge._delivery_confirmed(before, after, marker, text)):
+        if not native.receipt_evidence(bridge, surface, text, attempt, receipt):
             return None
-        if any(snapshot(p) != pin for p, pin in pins) or bridge.pin_workspace(surface) != live:
+        if (attempt_paths(journal) != attempts or any(snapshot(p) != pin for p, pin in pins)
+                or bridge.pin_workspace(surface) != live):
             return None
         return dict(source='revalidated_message_dispatch_v1', identity=identity,
                     attempt=attempt_pin, receipt=receipt_pin)
@@ -76,7 +69,8 @@ def verified_receipt(bridge, surface, text, marker):
         return None
 
 
-def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=False):
+def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=False,
+            recover_stranded=False):
     if not isinstance(marker, str) or not marker or marker not in text:
         raise bridge.TaskPackContractError('MESSAGE_MARKER_REQUIRED')
     if bridge._looks_like_task_dispatch(text):
@@ -104,10 +98,11 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         legacy_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         task_root = root / 'task-dispatch-v1'
         task_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for path in (legacy_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
+        for path in (legacy_root / ('pane-' + digest(identity['workspace_uuid'] + ':' + identity['target_pane_uuid']) + '.lock'),
+                     legacy_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      task_root / ('target-' + digest(identity['target_surface_uuid']) + '.lock'),
                      journal / 'delivery.lock'):
-            lock = stack.enter_context(path.open('a+b'))
+            lock = stack.enter_context(open_regular_lock(path))
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
@@ -115,28 +110,63 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         legacy = legacy_root / (key + '.json')
         if legacy.exists():
             raise bridge.TaskPackContractError('ORIGINAL_DELIVERY_CONTROLLER_REQUIRED: ' + str(legacy))
-        attempts = sorted(journal.glob('attempt-*.json'))
-        old = json.loads(attempts[-1].read_text()) if attempts else None
+        attempts = attempt_paths(journal)
+        old = json.loads(read_bytes(attempts[-1])) if attempts else None
         if old and old.get('binding') != binding:
             raise bridge.TaskPackContractError('MESSAGE_BINDING_CHANGED')
         if (journal / 'receipt.json').exists():
             raise bridge.TaskPackContractError('MESSAGE_RECEIPT_EXISTS: no duplicate send')
         recheck()
-        if reconcile_only:
+        if recover_stranded:
+            # Enter is not delivery: an earlier attempt pasted once and pressed
+            # Enter, but the payload stayed in the receiver composer. Allow one
+            # extra key on that same attempt, never a second paste.
+            if reconcile_only or not old:
+                raise bridge.TaskPackContractError('NO_STRANDED_MESSAGE')
+            phases = [e['phase'] for e in old.get('events', [])]
+            if (phases.count('PASTE_INTENT') != 1 or 'ENTER_SENT' not in phases
+                    or old.get('phase') in ('PREPARED', 'NO_INPUT', 'CONFIRMED')):
+                raise bridge.TaskPackContractError('NO_STRANDED_MESSAGE')
+            if 'QUEUE_TAB_INTENT' in phases or 'EXTRA_ENTER_INTENT' in phases:
+                raise bridge.TaskPackContractError('STRANDED_RECOVERY_ALREADY_USED: reconcile_only')
+            paste = next(e for e in old['events'] if e['phase'] == 'PASTE_INTENT')
+            if paste.get('screen_sha256') != bridge.screen_hash(paste['screen']):
+                raise bridge.TaskPackContractError('MESSAGE_EVIDENCE_CHANGED')
+            attempt_path, attempt = attempts[-1], old
+
+            def observe_recovery(phase, screen=None):
+                recheck()
+                event = dict(phase=phase, at_epoch=time.time(), recovery='stranded_compose')
+                if screen is not None:
+                    event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
+                attempt['events'].append(event)
+                attempt['phase'] = phase
+                write_json(attempt_path, attempt)
+
+            try:
+                result = bridge.recover_stranded_once(surface, text, marker, paste['screen'],
+                    confirm_lines=confirm_lines, delivery_observer=observe_recovery,
+                    native_binding=old.get('native_binding'), native_attempt=attempt_path)
+            except BaseException as exc:
+                attempt['recovery_error'] = str(exc)
+                write_json(attempt_path, attempt)
+                raise
+            attempt['phase'] = 'CONFIRMED'
+            write_json(attempt_path, attempt)
+        elif reconcile_only:
             pastes = [e for e in (old or {}).get('events', []) if e['phase'] == 'PASTE_INTENT']
             if len(pastes) != 1:
                 raise bridge.TaskPackContractError('NO_SUBMITTED_MESSAGE')
             before = pastes[0]['screen']
             if pastes[0].get('screen_sha256') != bridge.screen_hash(before):
                 raise bridge.TaskPackContractError('MESSAGE_EVIDENCE_CHANGED')
-            screen = bridge.read_screen(surface, lines=confirm_lines)
+            result = native.scan_original(bridge, surface, text, attempts[-1], old.get('native_binding'))
             observation = journal / ('observation-' + str(time.time_ns()) + '.json')
-            write_json(observation, dict(screen=screen, screen_sha256=bridge.screen_hash(screen),
-                                        input_operations=0, at_epoch=time.time()))
-            if not bridge._delivery_confirmed(before, screen, marker, text):
+            write_json(observation, dict(result, input_operations=0, at_epoch=time.time()))
+            if result.get('confirmed') is not True:
                 raise bridge.DispatchUnconfirmed('MESSAGE_NOT_YET_CONFIRMED: no resend')
             attempt_path = attempts[-1]
-            result = dict(confirmed=True, reconciled_read_only=True, observation=str(observation))
+            result = dict(result, reconciled_read_only=True, observation=str(observation))
         else:
             if old and old.get('phase') != 'NO_INPUT':
                 raise bridge.TaskPackContractError('MESSAGE_ATTEMPT_EXISTS: use reconcile_only')
@@ -151,7 +181,10 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 # Refuse stale nonce before the very first mutation.
                 if phase == 'PASTE_INTENT' and ''.join(marker.split()) in ''.join(screen.split()):
                     raise bridge.TaskPackContractError('MESSAGE_MARKER_ALREADY_VISIBLE')
+                fence = native.capture_paste_fence(attempt['native_binding']) if phase == 'PASTE_INTENT' else None
                 event = dict(phase=phase, at_epoch=time.time())
+                if fence is not None:
+                    event['native_paste_fence'] = fence
                 if screen is not None:
                     event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
                 attempt['events'].append(event)
@@ -159,8 +192,11 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 write_json(attempt_path, attempt)
 
             try:
+                attempt['native_binding'] = native.bind_target(bridge, surface, text)
+                write_json(attempt_path, attempt)
                 result = bridge._submit_text_once(surface, text, marker=marker,
-                    confirm_lines=confirm_lines, force_compose=False, delivery_observer=observe)
+                    confirm_lines=confirm_lines, force_compose=False, delivery_observer=observe,
+                    native_binding=attempt['native_binding'], native_attempt=attempt_path)
                 if result.get('confirmed') is not True:
                     raise bridge.DispatchUnconfirmed('MESSAGE_NOT_CONFIRMED')
             except BaseException as exc:
@@ -172,6 +208,8 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             attempt['phase'] = 'CONFIRMED'
             write_json(attempt_path, attempt)
         recheck()
+        if not native.receipt_evidence(bridge, surface, text, json.loads(read_bytes(attempt_path)), result):
+            raise bridge.DispatchUnconfirmed('MESSAGE_NATIVE_PROOF_REQUIRED')
         result = dict(result, binding=binding, attempt=str(attempt_path), at_epoch=time.time())
         receipt = journal / 'receipt.json'
         write_json(receipt, result)

@@ -34,7 +34,10 @@ import cmux_hook_identity as hook_identity
 import re
 import stat
 import sys
-from executor_closeout import terminal_report, handoff_line
+from executor_closeout import (
+    terminal_report, closeout_instructions, superseded,
+)
+from cmux_evidence_io import read_bytes, snapshot, attempt_paths
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -94,7 +97,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(read_bytes(path))
     except Exception:
         return None
 
@@ -173,13 +176,25 @@ def _final_message(payload: dict[str, Any]) -> str:
     transcript = payload.get("transcript_path") or payload.get("transcript")
     if isinstance(transcript, str) and Path(transcript).exists():
         try:
-            lines = Path(transcript).read_text().splitlines()
+            # 长寿会话可能已有数 GB；只读有界尾部，丢弃跨截断点的半行。
+            with Path(transcript).open('rb') as stream:
+                stream.seek(0, os.SEEK_END)
+                start = max(0, stream.tell() - 1024 * 1024)
+                stream.seek(start)
+                tail = stream.read(1024 * 1024)
+            if start:
+                tail = tail.partition(b'\n')[2]
+            lines = tail.decode('utf-8', 'replace').splitlines()
             texts = []
             for line in lines[-50:]:
                 try:
                     obj = json.loads(line)
                 except Exception:
                     continue
+                if not isinstance(obj, dict):
+                    continue
+                if obj.get('type') == 'response_item' and isinstance(obj.get('payload'), dict):
+                    obj = obj['payload']
                 if obj.get("role") == "assistant" or obj.get("type") == "assistant":
                     message = obj.get("message")
                     message = message if isinstance(message, dict) else obj
@@ -211,6 +226,26 @@ def _positive_evidence_claims(text: str) -> list[str]:
         if not _negated(text, m.start(), m.end()):
             out.append(m.group(0))
     return out
+
+
+def _claims_callback_delivery(text, evidence):
+    """核验明确的送达声明；普通说明、否认与固定模板无关。"""
+    callback = re.compile(r'^\s*DONE\|' + re.escape(evidence['task_id'])
+                          + r'\|' + re.escape(evidence['completion_nonce'])
+                          + r'(?:\||\s|$)', re.MULTILINE)
+    if callback.search(text or ''):
+        return True
+    positive = re.compile(
+        r'\bCALLBACK_CONFIRMED\b|\bNATIVE_RECEIVED\b|'
+        r'\bcallback[\s_-]+(?:is[\s_-]+)?(?:confirmed|delivered|received)\b|'
+        r'回调(?:已|已经)?(?:送达|确认成功|收到|发送成功)', re.IGNORECASE)
+    for match in positive.finditer(text or ''):
+        # 未验收等其他句子的否定词不能替当前的送达声明背书。
+        before = re.split(r'[\n.!?;。！？；]', text[:match.start()])[-1]
+        after = re.split(r'[\n.!?;。！？；]', text[match.end():])[0]
+        if not _NEGATION_RE.search(before[-80:] + match.group(0) + after[:80]):
+            return True
+    return False
 
 
 def _protocol_callback_evidence(
@@ -388,19 +423,7 @@ def _current_participant_is_executor(marker: dict[str, Any], payload: dict[str, 
 
 def _lifecycle_snapshot(path: Path) -> tuple[bytes, tuple[int, ...]]:
     """Pin a regular original file; symlinks and concurrent changes are unknown."""
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
-        before = os.fstat(handle.fileno())
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError("lifecycle evidence is not a regular file")
-        raw = handle.read()
-        after, current = os.fstat(handle.fileno()), path.lstat()
-        def identity(s):
-            return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-        if (not stat.S_ISREG(current.st_mode)
-                or identity(before) != identity(after)
-                or identity(before) != identity(current)):
-            raise ValueError("lifecycle evidence changed")
-        return raw, identity(before)
+    return snapshot(path)
 
 
 def _task_dispatch_state(marker: dict[str, Any], pack_raw: bytes, executor: str) -> str:
@@ -431,7 +454,7 @@ def _task_dispatch_state(marker: dict[str, Any], pack_raw: bytes, executor: str)
             return "UNKNOWN"
         if os.path.lexists(journal / "receipt.json"):
             return "CONFIRMED_OR_RECONCILED"
-        attempts = sorted(journal.glob("attempt-*.json"))
+        attempts = attempt_paths(journal)
         if not attempts:
             return "UNKNOWN"
         lock_path = journal / "delivery.lock"
@@ -474,7 +497,7 @@ def _task_dispatch_state(marker: dict[str, Any], pack_raw: bytes, executor: str)
                         or any(type(pin.get(k)) is not int for k in lock_identity)):
                     return "UNKNOWN"
             if (not original_lock() or os.path.lexists(journal / "receipt.json")
-                    or sorted(journal.glob("attempt-*.json")) != attempts
+                    or attempt_paths(journal) != attempts
                     or any(_lifecycle_snapshot(p) != v for p, v in pins.items())):
                 return "UNKNOWN"
         return "NO_INPUT"
@@ -512,14 +535,14 @@ def _completion_callback_evidence(
         report = Path(report_value) if isinstance(report_value, str) else None
         if report is None or not report.is_absolute() or report.parent.resolve() != root.resolve():
             return False, "completion report is not bound directly under artifact_root"
-        pack_raw = (root / "task-pack.json").read_bytes()
+        pack_raw = read_bytes(root / "task-pack.json")
         state = "CALLBACK_ATTEMPTED" if os.path.lexists(attempts) else \
             "REPORT_WITHOUT_CALLBACK" if os.path.lexists(report) else \
             _task_dispatch_state(marker, pack_raw, _surface_key(payload) or "")
         if state == "NO_INPUT":
             if (os.path.lexists(report) or os.path.lexists(attempts)
                     or os.path.lexists(receipt_path)
-                    or (root / "task-pack.json").read_bytes() != pack_raw):
+                    or read_bytes(root / "task-pack.json") != pack_raw):
                 return False, "task lifecycle changed during NO_INPUT observation"
             return True, ("finalized task pack was never delivered (dispatch NO_INPUT); "
                           "no completion callback is owed yet")
@@ -530,10 +553,10 @@ def _completion_callback_evidence(
     report = Path(report_value) if isinstance(report_value, str) else None
     if report is None or not report.is_file():
         return False, "completion report is missing"
-    digest = hashlib.sha256(report.read_bytes()).hexdigest()
+    digest = hashlib.sha256(read_bytes(report)).hexdigest()
     expected = {
         "task_id": pack.get("task_id"),
-        "task_pack_sha256": hashlib.sha256((root / "task-pack.json").read_bytes()).hexdigest(),
+        "task_pack_sha256": hashlib.sha256(read_bytes(root / "task-pack.json")).hexdigest(),
         "completion_nonce": pack.get("completion_nonce"),
         "completion_callback": pack.get("completion_callback"),
         "callback_target": pack.get("callback_target"),
@@ -545,7 +568,11 @@ def _completion_callback_evidence(
     mismatches = [key for key, value in expected.items() if receipt.get(key) != value]
     if mismatches:
         return False, "completion callback receipt mismatch: " + ", ".join(mismatches)
-    return True, "confirmed completion callback receipt matches pack and report"
+    import cmux_bridge as bridge
+    from cmux_callback_journal import verified_receipt
+    if verified_receipt(bridge, pack['callback_target'], root / 'task-pack.json') is None:
+        return False, "completion callback receipt lacks revalidated native user-message proof"
+    return True, "confirmed completion callback receipt matches original native reception, pack and report"
 
 
 def _evaluate_resolved(
@@ -581,17 +608,25 @@ def _evaluate_resolved(
     )
     if protocol_ack:
         return True, "fresh bound protocol ACK; this does not complete the task", None
+    workspace, surface = _workspace_key(payload), _surface_key(payload)
+    current_markers = []
     for marker in markers:
-        surface = _surface_key(payload)
-        terminal = terminal_report(marker, _workspace_key(payload), surface)
-        if terminal and final.strip() == handoff_line(terminal):
-            # Honest report handoff is turn-end, never callback confirmation.
+        terminal = terminal_report(marker, workspace, surface)
+        if terminal and superseded(terminal, markers, workspace, surface):
+            # The later task owns both callback and evidence-claim checks; the
+            # old report/receipt remain unchanged and unconfirmed.
+            continue
+        current_markers.append(marker)
+        if terminal and not _claims_callback_delivery(final, terminal):
+            # 报告已冻结且原调用返回：普通说明也能结束。共识声明仍走下方门禁。
+            # 不创建 receipt，不要求固定 STATUS 文本，不触发自动重发。
             continue
         callback_ok, callback_msg = _completion_callback_evidence(marker, payload)
         if not callback_ok:
             if terminal:
-                callback_msg += ("; original attempt returned. End without more tools "
-                                 "using exactly:\n" + handoff_line(terminal))
+                callback_msg = ("EXECUTOR_CLOSEOUT: " + callback_msg
+                                + "; original attempt returned. End without more "
+                                "tools. " + closeout_instructions(terminal))
             return False, callback_msg, marker
 
     claims = _positive_evidence_claims(final)
@@ -604,7 +639,7 @@ def _evaluate_resolved(
     # With concurrent collaborations, block when ANY armed artifact tree
     # contradicts the claim; allow only when every armed task's evidence holds.
     last_msg = ""
-    for marker in markers:
+    for marker in current_markers:
         contradicted, why = _contradicts_disk(marker, claims)
         if contradicted:
             return False, why, marker
@@ -618,16 +653,21 @@ def _evaluate_resolved(
     return True, last_msg, None
 
 
-def _evaluate_with_marker(payload):
+def _evaluate_with_marker(payload, stop_output=None):
     # Reentry must terminate even if identity discovery is currently unavailable.
     if (payload.get("hook_event_name") in ("Stop", "SubagentStop")
             and payload.get("stop_hook_active") is True):
+        if stop_output is not None:
+            stop_output['value'] = _waiting_supervisor_stop_output(payload)
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
         if not _has_active_markers():
             return True, "no armed multi-agent task — pass through", None
         with hook_identity.evaluation(payload):
-            return _evaluate_resolved(payload)
+            result = _evaluate_resolved(payload)
+            if result[0] and stop_output is not None:
+                stop_output['value'] = _waiting_supervisor_stop_output(payload, resolved=True)
+            return result
     except hook_identity.ERRORS as exc:
         return False, "HOOK_CALLER_UNRESOLVED: " + str(exc), None
 
@@ -648,6 +688,21 @@ def _block(message: str, marker_hint: str) -> int:
             "report, and callback evidence. The supervisor must diagnose caller "
             "identity resolution before retrying this gate. This result does "
             "not judge the final message or confirm callback delivery.\n"
+        )
+        return 2
+    # A returned original attempt: transport recovery advice would contradict
+    # the PreToolUse seal and invite a duplicate callback.
+    if message.startswith("EXECUTOR_CLOSEOUT:"):
+        sys.stderr.write(
+            "cmux executor closeout Stop guard blocked turn-end.\n"
+            f"{message}\n\n"
+            "The report is frozen and the original callback attempt returned. "
+            "Do not resend, edit the frozen report, or start a retry loop. "
+            "The exact task-bound zero-input reconcile command remains "
+            "available; otherwise use the honest handoff and wait for the "
+            "supervisor to accept/disarm that task. This block is not "
+            "callback confirmation and does not complete the task.\n"
+            f"  (armed marker: {marker_hint})\n"
         )
         return 2
     # Callback transport failures are not failed plan-consensus rounds.
@@ -692,6 +747,39 @@ def _block(message: str, marker_hint: str) -> int:
     return 2
 
 
+def _waiting_supervisor_stop_output(payload, resolved=False):
+    """仅在现有 Stop 验证已放行后调用；验证报告边界，不改变 Goal 或回执。"""
+    if payload.get("hook_event_name") != "Stop":
+        return None
+    try:
+        if not _has_active_markers():
+            return None
+        # main 已在同次身份上下文内时不重新解析，避免两个2.5秒预算串联。
+        from contextlib import nullcontext
+        context = nullcontext() if resolved else hook_identity.evaluation(payload)
+        with context:
+            workspace, surface = _workspace_key(payload), _surface_key(payload)
+            markers = _active_markers(payload)
+            for marker in markers:
+                evidence = terminal_report(marker, workspace, surface)
+                if evidence and not superseded(evidence, markers, workspace, surface):
+                    # 递归 Stop 同样返回此协议；普通 exit 0 无法覆盖 native Goal 的 block。
+                    return {
+                        "continue": False,
+                        "suppressOutput": True,
+                        "stopReason": (
+                            "WAITING_SUPERVISOR: report frozen; original callback "
+                            "returned. Await supervisor receipt reconciliation and "
+                            "acceptance. Delivery and task completion remain unconfirmed."
+                        ),
+                    }
+    except hook_identity.ERRORS:
+        # 保留原验证器的身份错误处理；此辅助出口不把未知身份认定为报告已交。
+        return None
+    return None
+
+
+
 def main() -> int:
     # CLI self-test mode
     if "--check-file" in sys.argv:
@@ -708,8 +796,14 @@ def main() -> int:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return 0  # non-JSON → don't wedge the session
-    ok, msg, marker = _evaluate_with_marker(payload)
+    if not isinstance(payload, dict):
+        return 0
+    output = {}
+    ok, msg, marker = _evaluate_with_marker(payload, output)
     if ok:
+        stop_output = output.get('value')
+        if stop_output is not None:
+            print(json.dumps(stop_output, ensure_ascii=False))
         return 0
     marker = marker or {}
     return _block(msg, f"task={marker.get('task_id')} root={marker.get('artifact_root')}")

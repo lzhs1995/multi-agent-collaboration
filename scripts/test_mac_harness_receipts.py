@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from native_test_support import NativeFixture, ScreenSequence
 
 
 HARNESS_PATH = Path(__file__).with_name("mac_harness.py")
@@ -23,6 +24,15 @@ ROUND_GUARD_SPEC = importlib.util.spec_from_file_location(
 ROUND_GUARD = importlib.util.module_from_spec(ROUND_GUARD_SPEC)
 assert ROUND_GUARD_SPEC.loader is not None
 ROUND_GUARD_SPEC.loader.exec_module(ROUND_GUARD)
+
+
+def setUpModule():
+    # harness 的 registry 也是持久写入；所有测试都必须限制在临时目录。
+    registry = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(registry.cleanup)
+    patcher = mock.patch.object(HARNESS, "ARTIFACT_REGISTRY_DIR", Path(registry.name))
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 class ReceiptOrderingTests(unittest.TestCase):
@@ -237,57 +247,94 @@ class SubmissionConfirmationTests(unittest.TestCase):
         )
 
     def test_submit_text_confirms_without_retry_when_assistant_started(self):
+        text = "delivery:x"
+        idle = "❯ Ask Claude to do anything\n[Opus 5]"
+        done = "❯ delivery:x\n⏺ response\n" + idle
         with (
+            NativeFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "read_screen", side_effect=["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]"]),
+            mock.patch.object(BRIDGE, "send_key", side_effect=native.receipt_on_key(text)) as send_key,
+            mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                idle, native.draft(text, "claude"), done)),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
-            result = BRIDGE._submit_text_once("surface:2", "delivery:x", marker="delivery:x")
-        self.assertEqual(result, {"confirmed": True, "retries": 0})
+            result = BRIDGE.submit_text("surface:2", text, marker="delivery:x")
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["retries"], 0)
         send_key.assert_called_once_with("surface:2", "enter")
 
-    def test_submit_text_allows_one_bounded_retry_for_pending_compose(self):
-        screens = [
-            "❯ Ask Claude to do anything\n[Opus 5]",
-            "❯ delivery:x\nTASK: work\n[Opus 5]",
-            "❯ delivery:x\nTASK: work\n⏺ response\n❯ Ask Claude to do anything\n[Opus 5]",
-        ]
-        with (
-            mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
-            mock.patch.object(BRIDGE.time, "sleep"),
-        ):
-            result = BRIDGE._submit_text_once("surface:2", "delivery:x\nTASK: work", marker="delivery:x")
-        self.assertEqual(result, {"confirmed": True, "retries": 1})
+    def test_first_submit_pending_recovery_budget_and_exact_native_receipt(self):
+        text = "delivery:x\nstatus: work"
+        idle = "❯ Ask Claude to do anything\n[Opus 5]"
+        with NativeFixture(provider="claude") as native:
+            draft = native.draft(text, "claude")
+            screens = native.ready_screens(idle, draft, draft)
+            with (
+                mock.patch.object(BRIDGE, "send_text") as paste,
+                mock.patch.object(BRIDGE, "send_key") as send_key,
+                mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+            ):
+                with self.assertRaises(BRIDGE.DispatchUnconfirmed):
+                    BRIDGE.submit_text("surface:2", text, marker="delivery:x")
+                paste.assert_called_once_with("surface:2", text)
+                send_key.assert_called_once_with("surface:2", "enter")
+                attempts = list((native.home / '.local/state/multi-agent-collaboration/'
+                                 'message-dispatch-v1').glob('*/attempt-*.json'))
+                self.assertEqual(len(attempts), 1)
+                receipt = attempts[0].parent / 'receipt.json'
+                self.assertFalse(receipt.exists())
+                # 原次只有一次共享补键；未确认也不得重新取得预算。
+                with self.assertRaises(BRIDGE.DispatchUnconfirmed):
+                    BRIDGE.submit_text("surface:2", text, marker="delivery:x", recover_stranded=True)
+                with self.assertRaisesRegex(BRIDGE.TaskPackContractError, 'RECOVERY_ALREADY_USED'):
+                    BRIDGE.submit_text("surface:2", text, marker="delivery:x", recover_stranded=True)
+                self.assertEqual(send_key.call_count, 2)
+                native.append_user(text + ' ')
+                with self.assertRaises(BRIDGE.DispatchUnconfirmed):
+                    BRIDGE.submit_text("surface:2", text, marker="delivery:x", reconcile_only=True)
+                self.assertFalse(receipt.exists())
+                native.append_user(text)
+                result = BRIDGE.submit_text("surface:2", text, marker="delivery:x", reconcile_only=True)
+                self.assertEqual(result['attempt'], str(attempts[0]))
+                self.assertTrue(result['reconciled_read_only'])
+                self.assertEqual(len(list(attempts[0].parent.glob('attempt-*.json'))), 1)
+                paste.assert_called_once_with("surface:2", text)
+        self.assertTrue(result["confirmed"])
         self.assertEqual([call.args for call in send_key.call_args_list], [
             ("surface:2", "enter"),
             ("surface:2", "enter"),
         ])
 
     def test_submit_text_refuses_blind_retry_for_queued_input(self):
-        screens = ["❯ Ask Claude to do anything\n[Opus 5]", "❯ delivery:x\nPress up to edit queued messages"]
+        text = "delivery:x"
+        idle = "❯ Ask Claude to do anything\n[Opus 5]"
+        queued = "❯ delivery:x\nPress up to edit queued messages"
         with (
+            NativeFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+            mock.patch.object(BRIDGE, "send_key", side_effect=lambda *_: native.append_queued(text)) as send_key,
+            mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                idle, native.draft(text, "claude"), queued)),
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+            BRIDGE.submit_text("surface:2", text, marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_fails_closed_when_marker_disappears(self):
         screen = "⏺ unrelated response"
         with (
+            NativeFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "send_key"),
-            mock.patch.object(BRIDGE, "read_screen", side_effect=["⏺ unrelated response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ unrelated response", "⏺ unrelated response"]),
+            mock.patch.object(BRIDGE, "send_key") as key,
+            mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                screen + "\n❯ Ask Claude to do anything\n[Opus 5]",
+                native.draft("delivery:x", "claude"), screen)),
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+            BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
+        key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_rejects_new_activity_when_marker_scrolled_off(self):
         screens = [
@@ -295,13 +342,15 @@ class SubmissionConfirmationTests(unittest.TestCase):
             "⏺ previous response\n⏺ new tool running",
         ]
         with (
+            NativeFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+            mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                screens[0], native.draft("delivery:x", "claude"), screens[-1])),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
             with self.assertRaises(BRIDGE.DispatchUnconfirmed):
-                BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+                BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_rejects_codex_tool_activity_when_marker_scrolled_off(self):
@@ -310,13 +359,15 @@ class SubmissionConfirmationTests(unittest.TestCase):
             "• previous tool\n• Edited file",
         ]
         with (
+            NativeFixture() as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as send_key,
-            mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+            mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                screens[0], native.draft("delivery:x"), screens[-1])),
             mock.patch.object(BRIDGE.time, "sleep"),
         ):
             with self.assertRaises(BRIDGE.DispatchUnconfirmed):
-                BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+                BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
         send_key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_does_not_accept_non_activity_screen_change(self):
@@ -326,47 +377,65 @@ class SubmissionConfirmationTests(unittest.TestCase):
             "⏺ previous response\nstatus changed",
         ]
         with (
+            NativeFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "send_key"),
-            mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
+            mock.patch.object(BRIDGE, "send_key") as key,
+            mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                screens[0], native.draft("delivery:x", "claude"), screens[-1])),
             mock.patch.object(BRIDGE.time, "sleep"),
             self.assertRaises(BRIDGE.DispatchUnconfirmed),
         ):
-            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+            BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
+        key.assert_called_once_with("surface:2", "enter")
 
     def test_late_confirmation_observes_without_resubmitting(self):
-        screens = ["⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
-                   "❯ delivery:x\n⏺ new tool running\n❯ Ask Claude to do anything\n[Opus 5]"]
-        with (mock.patch.object(BRIDGE, "send_text") as paste,
-              mock.patch.object(BRIDGE, "send_key") as key,
-              mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
-              mock.patch.object(BRIDGE.time, "sleep")):
-            result = BRIDGE._submit_text_once("surface:2", "delivery:x", marker="delivery:x")
-        self.assertTrue(result["late_confirmation"])
+        idle = "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]"
+        done = "❯ delivery:x\n⏺ new tool running\n❯ Ask Claude to do anything\n[Opus 5]"
+        with NativeFixture(provider="claude") as native:
+            def delayed_user():
+                native.append_user("delivery:x")
+                return done
+
+            with (mock.patch.object(BRIDGE, "send_text") as paste,
+                  mock.patch.object(BRIDGE, "send_key") as key,
+                  mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                      idle, native.draft("delivery:x", "claude"), idle, delayed_user)) as read):
+                result = BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["retries"], 0)
+        self.assertEqual(read.call_count, 5)
         paste.assert_called_once_with("surface:2", "delivery:x")
         key.assert_called_once_with("surface:2", "enter")
 
     def test_late_queued_message_is_not_reported_as_confirmed(self):
-        screens = ["⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]", "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]",
-                   "Messages to be submitted after the tool completes:\ndelivery:x"]
-        with (mock.patch.object(BRIDGE, "send_text"),
-              mock.patch.object(BRIDGE, "send_key") as key,
-              mock.patch.object(BRIDGE, "read_screen", side_effect=screens),
-              mock.patch.object(BRIDGE.time, "sleep"),
-              self.assertRaises(BRIDGE.DispatchUnconfirmed) as error):
-            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+        idle = "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]"
+        queued = "Messages to be submitted after the tool completes:\ndelivery:x"
+        with NativeFixture(provider="claude") as native:
+            def delayed_queue():
+                native.append_queued("delivery:x")
+                return queued
+
+            with (mock.patch.object(BRIDGE, "send_text"),
+                  mock.patch.object(BRIDGE, "send_key") as key,
+                  mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
+                      idle, native.draft("delivery:x", "claude"), idle, delayed_queue)),
+                  self.assertRaises(BRIDGE.DispatchUnconfirmed) as error):
+                BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
         self.assertEqual(error.exception.state, BRIDGE.DELIVERY_QUEUED_AT_RECEIVER)
         key.assert_called_once_with("surface:2", "enter")
 
     def test_submit_text_fails_closed_on_historical_echo_without_new_activity(self):
         with (
-            mock.patch.object(BRIDGE, "send_text"),
-            mock.patch.object(BRIDGE, "send_key"),
+            NativeFixture(provider="claude"),
+            mock.patch.object(BRIDGE, "send_text") as paste,
+            mock.patch.object(BRIDGE, "send_key") as key,
             mock.patch.object(BRIDGE, "read_screen", return_value="❯ delivery:x\nold prose\n❯ Ask Claude to do anything\n[Opus 5]"),
             mock.patch.object(BRIDGE.time, "sleep"),
-            self.assertRaises(BRIDGE.DispatchUnconfirmed),
+            self.assertRaisesRegex(BRIDGE.TaskPackContractError, "MESSAGE_MARKER_ALREADY_VISIBLE"),
         ):
-            BRIDGE._submit_text_once("surface:2", "prompt", marker="delivery:x")
+            BRIDGE.submit_text("surface:2", "delivery:x", marker="delivery:x")
+        paste.assert_not_called()
+        key.assert_not_called()
 
 
 class ExecutorReuseTests(unittest.TestCase):

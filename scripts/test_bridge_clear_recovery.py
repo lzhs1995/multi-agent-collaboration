@@ -25,8 +25,15 @@ FIXTURE_SHA = "6c5ac4ef7b359b5f4b1cddd29ffcd2f1746a8f9a017ae2e5328d5ec0453bcb9b"
 _lines = ACTIVE.splitlines()
 _prompt = max(i for i, line in enumerate(_lines) if B._PROMPT_GLYPH_RE.match(line))
 EDITOR = "\n".join(_lines[_prompt - 1:]) + "\n"
+# 夹具独立声明活动行，避免用被测 parser 自己决定何为 idle 正例。
+_RUNNING_ROW = "  ◐ Bash: .../example... | ✓ Bash ×19"
 IDLE = "\n".join(line for line in EDITOR.splitlines()
-                 if not B._CLAUDE_RUNNING_TOOL_FOOTER_RE.fullmatch(line)) + "\n"
+                 if line != _RUNNING_ROW) + "\n"
+
+
+def setUpModule():
+    # 复用相同的临时 registry / 外部进程夹具，不触达 live harness 状态。
+    r3.setUpModule()
 
 
 def draft(text, screen=IDLE):

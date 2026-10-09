@@ -135,17 +135,59 @@ class ScopeTests(unittest.TestCase):
                 patch.object(bridge.subprocess, 'run', return_value=Mock(returncode=0, stdout='ok')) as run:
             bridge.send_text('surface:2', 'handshake')
             args = run.call_args.args[0]
-            self.assertEqual(args[args.index('--workspace') + 1], W)
-            self.assertEqual(args[args.index('--surface') + 1], T)
+            self.assertEqual(args[1:3], ['rpc', 'terminal.paste'])
+            self.assertEqual(json.loads(args[3]), dict(
+                text='handshake', submit_key='none', workspace_id=W, surface_id=T))
 
     def test_runtime_rechecks_between_paste_and_enter(self):
-        with patch.object(bridge, 'require_same_workspace', side_effect=[self.resolve(), guard.WorkspaceScopeError('moved')]) as check, \
+        with patch.object(bridge, 'require_same_workspace', side_effect=[self.resolve(), self.resolve(), guard.WorkspaceScopeError('moved')]) as check, \
                 patch.object(bridge.subprocess, 'run', return_value=Mock(returncode=0, stdout='ok')) as run:
             bridge.send_text('surface:2', 'handshake')
             with self.assertRaises(guard.WorkspaceScopeError):
                 bridge.send_key('surface:2', 'enter')
             self.assertEqual(run.call_count, 1)
             self.assertEqual(check.call_args.kwargs['expected']['target_surface_uuid'], T)
+
+    def test_literal_paste_preserves_escapes_tabs_spaces_and_unicode(self):
+        payload = '中文  ' + r'\n\r\t' + '\n\tblank follows\n\n tail '
+        with patch.object(bridge, 'require_same_workspace', return_value=self.resolve()), \
+                patch.object(bridge.subprocess, 'run', return_value=Mock(returncode=0, stdout='ok')) as run:
+            bridge.send_text('surface:2', payload)
+            self.assertEqual(run.call_count, 1)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[1:3], ['rpc', 'terminal.paste'])
+            self.assertEqual(json.loads(argv[3])['text'], payload)
+            self.assertEqual(json.loads(argv[3])['submit_key'], 'none')
+
+    def test_paste_rpc_failure_never_falls_back_or_submits(self):
+        with patch.object(bridge, 'require_same_workspace', return_value=self.resolve()), \
+                patch.object(bridge.subprocess, 'run', return_value=Mock(returncode=1, stdout='', stderr='unsupported RPC')) as run:
+            with self.assertRaisesRegex(RuntimeError, 'unsupported RPC'):
+                bridge.send_text('surface:2', r'original\ntext')
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0][1:3], ['rpc', 'terminal.paste'])
+
+    def test_paste_parameters_cannot_submit_or_override_workspace(self):
+        good = dict(text='original', submit_key='none', workspace_id=W, surface_id=T)
+        bad = [dict(good, submit_key=k) for k in ('enter', 'tab', '', None)]
+        bad += [dict(good, workspace_id=X), dict(good, unexpected=True),
+                dict(good, text=''), dict(good, text=True), []]
+        with patch.object(bridge, 'require_same_workspace', return_value=self.resolve()), \
+                patch.object(bridge.subprocess, 'run') as run:
+            for params in bad:
+                with self.subTest(params=params), self.assertRaises(guard.WorkspaceScopeError):
+                    bridge._run('rpc', 'terminal.paste', json.dumps(params))
+            for args in [(), ('{',), (json.dumps(good), 'extra')]:
+                with self.subTest(args=args), self.assertRaises(guard.WorkspaceScopeError):
+                    bridge._run('rpc', 'terminal.paste', *args)
+            run.assert_not_called()
+
+    def test_paste_rechecks_live_target_before_any_input(self):
+        with patch.object(bridge, 'require_same_workspace', side_effect=[self.resolve(), guard.WorkspaceScopeError('moved')]), \
+                patch.object(bridge.subprocess, 'run') as run:
+            with self.assertRaisesRegex(guard.WorkspaceScopeError, 'moved'):
+                bridge.send_text('surface:2', 'handshake')
+            run.assert_not_called()
 
     def test_pin_cannot_be_replaced_by_explicit_argument(self):
         with patch.object(bridge, 'require_same_workspace', return_value=self.resolve()) as check:

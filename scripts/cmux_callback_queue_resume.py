@@ -38,12 +38,15 @@ def resumable(pack_path):
     attempt_path = canonical(attempts[-1])
     attempt = json.loads(attempt_path.read_text())
     phases = [item["phase"] for item in attempt["events"]]
-    if (attempt.get("phase") != "POST_ENTER_OBSERVATION"
+    if (attempt.get("phase") not in ("POST_ENTER_OBSERVATION", "RECOVERY_OBSERVATION")
             or phases.count("PASTE_INTENT") != 1
             or phases.count("ENTER_INTENT") != 1
-            or phases.count("POST_ENTER_OBSERVATION") != 1
+            or not 1 <= phases.count("POST_ENTER_OBSERVATION") <= 8
             or any("TAB" in phase or phase == "EXTRA_ENTER_INTENT" for phase in phases)):
         raise ValueError("original Enter cannot be resumed")
+    # 不允许在缺少原生绑定或 paste EOF fence 的旧尝试上补造恢复资格。
+    import cmux_native_delivery as native
+    native._original_intent(attempt, attempt.get('native_binding'), pack['completion_callback'])
     return skill.parent, attempt_path
 
 
@@ -60,7 +63,7 @@ def allowed(payload, marker, evidence):
             return False
         _, attempt = resumable(task)
         return str(attempt) == evidence["attempt"]
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
         return False
 
 
@@ -85,4 +88,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

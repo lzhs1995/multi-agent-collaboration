@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 import cmux_bridge as b
+from cmux_native_delivery import NativeDeliveryError
+from native_test_support import NativeFixture, ScreenSequence
 
 IDLE = '› Ask Codex to do anything\nGPT-6-Astra high\n? for shortcuts  ⚠ 5 warnings · f2 to view'
 
@@ -34,21 +36,55 @@ class JournalTests(unittest.TestCase):
                   patch.object(b.time, 'sleep')):
             p.start()
             self.addCleanup(p.stop)
+        self.native = NativeFixture.attach(self, home=root, identity=self.proof)
         self.journal = self.receipt.with_name(self.receipt.stem + '-attempts')
 
     def confirmed_screen(self):
         return '› ' + self.pack['completion_callback'] + '\n• Read report\n' + IDLE
 
-    def pending_original(self):
+    def pending_screen(self, *, hint=True):
         screen = '• Working (3s • esc to interrupt)\n› ' + self.pack['completion_callback'] + '\nGPT-6 high'
-        with patch.object(b, 'read_screen', side_effect=[IDLE, screen]), patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+        return screen + ('\ntab to queue message' if hint else '')
+
+    def queued_pending_screen(self, *, hint=True):
+        # queue 区新增后，live composer 保持原内容与空行，单独验证排队撤销资格。
+        queue = 'Messages to be submitted after next tool call\n' + self.pack['completion_callback']
+        return self.pending_screen(hint=hint).replace('\n› ', '\n' + queue + '\n› ', 1)
+
+    def pending_original(self, observations=None):
+        screen = self.pending_screen(hint=False)
+        after = [screen] if observations is None else observations
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(self.pack['completion_callback']), *after)), \
+                patch.object(b, 'send_text'), patch.object(b, 'send_key') as key:
             with self.assertRaises(b.DispatchUnconfirmed):
                 self.call()
+            key.assert_called_once_with('surface:46', 'enter')
         return screen + '\ntab to queue message'
+
+    @staticmethod
+    def add_rows(screen, added):
+        return screen.replace('\nGPT-6 high', '\n' + added + '\nGPT-6 high', 1)
+
+    def assert_resume_refuses(self, screens):
+        with patch.object(b, 'read_screen', side_effect=ScreenSequence(screens)), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaises((b.DispatchUnconfirmed, b.TaskPackContractError)):
+                self.call(resume_queue_only=True)
+            send.assert_not_called()
+            key.assert_not_called()
+        attempts = list(self.journal.glob('attempt-*.json'))
+        self.assertEqual(len(attempts), 1)
+        events = json.loads(attempts[0].read_text())['events']
+        self.assertEqual(sum(e['phase'] == 'PASTE_INTENT' for e in events), 1)
+        self.assertFalse(any(e['phase'] in ('QUEUE_TAB_INTENT', 'EXTRA_ENTER_INTENT') for e in events))
+        self.assertFalse(self.receipt.exists())
 
     def test_original_enter_resume_one_tab_no_paste(self):
         pending = self.pending_original()
-        with patch.object(b, 'read_screen', side_effect=[pending, self.confirmed_screen()]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+        with patch.object(b, 'read_screen', return_value=pending), \
+                patch.object(b, 'send_text') as send, \
+                patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(self.pack['completion_callback'])) as key:
             self.assertTrue(self.call(resume_queue_only=True)['confirmed'])
             send.assert_not_called()
             key.assert_called_once_with('surface:46', 'tab')
@@ -56,7 +92,8 @@ class JournalTests(unittest.TestCase):
     def test_queue_observation_does_not_create_receipt(self):
         pending = self.pending_original()
         queue = 'Messages to be submitted after next tool call\n' + self.pack['completion_callback'] + '\n' + IDLE
-        with patch.object(b, 'read_screen', side_effect=[pending, queue]), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+        with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key, \
+                patch.object(b, 'read_screen', side_effect=lambda *a, **kw: queue if key.called else pending):
             with self.assertRaises(b.DispatchUnconfirmed):
                 self.call(resume_queue_only=True)
             key.assert_called_once(); send.assert_not_called()
@@ -91,6 +128,80 @@ class JournalTests(unittest.TestCase):
                 self.call(resume_queue_only=True)
             key.assert_not_called(); send.assert_not_called()
 
+    def test_current_added_blank_line_cannot_resume(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([self.add_rows(pending, '')])
+
+    def test_current_added_multiple_blank_lines_cannot_resume(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([self.add_rows(pending, '\n')])
+
+    def test_current_added_gutter_blank_line_cannot_resume(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([self.add_rows(pending, '  ')])
+
+    def test_original_post_enter_blank_change_blocks_restored_callback(self):
+        intact = self.pending_screen(hint=False)
+        pending = self.pending_original([self.add_rows(intact, ''), intact])
+        self.assert_resume_refuses([pending])
+
+    def test_original_post_enter_unknown_blocks_restored_callback(self):
+        intact = self.pending_screen(hint=False)
+        pending = self.pending_original(['render unavailable', intact])
+        self.assert_resume_refuses([pending])
+
+    def test_original_post_enter_compaction_blocks_restored_callback(self):
+        intact = self.pending_screen(hint=False)
+        pending = self.pending_original([intact.replace('Working', 'Compacting context'), intact])
+        self.assert_resume_refuses([pending])
+
+    def test_original_post_enter_queue_blocks_restored_callback(self):
+        intact = self.pending_screen(hint=False)
+        queued = self.queued_pending_screen(hint=False)
+        self.assertTrue(b.pending_queue_holds(queued, self.pack['completion_callback']))
+        pending = self.pending_original([queued, intact])
+        self.assert_resume_refuses([pending])
+
+    def test_queue_during_resume_then_restored_callback_still_refuses(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([pending, self.queued_pending_screen(), pending])
+
+    def test_rejected_queue_callback_cannot_be_retried_after_restore(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([self.queued_pending_screen()])
+        self.assert_resume_refuses([pending])
+
+    def test_current_compaction_blocks_callback_without_waiting_for_restore(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([pending.replace('Working', 'Compacting context'), pending])
+
+    def test_changed_during_resume_then_restored_callback_still_refuses(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([pending, self.add_rows(pending, ''), pending])
+
+    def test_unknown_during_resume_then_restored_callback_still_refuses(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([pending, 'render unavailable', pending])
+
+    def test_partial_during_resume_then_restored_callback_still_refuses(self):
+        pending = self.pending_original()
+        partial = pending.replace(self.pack['completion_callback'], 'DONE|test|nonce12345')
+        self.assert_resume_refuses([pending, partial, pending])
+
+    def test_changed_during_compaction_then_restored_callback_still_refuses(self):
+        pending = self.pending_original()
+        changed = self.add_rows(pending.replace('Working', 'Compacting context'), '')
+        self.assert_resume_refuses([pending, changed, pending])
+
+    def test_unchanged_compaction_during_resume_still_refuses(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([pending, pending.replace('Working', 'Compacting context'), pending])
+
+    def test_rejected_changed_callback_cannot_be_retried_after_restore(self):
+        pending = self.pending_original()
+        self.assert_resume_refuses([self.add_rows(pending, '')])
+        self.assert_resume_refuses([pending])
+
     def test_recovery_rejects_tampered_event(self):
         self.pending_original()
         path = self.journal / 'attempt-0001.json'
@@ -98,7 +209,7 @@ class JournalTests(unittest.TestCase):
         data['events'][0]['screen'] = 'tampered'
         path.write_text(json.dumps(data))
         with patch.object(b, 'send_key') as key:
-            with self.assertRaisesRegex(b.TaskPackContractError, 'EVIDENCE_CHANGED'):
+            with self.assertRaisesRegex(NativeDeliveryError, 'ORIGINAL_PASTE_INTENT_REQUIRED'):
                 self.call(resume_queue_only=True)
             key.assert_not_called()
 
@@ -119,7 +230,8 @@ class JournalTests(unittest.TestCase):
 
     def queued(self):
         screen = 'Messages to be submitted after current tool\n' + self.pack['completion_callback'] + '\n' + IDLE
-        with patch.object(b, 'read_screen', side_effect=[IDLE, screen]), \
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(self.pack['completion_callback']), screen)), \
                 patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             with self.assertRaises(b.DispatchUnconfirmed):
                 self.call()
@@ -127,8 +239,10 @@ class JournalTests(unittest.TestCase):
             key.assert_called_once()
 
     def test_confirmed_report_hash_and_duplicate_refusal(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, self.confirmed_screen()]), \
-                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(self.pack['completion_callback']), self.confirmed_screen())), \
+                patch.object(b, 'send_text') as send, \
+                patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(self.pack['completion_callback'])) as key:
             result = self.call()
             self.assertTrue(result['confirmed'])
             self.assertEqual(result['report_sha256'], b._sha256_file(self.pack['report']))
@@ -151,6 +265,7 @@ class JournalTests(unittest.TestCase):
 
     def test_queued_never_repasted_and_read_only_reconcile(self):
         self.queued()
+        self.native.append_user(self.pack['completion_callback'])
         with patch.object(b, 'read_screen', return_value=self.confirmed_screen()), \
                 patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
             with self.assertRaises(b.TaskPackContractError):
@@ -176,6 +291,8 @@ class JournalTests(unittest.TestCase):
     def test_partial_or_cross_block_callback_cannot_reconcile(self):
         self.queued()
         callback = self.pack['completion_callback']
+        self.native.append_user('nonce12345')
+        self.native.append_user(callback + ' extra')
         screens = [
             '› nonce12345\n• Read report\n' + IDLE,
             '› ' + callback + '\n› unrelated\n• Read report\n' + IDLE,
@@ -251,8 +368,10 @@ class JournalTests(unittest.TestCase):
         return _attempt_evidence(dict(kind='callback', pack=str(self.packpath)), 'surface:46', b)
 
     def complete(self):
-        with patch.object(b, 'read_screen', side_effect=[IDLE, self.confirmed_screen()]), \
-                patch.object(b, 'send_text'), patch.object(b, 'send_key'):
+        with patch.object(b, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(self.pack['completion_callback']), self.confirmed_screen())), \
+                patch.object(b, 'send_text'), \
+                patch.object(b, 'send_key', side_effect=self.native.receipt_on_key(self.pack['completion_callback'])):
             self.call()
 
     def test_posthook_original_receipt_readonly(self):
@@ -266,6 +385,7 @@ class JournalTests(unittest.TestCase):
 
     def test_posthook_reconciliation_observation(self):
         self.queued()
+        self.native.append_user(self.pack['completion_callback'])
         with patch.object(b, 'read_screen', return_value=self.confirmed_screen()):
             result = self.call(reconcile_only=True)
         self.assertIsNotNone(self.hook_proof())

@@ -1,5 +1,9 @@
 # Receiver input and delivery evidence
 
+Current delivery and recovery rules are defined in
+[verified native delivery](verified-compose-delivery.md). Screen inspection protects
+input ownership; only the original bound native record proves reception.
+
 Before every agent message, read the bound UUID's current screen. `submit_text`
 requires a current agent composer/provider footer or its observed empty prompt.
 A bare zsh/bash/PowerShell prompt after agent exit overrides historical agent
@@ -19,30 +23,31 @@ the receiver is verified. Running a shell command does not restore a model TUI.
 
 | Evidence | Meaning | Next action |
 |---|---|---|
-| No paste/Enter | Not submitted | Resolve the recorded receiver/input issue |
-| Pasted/Enter, result unknown | Submitted, not confirmed | Inspect same UUID and marker, do not resend |
-| Marker in pending queue | Received and queued | Wait for the original tool boundary |
-| Marker followed by fresh activity | Receiver consumed input | Await its actual result |
-| Reply/ACK | Response or possession of channel | Read the verdict; not automatic agreement |
-| Report and bound callback | Reported completion | Independently verify artifacts and scope |
+| Recorded zero-input refusal | Not submitted | Resolve the original receiver/input issue |
+| Paste or key with no native proof | Unconfirmed | Preserve the original attempt; do not resend |
+| UI queue or Claude `queued_command` | Pending, not received | Bounded read-only observation of the same attempt |
+| New exact native user after original PASTE_INTENT EOF fence | `NATIVE_RECEIVED` | Record reception; execution/acceptance remain separate |
+| Reply/ACK | Response or channel possession | Read the actual verdict; not delivery or agreement proof |
+| Frozen report | Report available | Supervisor independently verifies scope and artifacts |
 
-`DISPATCH_UNCONFIRMED` or helper exit 75 is not evidence of non-delivery. A later
-reply or actual artifact may resolve the same original dispatch. Preserve both
-observations; do not replace the failure record with a retroactive success.
-Only a visibly pending, idle paste may receive the bridge's one extra Enter;
-it is never repasted. Queue/unknown outcomes do not take that retry path.
-An explicit queue entry for this marker also takes priority over fresh activity
-from an earlier task; such activity cannot turn queued delivery into consumption.
+`DISPATCH_UNCONFIRMED` or helper exit 75 is not evidence of non-delivery.
+Preserve the original observation even if a later exact native record permits
+reconciliation. Unknown/queued attempts are not repasted. A complete stable
+original draft may use only the original controller's one shared additional-key
+budget; recovery intentions consume it before input. There is no separate Tab
+allowance. Missing original binding/fence cannot be added retrospectively.
 
-Calls without a marker now report `submitted=true, confirmed=false` after input.
-Formal task/callback paths already carry markers. This makes unmeasured
-consumption explicit and avoids turning a successful send into acceptance.
+The first submission uses Tab directly only when busy Codex explicitly displays
+the supported `tab to queue message` action and the full draft matches; other
+clear supported states use Enter. A queue entry remains pending. Screen activity,
+prompt echo, empty compose, ACK or a marker alone cannot confirm reception.
+
 An occupied composer is preserved by default; explicitly authorized force-compose
 still cannot clear active/queued work. Future UI shapes need a measured fixture
 and an updated detector; a historical screenshot is not current liveness.
 
 Tests use synthetic screens and count actual mocked send/key calls. They verify
-zero sends to a shell, preserved user input, one send for queued delivery, and
+zero sends to a shell, preserved user input, one paste for queued delivery, and
 the distinction between current and historical UI. They do not certify another
 terminal, restart a peer or change its model. Cross-agent review records who
 actually responded; unavailable peers' old evidence is not new consensus.
