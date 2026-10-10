@@ -19,6 +19,14 @@ import test_executor_closeout as closeout_tests
 
 
 class HookIdentityTests(unittest.TestCase):
+    session = '4ec8ad00-956d-4d00-b302-64927c25ce3f'
+
+    def enroll_native(self):
+        for row in self.marker['participants']:
+            row['native_session_id'] = self.session
+        self.write(self.active / 'native.json', self.marker)
+        self.payload['session_id'] = self.session
+
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
@@ -61,33 +69,35 @@ class HookIdentityTests(unittest.TestCase):
         self.assertTrue(stop.evaluate(dict(final_message='consensus-validation PASS'))[0])
 
     def test_native_supervisor_false_claim_is_checked(self):
-        self.marker['participants'] = []
+        self.marker['participants'] = [dict(role='supervisor', surface_uuid='native-surface')]
         self.write(self.active / 'native.json', self.marker)
         self.assertFalse(stop.evaluate(dict(final_message='consensus-validation PASS'))[0])
 
-    def test_failed_resolution_blocks_without_falling_back(self):
+    def test_failed_resolution_skips_task_scope_without_falling_back(self):
+        self.enroll_native()
         self.snapshot.side_effect = identity.workspace.WorkspaceScopeError('drift')
         before = {p: p.read_bytes() for p in self.root.rglob('*.json')}
         for mod, payload in ((stop, self.payload), (closeout, dict(hook_event_name='PreToolUse')),
                              (lease, dict(tool_name='Edit', tool_input={'file_path': '/tmp/test'}))):
-            ok, msg = mod.evaluate(payload)
-            self.assertFalse(ok)
-            self.assertIn('HOOK_CALLER_UNRESOLVED', msg)
+            ok, msg = mod.evaluate(dict(payload, session_id=self.session))
+            self.assertTrue(ok, msg)
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*.json')})
 
     def test_incomplete_resolved_identity_cannot_fall_back(self):
+        self.enroll_native()
         self.snapshot.return_value = ({}, {}, {'CMUX_WORKSPACE_ID': 'native'}, {})
-        self.assertFalse(stop.evaluate(self.payload)[0])
+        self.assertTrue(stop.evaluate(self.payload)[0])
 
     def test_managed_caller_cannot_downgrade_to_inherited_environment(self):
+        self.enroll_native()
         self.snapshot.return_value = ({}, {}, dict(os.environ), None)
         ok, message = stop.evaluate(self.payload)
-        self.assertFalse(ok)
-        self.assertIn('HOOK_CALLER_UNRESOLVED', message)
+        self.assertTrue(ok, message)
 
-    def test_discovery_timeout_is_a_controlled_denial(self):
+    def test_discovery_timeout_does_not_trap_stop_and_recovery_restores_scope(self):
+        self.enroll_native()
         self.collect.side_effect = subprocess.TimeoutExpired('ps', 5)
-        self.assertIn('HOOK_CALLER_UNRESOLVED', stop.evaluate(self.payload)[1])
+        self.assertTrue(stop.evaluate(self.payload)[0])
         self.collect.side_effect = None
         self.assertFalse(stop.evaluate(self.payload)[0])
 

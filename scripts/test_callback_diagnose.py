@@ -302,12 +302,16 @@ class CallbackDiagnoseTests(unittest.TestCase):
                     self.call(dict(workspace_id=self.workspace, surface_id=self.executor))
 
     def test_identity_failure_is_not_an_ordinary_caller_fallback(self):
+        # This refusal belongs to an explicitly enrolled native conversation.
+        session = "eeeeeeee-1111-2222-3333-444444444444"
+        self.marker["participants"][1]["native_session_id"] = session
+        self.write(self.marker_path, self.marker)
+        payload = dict(self.payload(), session_id=session)
         with patch.object(daemon, "process", side_effect=daemon.IdentityError("identity denied")):
             with self.assertRaisesRegex(daemon.IdentityError, "identity denied"):
-                self.call(self.payload())
-            allowed, reason = self.readonly(closeout_guard.evaluate, self.payload())
-        self.assertFalse(allowed)
-        self.assertIn("HOOK_CALLER_UNRESOLVED", reason)
+                self.call(payload)
+            allowed, reason = self.readonly(closeout_guard.evaluate, payload)
+        self.assertTrue(allowed, reason)
 
     def test_relative_misnamed_and_symlink_pack_paths_are_rejected(self):
         alias_dir = self.root / "alias"

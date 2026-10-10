@@ -129,6 +129,12 @@ class NativeDeliveryGuardTests(unittest.TestCase):
                 callback_target=target,
                 executor_uuid=self.identity["caller_surface_uuid"],
             )
+            if kind == "callback":
+                controller = Path(bridge.__file__).resolve()
+                pack.update(required_skill=str(controller.parent.parent / "SKILL.md"),
+                            completion_command_argv=["rtk", "proxy", sys.executable,
+                                "-B", str(controller), "submit-completion-callback",
+                                "--task-pack", str(pack_path)])
             write_json(pack_path, pack)
         bound = dict(identity=copy.deepcopy(self.identity))
         if kind == "callback":
@@ -344,6 +350,127 @@ class NativeDeliveryGuardTests(unittest.TestCase):
         self._use_provider("claude")
         case = self._case("callback", received=True)
         self._received(self._evaluate(case), case)
+
+    def _callback_receiver(self, case):
+        """原主管观察自己收到的 callback；self-target 仍被 live guard 拒绝。"""
+        pins = case.bound["identity"]
+        reverse = dict(workspace_uuid=pins["workspace_uuid"],
+                       caller_surface_uuid=pins["target_surface_uuid"],
+                       target_surface_uuid=pins["caller_surface_uuid"],
+                       caller_pane_uuid=pins["target_pane_uuid"],
+                       target_pane_uuid="EEEEEEEE-1111-2222-3333-444444444444")
+        self.hook_identity = (pins["workspace_uuid"], pins["target_surface_uuid"])
+        def pin(surface):
+            if surface == pins["caller_surface_uuid"]:
+                return copy.deepcopy(reverse)
+            raise RuntimeError("executor must be another terminal side pane")
+        self.native.pin.side_effect = pin
+        return reverse
+
+    def test_callback_receiver_literal_reconcile_confirms_original_without_input(self):
+        case = self._case("callback", received=True)
+        self._callback_receiver(case)
+        before = self._snapshot()
+        payload = {"tool_input": {"cmd": case.command + " --reconcile-only"}}
+        self._received(self._evaluate(case, payload), case)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_callback_receiver_pending_reconcile_remains_unconfirmed(self):
+        case = self._case("callback")
+        self._callback_receiver(case)
+        payload = {"tool_input": {"cmd": case.command + " --reconcile-only"}}
+        self._blocked(self._evaluate(case, payload), state="NATIVE_PENDING")
+
+    def test_callback_receiver_python_literal_reconcile_confirms_without_input(self):
+        case = self._case("callback", received=True)
+        self._callback_receiver(case)
+        source = (f"bridge.submit_completion_callback({str(case.pack_path)!r}, "
+                  "confirm_lines=200, reconcile_only=True, resume_queue_only=False)")
+        before = self._snapshot()
+        payload = {"tool_input": {"cmd": shlex.join([sys.executable, "-B", "-c", source])}}
+        self._received(self._evaluate(case, payload), case)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_callback_receiver_python_cannot_infer_read_only_from_truthy_or_dynamic_modes(self):
+        case = self._case("callback", received=True)
+        self._callback_receiver(case)
+        for suffix in ("reconcile_only=False", "reconcile_only='True'", "reconcile_only=1",
+                       "reconcile_only=mode", "**{'reconcile_only': True}",
+                       "reconcile_only=True, **options", "reconcile_only=True, confirm_lines=limit",
+                       "reconcile_only=True, resume_queue_only=True",
+                       "reconcile_only=True, reconcile_only=False"):
+            with self.subTest(suffix=suffix):
+                source = f"bridge.submit_completion_callback({str(case.pack_path)!r}, {suffix})"
+                payload = {"tool_input": {"cmd": shlex.join([sys.executable, "-c", source])}}
+                self._blocked(self._evaluate(case, payload))
+
+    def test_callback_receiver_cannot_claim_a_send_as_read_only(self):
+        case = self._case("callback", received=True)
+        self._callback_receiver(case)
+        self._blocked(self._evaluate(case))
+        for suffix in (" --reconcile-only=false", " --reconcile-only --resume-queue-only"):
+            with self.subTest(suffix=suffix):
+                self._blocked(self._evaluate(case, {
+                    "tool_input": {"cmd": case.command + suffix}}))
+
+    def test_callback_receiver_wrong_workspace_or_pane_remains_blocked(self):
+        case = self._case("callback", received=True)
+        reverse = self._callback_receiver(case)
+        payload = {"tool_input": {"cmd": case.command + " --reconcile-only"}}
+        for key in ("workspace_uuid", "caller_surface_uuid", "target_surface_uuid", "caller_pane_uuid"):
+            with self.subTest(key=key):
+                previous = reverse[key]
+                try:
+                    reverse[key] = "FFFFFFFF-1111-2222-3333-444444444444"
+                    self._blocked(self._evaluate(case, payload))
+                finally:
+                    reverse[key] = previous
+
+    def test_callback_receiver_cannot_borrow_another_executor(self):
+        case = self._case("callback", received=True)
+        case.pack["executor_uuid"] = "FFFFFFFF-1111-2222-3333-444444444444"
+        write_json(case.pack_path, case.pack)
+        case.attempt["binding"]["task_pack_sha256"] = sha256(case.pack_path.read_bytes())
+        write_json(case.attempt_path, case.attempt)
+        self._callback_receiver(case)
+        self._blocked(self._evaluate(case, {
+            "tool_input": {"cmd": case.command + " --reconcile-only"}}))
+
+    def test_callback_receiver_hook_identity_must_match_authenticated_reverse(self):
+        case = self._case("callback", received=True)
+        self._callback_receiver(case)
+        self.hook_identity = (self.identity["workspace_uuid"],
+                              "FFFFFFFF-1111-2222-3333-444444444444")
+        self._blocked(self._evaluate(case, {
+            "tool_input": {"cmd": case.command + " --reconcile-only"}}),
+            reason="hook identity differs")
+
+    def test_callback_native_identity_cannot_differ_from_original_outer_binding(self):
+        case = self._case("callback", received=True)
+        case.attempt["binding"]["identity"]["target_pane_uuid"] = "different-pane"
+        write_json(case.attempt_path, case.attempt)
+        self._callback_receiver(case)
+        self._blocked(self._evaluate(case, {
+            "tool_input": {"cmd": case.command + " --reconcile-only"}}),
+            reason="NATIVE_JOURNAL_IDENTITY_MISMATCH")
+
+    def test_callback_receiver_changed_process_and_missing_fence_remain_blocked(self):
+        for damage in ("process", "fence"):
+            with self.subTest(damage=damage):
+                case = self._case("callback", received=True)
+                self._callback_receiver(case)
+                old_birth = self.native.process_state["birth"]
+                if damage == "process":
+                    self.native.process_state["birth"] = "different-receiver-process"
+                else:
+                    case.attempt["events"][0].pop("native_paste_fence")
+                    write_json(case.attempt_path, case.attempt)
+                try:
+                    self._blocked(self._evaluate(case, {
+                        "tool_input": {"cmd": case.command + " --reconcile-only"}}))
+                finally:
+                    self.native.process_state["birth"] = old_birth
+                    self.native.pin.side_effect = lambda *_: copy.deepcopy(self.identity)
 
     def test_literal_python_api_inputs_resolve_all_three_kinds(self):
         for kind in ("text", "task", "callback"):
@@ -630,6 +757,60 @@ class NativeDeliveryGuardTests(unittest.TestCase):
                                  else "submit-completion-callback")
                 self.assertIn("--reconcile-only", argv)
                 self.assertEqual(argv[argv.index("--task-pack") + 1], str(case.pack_path))
+
+    def _repin_callback_pack(self, case):
+        write_json(case.pack_path, case.pack)
+        case.attempt["binding"]["task_pack_sha256"] = sha256(case.pack_path.read_bytes())
+        write_json(case.attempt_path, case.attempt)
+
+    def test_callback_hint_preserves_frozen_original_release_and_python(self):
+        case = self._case("callback")
+        old = self.native.home / "original release/source"
+        (old / "scripts").mkdir(parents=True)
+        (old / "SKILL.md").write_text("offline original release fixture")
+        controller = old / "scripts/cmux_bridge.py"
+        controller.write_text("# non-executable offline controller fixture\n")
+        case.pack["required_skill"] = str(old / "SKILL.md")
+        case.pack["completion_command_argv"][4] = str(controller)
+        case.pack["callback_command"] = shlex.join(case.pack["completion_command_argv"][2:])
+        self._repin_callback_pack(case)
+        before = self._snapshot()
+        item = self._blocked(self._evaluate(case), state="NATIVE_PENDING")
+        self.assertEqual(shlex.split(item["reconcile"]),
+                         case.pack["completion_command_argv"] + ["--reconcile-only"])
+        self.assertNotIn(str(Path(bridge.__file__).resolve()), item["reconcile"])
+        self.assertEqual(self._snapshot(), before)
+
+    def test_callback_missing_or_conflicting_original_argv_never_suggests_current_release(self):
+        for damage in ("missing", "wrong_controller", "wrong_pack", "conflicting", "shell_tail"):
+            with self.subTest(damage=damage):
+                case = self._case("callback")
+                argv = case.pack["completion_command_argv"]
+                if damage == "missing":
+                    case.pack.pop("completion_command_argv")
+                elif damage == "wrong_controller":
+                    argv[4] = "/unrelated/source/scripts/cmux_bridge.py"
+                elif damage == "wrong_pack":
+                    argv[-1] = "/different/task-pack.json"
+                elif damage == "conflicting":
+                    case.pack["callback_command"] = shlex.join(argv + ["--reconcile-only"])
+                else:
+                    argv += [";", "echo", "wrong"]
+                self._repin_callback_pack(case)
+                item = self._blocked(self._evaluate(case), state="NATIVE_PENDING")
+                self.assertNotIn("reconcile", item)
+                self.assertTrue(item["reconcile_unavailable"])
+                self._no_recovery({"results": [item]})
+
+    def test_callback_missing_command_metadata_does_not_erase_native_reception(self):
+        case = self._case("callback", received=True)
+        case.pack.pop("completion_command_argv")
+        self._repin_callback_pack(case)
+        self._callback_receiver(case)
+        item = self._received(self._evaluate(case, {
+            "tool_input": {"cmd": case.command + " --reconcile-only"}}), case)
+        self.assertNotIn("reconcile", item)
+        self.assertTrue(item["reconcile_unavailable"])
 
     def test_missing_enter_sent_never_suggests_recovery(self):
         case = self._case()

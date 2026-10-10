@@ -1,8 +1,8 @@
 """Resolve a shared Codex daemon caller from live process evidence, never focus.
 
 No environment mutation or terminal operations. The thread ID is only a selector:
-a unique same-user `codex resume <id>` client, executable, birth, TTY and cmux UUID
-must agree. Ordinary clients retain the original identify/environment checks.
+a unique same-user native foreground (or legacy resume) client, executable,
+birth, TTY and cmux UUID must agree. Ordinary clients retain the original identify/environment checks.
 """
 import ctypes
 import errno
@@ -14,6 +14,7 @@ import subprocess
 import sys
 import uuid
 import cmux_identity_budget as budget
+import cmux_foreground_thread as foreground
 
 
 class IdentityError(RuntimeError):
@@ -73,7 +74,8 @@ def _args(data):
         env[key] = value
     # Credentials never leave this reader.
     return argv, {k: env[k.encode()].decode() for k in
-                  ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'CODEX_THREAD_ID') if k.encode() in env}
+                  ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'CODEX_THREAD_ID',
+                   'HOME', 'CODEX_HOME', 'CODEX_CLIENT_THREAD_OBSERVER') if k.encode() in env}
 
 
 def process(pid, *, arguments=True, validate_argv=True, allow_system_login=False):
@@ -270,7 +272,12 @@ def _ancestry():
 
 
 def collect(env):
-    """Tool-shell contract: a thread selector requires matching tool ancestry."""
+    """Bind a tool's kernel-observed selector to its live native client.
+
+    A shell may exec its last command. The resulting Python process is then a
+    direct managed-daemon child, with no extra shell/rtk ancestor. Its own
+    immutable process identity supplies the tool selector in that exact case.
+    """
     if sys.platform != 'darwin' or not env.get('CODEX_THREAD_ID'):
         return None
     chain, daemon = _ancestry()
@@ -279,7 +286,24 @@ def collect(env):
     session = str(uuid.UUID(env['CODEX_THREAD_ID']))
     tool_threads = [p['env']['CODEX_THREAD_ID'] for p in chain[:-1]
                     if p['env'].get('CODEX_THREAD_ID')]
-    if not tool_threads or any(t != session for t in tool_threads):
+    if not tool_threads:
+        # Do not require an incidental wrapper to keep a selectable ancestor
+        # alive. Read this actual process; a caller-provided env dictionary or
+        # the daemon's inherited workspace cannot establish the thread.
+        if len(chain) != 1 or chain[0] != daemon or os.getppid() != daemon['pid']:
+            raise IdentityError('thread selector missing from tool ancestry')
+        current = process(os.getpid())
+        if (current['pid'] != os.getpid() or current['ppid'] != daemon['pid']
+                or current['env'].get('CODEX_THREAD_ID') != session):
+            raise IdentityError('thread selector differs from current tool ancestry')
+        if any(current['env'].get(k) != env.get(k) for k in
+               ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID')):
+            raise IdentityError('current tool environment differs from tool selector')
+        # _collect_client rereads every member of this chain after inventory,
+        # including PID/birth/executable/parent/selector, before returning proof.
+        chain = [current] + chain
+        tool_threads = [current['env']['CODEX_THREAD_ID']]
+    if any(t != session for t in tool_threads):
         raise IdentityError('thread selector differs from tool ancestry')
     if any(env.get(k) != daemon['env'].get(k) for k in
            ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID')):
@@ -321,6 +345,7 @@ def collect_hook(env, payload):
 def _collect_client(session, chain, daemon):
     candidates = client_candidates()
     clients = []
+    selections = []
     for candidate in candidates:
         try:
             # A discovery row is not yet this session's caller. Read its kernel
@@ -331,7 +356,14 @@ def _collect_client(session, chain, daemon):
             # a disappearance after a partial read must not hide a second match.
             continue
         argv = p['argv']
-        if len(argv) >= 3 and argv[1:3] == ['resume', session]:
+        try:
+            selected = foreground.read(p)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise IdentityError('native foreground selection unavailable: ' + str(exc)) from exc
+        selections.append((p, selected))
+        matches = (selected['thread_id'] == session if selected is not None
+                   else len(argv) >= 3 and argv[1:3] == ['resume', session])
+        if matches:
             if process(p['pid']) != p:
                 raise IdentityError('selected client identity drift')
             if Path(p['executable']).name != 'codex':
@@ -348,12 +380,22 @@ def _collect_client(session, chain, daemon):
             # argv[0]. Never exclude an unreadable or changing session selector.
             raise IdentityError('unrelated candidate identity drift')
     if len(clients) != 1:
-        raise IdentityError('native session has no unique live resumed client')
+        raise IdentityError('native caller discovery did not resolve a unique active client')
     # Verify every ancestor as well as the selected client after the inventory.
     for item in chain + clients:
         if process(item['pid']) != {k: v for k, v in item.items() if k != 'tty'}:
             raise IdentityError('process identity drift')
-    return {'session': session, 'daemon': daemon, 'client': clients[0], 'chain': chain}
+    for original, selected in selections:
+        try:
+            if foreground.read(original) != selected:
+                raise IdentityError('native foreground selection changed during inventory')
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise IdentityError('native foreground selection recheck failed: ' + str(exc)) from exc
+    proof = {'session': session, 'daemon': daemon, 'client': clients[0], 'chain': chain}
+    selected = next(s for p, s in selections if p['pid'] == clients[0]['pid'])
+    if selected is not None:
+        proof['foreground'] = selected
+    return proof
 
 
 def resolve(identity, tree, env, proof):
@@ -385,7 +427,7 @@ def resolve(identity, tree, env, proof):
     if any(raw.get(k) != source[k] for k in ('surface_ref', 'workspace_ref', 'pane_ref')):
         raise IdentityError('identify differs from daemon origin')
     # cmux can retain the name of a recycled PTY on an unrelated surface.
-    # The unique live resumed process and its kernel-read UUID environment
+    # The unique live native process and its kernel-read UUID environment
     # select the caller; a global TTY-name search must not select or veto it.
     # Still require that exact UUID row to agree with the live client's TTY.
     if (not client.get('tty') or caller['tty'] != client['tty']

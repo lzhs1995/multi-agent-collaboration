@@ -168,6 +168,59 @@ def pin_workspace(surface, *, workspace_uuid=None, target_uuid=None, caller_uuid
     return proof
 
 
+def pin_successor_pair(artifact, *, expected_caller=None, expected_target=None):
+    """Bind an explicitly authorized successor caller/receiver pair.
+
+    Ordinary bridge calls never use this route and therefore keep the strict
+    same-workspace contract.  The returned proof carries both workspace UUIDs
+    so a caller cannot accidentally reuse the old single-workspace pin.
+    """
+    from cmux_workspace_guard import require_successor_pair
+    return require_successor_pair(
+        artifact, expected_caller=expected_caller, expected_target=expected_target)
+
+
+def _run_successor(*args, artifact, check=True, capture=True):
+    """Run only explicit target RPCs under a successor pair proof."""
+    args = list(args)
+    proof = pin_successor_pair(artifact)
+    if args[:2] == ["rpc", "terminal.paste"]:
+        if len(args) != 3:
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: explicit paste parameters required")
+        try:
+            params = json.loads(args[2])
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: invalid paste parameters") from exc
+        if (not isinstance(params, dict) or params.get("submit_key") != "none"
+                or set(params) != {"text", "submit_key", "workspace_id", "surface_id"}
+                or not isinstance(params.get("text"), str) or not params["text"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: literal paste must not submit")
+        if uuid_value(params["workspace_id"]) != uuid_value(proof["target_workspace_uuid"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target workspace override")
+        if uuid_value(params["surface_id"]) != uuid_value(proof["target_surface_uuid"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target surface override")
+        args[2] = json.dumps(dict(params, workspace_id=proof["target_workspace_uuid"],
+                                   surface_id=proof["target_surface_uuid"]), ensure_ascii=False)
+    elif args and args[0] in {"send", "send-key"}:
+        if "--surface" not in args:
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: explicit surface required")
+        i = args.index("--surface") + 1
+        if uuid_value(args[i]) != uuid_value(proof["target_surface_uuid"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target surface override")
+        if "--workspace" in args:
+            wi = args.index("--workspace") + 1
+            if uuid_value(args[wi]) != uuid_value(proof["target_workspace_uuid"]):
+                raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target workspace override")
+        else:
+            args[1:1] = ["--workspace", proof["target_workspace_uuid"]]
+    else:
+        raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: unsupported route")
+    result = subprocess.run([CMUX] + args, capture_output=capture, text=True)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"cmux successor call failed (rc={result.returncode}): {result.stderr.strip()}")
+    return result.stdout.strip() if capture else ""
+
+
 def _run(*args, check=True, capture=True):
     """Run cmux with given args, return stdout string."""
     args = list(args)
@@ -696,7 +749,8 @@ _COMPOSE_CHROME_RE = re.compile(
 _CLAUDE_BORDER_RE = re.compile(r"─{8,}")
 _CLAUDE_DURATION = r"(?:\d+h(?:\s+\d+m)?|\d+m(?:\s+\d+s)?|\d+s)"
 _CLAUDE_TOOL = r"[A-Za-z][\w.:-]*"
-_CLAUDE_COUNTS = rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
+_CLAUDE_COUNTS = (rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
+                  r"(?:\s*\|\s*\+[1-9]\d* more)?")
 _CLAUDE_ACTIVE_TOOL_RE = re.compile(
     rf"[◐◑◒◓]\s+{_CLAUDE_TOOL}:\s+[^|\n]+(?:\s*\|\s*{_CLAUDE_COUNTS})?")
 _CLAUDE_SUMMARY_RE = re.compile(
@@ -716,7 +770,8 @@ def _claude_bordered_compose(screen):
                 if rows[i].strip() == rows[start - 1].strip()), None)
     if end is None:
         return None
-    footer = [row.strip() for row in rows[end + 1:] if row.strip()]
+    footer_rows = [row for row in rows[end + 1:] if row.strip()]
+    footer = [row.strip() for row in footer_rows]
     if not footer:
         return None
     # 当前实屏的 model/cwd/time/goal 同行；cwd 可以没有 git 信息。
@@ -726,24 +781,43 @@ def _claude_bordered_compose(screen):
             r"(?:\[claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
             r"\[(?:Opus|Sonnet|Claude)\s+[^\]\n]+\])", fields[0], re.I)):
         return None
-    if len(fields) >= 2 and not re.fullmatch(
-            r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?", fields[1]):
-        return None
     elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
     # Measured 2026-10-09: only the inline time field carries this exact
     # optional hint. Its count is an integer or k with at most one decimal;
     # unknown suffixes and matching text inside the borders remain untouched.
     inline_elapsed = (elapsed + r"(?: +new task\? /clear to save "
                       r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens)?")
+    cwd_field = r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?"
+    footer_start = 1
+    # Measured 2026-10-10 (surface:4546): model-only row, then either one
+    # complete cwd/time row or two separate cwd and elapsed rows. Consume only
+    # these exact footer shapes, never composer text or an arbitrary
+    # continuation row. The remaining chrome is still required.
+    if len(fields) == 1 and len(footer) > 1:
+        wrapped = [part.strip() for part in footer[1].split("│")]
+        if (len(wrapped) == 2 and re.fullmatch(cwd_field, wrapped[0])
+                and re.fullmatch(inline_elapsed, wrapped[1])):
+            fields.extend(wrapped)
+            footer_start = 2
+        elif (len(footer) > 2
+              and footer_rows[1].startswith("  ")
+              and footer_rows[2].startswith("  ")
+              and re.fullmatch(cwd_field, footer[1])
+              and re.fullmatch(inline_elapsed, footer[2])):
+            fields.extend((footer[1], footer[2]))
+            footer_start = 3
+    if len(fields) >= 2 and not re.fullmatch(cwd_field, fields[1]):
+        return None
     if len(fields) == 3 and not re.fullmatch(inline_elapsed, fields[2]):
         return None
     if len(footer) > 1:
-        rest = footer[1:]
+        rest = footer[footer_start:]
         # The same measured hint can occupy its own row AFTER the complete
         # footer. Never remove an occurrence inside the composer, or permit
         # arbitrary text after the normal bypass row.
         if rest and re.fullmatch(
-                r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens",
+                r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens"
+                rf"(?: · ◎ /goal active \({_CLAUDE_DURATION}\))?",
                 rest[-1]):
             rest = rest[:-1]
         if rest and re.fullmatch(elapsed, rest[0]):
@@ -1701,6 +1775,24 @@ def read_screen(surface, lines=200):
         target, workspace = rows[0]["surface_id"], rows[0]["workspace_id"]
     return _run("read-screen", "--workspace", workspace, "--surface", target,
                 "--lines", str(lines))
+
+
+def read_screen_successor(artifact, lines=200):
+    """Read the authorized successor receiver by its target workspace UUID."""
+    proof = pin_successor_pair(artifact)
+    result = subprocess.run(
+        [CMUX, "read-screen", "--workspace", proof["target_workspace_uuid"],
+         "--surface", proof["target_surface_uuid"], "--lines", str(lines)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise WorkspaceScopeError(
+            f"SUCCESSOR_REBIND_DENIED: read-screen failed (rc={result.returncode})")
+    # Recheck the caller and receiver after the read; a stale screen is never
+    # used to authorize paste or a key.
+    pin_successor_pair(artifact, expected_caller=proof["caller_surface_uuid"],
+                       expected_target=proof["target_surface_uuid"])
+    return result.stdout
 
 
 def wait_for_ack(surface, ack_prefix="PREFLIGHT_ACK", timeout=120, poll=3, lines=200, task_id=None, provider=None, nonce=None):
