@@ -1,3 +1,10 @@
+# 0.4.23
+
+- Validate new task-pack wire format before creating a journal. A formal
+  `NO_INPUT` rejection can be repaired only through the original controller,
+  with the original attempt, pack, nonce and identity pinned; no old attempt is
+  edited and the second input budget is durable.
+
 # 0.4.22
 
 - Accept the measured Claude layout that renders the model, cwd and elapsed

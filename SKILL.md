@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.22 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.23 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -325,3 +325,33 @@ Keep full stable-draft matching and exact new native user proof; never infer
 delivery from keys, partial text, queue banners or composer clearing. Live
 acceptance records the callback and automatic hook invocation in the actual
 client; running a hook manually proves only the invoked test.
+
+## Consume pending supervisor requests and repair zero-input notices
+
+At a major tool boundary, before a new long batch, and before reporting progress,
+inspect the current supervisor surface for queued follow-up inputs. Verify each
+pinned UTF-8 body and SHA, read it, and reply to its exact mailbox. Record consumed
+and pending items; duplicate notice markers do not need duplicate replies. A UI
+queue, body reading, native receipt, ACK and business acceptance are separate.
+Do not leave maintenance requests unread while repeating status probes.
+
+For new formal tasks, generate `TASK_PACK_V2` with `cmux_bridge.task_pack_notice`
+(or `task-notice --task-pack /absolute/task-pack.json`) from the finalized pack.
+Never hand-assemble a multiline task prompt. Since 0.4.23, wire validation happens
+before a task journal is reserved. The explicit `scripts/repair_task_notice.py`
+coordinator handles only a first `NO_INPUT` wire-format rejection with `events=[]`.
+It verifies the pinned original attempt, original payload and unchanged pack;
+requires the same caller, receiver process/session and original lock; and uses
+the complete original immutable controller for terminal input and native proof.
+The read-only default must return `READY_ZERO_INPUT` before `--apply`. It appends
+only the original journal's one second attempt, retaining the original bytes,
+completion nonce and callback controller. A crash consumes this budget. Pasted,
+queued, uncertain, changed or already-received attempts cannot use this route.
+The corrected TASK_PACK_V2 marker is the task id; this is not a new business task.
+
+A busy Claude may expose a `queued_command` attachment while working on a task.
+Preserve that observation without declaring an exact native-user receipt. Never
+resend merely because an ACK or report preceded that record. Executors must wait
+for a finalized, hash-pinned task notice rather than treating a draft pack found
+on disk as authority. Continue independent authorized work in SOLO when a peer
+is unavailable; maintenance does not reopen accepted research reviews.
