@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import executor_ready as ready  # noqa: E402
 import executor_reask as reask  # noqa: E402
+import cmux_hook_identity as hook_identity  # noqa: E402
 
 SELF = Path(__file__).resolve().parent / 'executor_reask.py'
 PY = sys.executable or 'python3'
@@ -28,26 +29,30 @@ def _run_cmd(caller):
             f'--caller-uuid {shlex.quote(caller)}')
 
 
-def _idle_binding(caller):
+def _idle_binding(caller, workspace=''):
     """本 executor 的 idle binding（由 cmux_executor_idle_guard 写）。"""
-    bindings = ready.idle_root() / 'bindings'
+    return reask.idle_binding(caller, workspace)
+
+
+def decide(payload, caller, now=None, workspace=''):
+    if not isinstance(payload, dict) or payload.get('hook_event_name') != 'Stop' or not caller:
+        return False, ''
     try:
-        names = sorted(os.listdir(bindings))[:256]
-    except OSError:
-        return None
-    for name in names:
-        body = ready.read_json(bindings / name)
-        if body and body.get('surface_uuid') == caller:
-            return body
-    return None
+        with reask.episode_lock(caller):
+            return decide_locked(payload, caller, now, workspace)
+    except BlockingIOError:
+        # The existing controller owns the episode; do not create another one.
+        return True, '[executor-reask] 原求派控制器仍持有状态锁；核原控制器结果，不另开段。'
 
 
-def decide(payload, caller, now=None):
+def decide_locked(payload, caller, now=None, workspace=''):
     """返回 (block: bool, reason: str)。"""
     now = time.time() if now is None else now
     if not isinstance(payload, dict) or payload.get('hook_event_name') != 'Stop' or not caller:
         return False, ''
     state = reask.load(caller)
+    if state and workspace and state.get('workspace_uuid') not in ('', None, workspace):
+        return False, ''
     transcript = payload.get('transcript_path') or ''
     if state and state.get('state') == reask.WAITING:
         if transcript and not state.get('transcript'):
@@ -57,12 +62,7 @@ def decide(payload, caller, now=None):
             except (OSError, ValueError):
                 pass
         # 只核答复，不消耗求派轮次；发送只在 run 里做。
-        if reask.ready.read_json(reask.stop_file(caller)) is not None:
-            state.update(state=reask.STOPPED, stopped_epoch=now)
-        else:
-            reply = reask.find_reply(state)
-            if reply:
-                state.update(state=reask.ANSWERED, reply=dict(reply, at_epoch=now))
+        reask.poll_locked(state, now)
         reask.save(state)
     if state and state.get('state') == reask.ANSWERED:
         reply = state.get('reply') or {}
@@ -73,13 +73,16 @@ def decide(payload, caller, now=None):
                       % (reply.get('source', '?'),
                          (' ' + reply['path']) if reply.get('path') else '',
                          str(reply.get('text', ''))[:600]))
-    if not state or state.get('state') in (reask.CONSUMED, reask.STOPPED):
-        binding = _idle_binding(caller)
+    if reask.stop_file(caller).exists() or state and state.get('state') == reask.STOPPED:
+        return False, ''
+    if not state or state.get('state') == reask.CONSUMED:
+        binding = _idle_binding(caller, workspace)
         started = float(state.get('started_epoch', 0)) if state else 0.0
         if (binding and binding.get('state') in IDLE_STATES and binding.get('supervisor_uuid')
                 and float(binding.get('idle_since_epoch') or 0) > started):
-            state = reask.start(caller, binding['supervisor_uuid'], binding.get('task_id', ''),
-                                transcript, executor_ref=caller, now=now, reason='AUTO_IDLE')
+            state = reask.start_locked(caller, binding['supervisor_uuid'], binding.get('task_id', ''),
+                                      transcript, executor_ref=caller, now=now, reason='AUTO_IDLE',
+                                      workspace=workspace or binding.get('workspace_uuid', ''))
         else:
             return False, ''
     if state.get('state') != reask.WAITING:
@@ -87,8 +90,8 @@ def decide(payload, caller, now=None):
     last = state['asks'][-1] if state.get('asks') else {}
     return True, (
         '[executor-reask] 你是空闲 executor，Codex 主管(%s)尚未答复；禁止停下或空等。'
-        '已求派 %d 次，上次 %s（%s）。立刻运行：\n%s\n'
-        '它每 %d 秒发一条新 marker 的求派（文件通道每轮必写；主管 composer 空闲才走终端），'
+        '已写出/投递请求 %d 次，上次 %s（%s）。立刻运行：\n%s\n'
+        '它每 %d 秒新建一次文件求派，明确报告失败；原终端请求未核收时只走文件通道，'
         '直到主管答复/新派发；返回仍 WAITING_REPLY 就再运行一次。只有 operator 可用 '
         '`executor_reask.py stop` 结束。' % (
             state['supervisor'][:8], state.get('ask_count', 0),
@@ -101,12 +104,20 @@ def main():
         payload = json.loads(sys.stdin.read(ready.MAX_JSON_BYTES + 1) or '{}')
     except (ValueError, OSError):
         return 0
-    caller = os.environ.get('CMUX_SURFACE_ID', '') or (payload.get('surface_uuid', '')
-                                                        if isinstance(payload, dict) else '')
+    if not isinstance(payload, dict) or payload.get('hook_event_name') != 'Stop':
+        return 0
     try:
-        block, reason = decide(payload, caller)
+        with hook_identity.evaluation(payload):
+            workspace, caller = hook_identity.identity(payload)
+            if not caller or workspace == 'default':
+                return 0
+            block, reason = decide(payload, caller, workspace=workspace)
+    except hook_identity.ERRORS as exc:
+        # An unauthenticated daemon caller is an expected refusal, not a crash.
+        print(f'[executor-reask] IDENTITY_REFUSED {type(exc).__name__}', file=sys.stderr)
+        return 0
     except Exception as exc:  # 状态损坏时不制造无提示死循环，但要在 stderr 留证
-        print(f'[executor-reask] INTERNAL_ERROR {type(exc).__name__}: {exc}', file=sys.stderr)
+        print(f'[executor-reask] INTERNAL_ERROR {type(exc).__name__}', file=sys.stderr)
         return 0
     if block:
         print(json.dumps(dict(decision='block', reason=reason), ensure_ascii=False))

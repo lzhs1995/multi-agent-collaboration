@@ -370,10 +370,12 @@ class LeaseHookExpiryTests(unittest.TestCase):
                 "tool_input": {"command": "printf x >> /tmp/declared.txt"},
             }
             with mock.patch.object(LEASE_GUARD, "ACTIVE_DIR", active_dir), \
-                 mock.patch.dict(os.environ, {"CMUX_WORKSPACE_ID": "workspace-test"},
+                 mock.patch.dict(os.environ, {"CMUX_WORKSPACE_ID": "workspace-test",
+                                             "CMUX_SURFACE_ID": "armed-surface"},
                                  clear=False):
                 (active_dir / "workspace-test.json").write_text(json.dumps({
-                    "task_id": "armed-without-root"}))
+                    "task_id": "armed-without-root", "participants": [
+                        {"role": "executor", "surface_uuid": "armed-surface"}]}))
                 ok, message = LEASE_GUARD.evaluate(payload)
             self.assertFalse(ok)
             self.assertIn("ARTIFACT_ROOT_NOT_ABSOLUTE", message)
@@ -563,7 +565,8 @@ class StopGuardPolarityTests(unittest.TestCase):
         (root / "rounds.json").write_text(json.dumps({"rounds": [
             {"round_id": f"R{i}", "speaker": "claude:identity",
              "verdict": "PASS_WITH_CHANGES"} for i in range(1, rounds + 1)]}))
-        return {"task_id": task_id, "artifact_root": str(root)}
+        return {"task_id": task_id, "artifact_root": str(root), "participants": [
+            {"role": "supervisor", "surface_uuid": "polarity-supervisor"}]}
 
     def _allowed(self, guard, marker, text):
         """Drive the WIRED entry point, not internals.
@@ -573,7 +576,8 @@ class StopGuardPolarityTests(unittest.TestCase):
         caught: two excisions stayed green because nothing under test ever
         reached the mutated line.
         """
-        with mock.patch.object(guard, "_has_active_markers", return_value=True), \
+        with mock.patch.object(guard, "_scope_candidates", return_value=[marker]), \
+                mock.patch.object(guard.hook_identity, "resolve", return_value=("polarity-ws", "polarity-supervisor")), \
                 mock.patch.object(guard, "_active_markers", return_value=[marker]):
             ok, _msg = guard.evaluate({"last_assistant_message": text})
         return ok
@@ -3078,6 +3082,10 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                               side_effect=self._identify(panes)),
             mock.patch.object(HARNESS.cmux, "surface_uuid_map", return_value=uuid_map),
             mock.patch.object(HARNESS.cmux, "list_surfaces", return_value=[]),
+            mock.patch("cmux_hook_scope.bind_participants", side_effect=lambda bridge, workspace, rows: [
+                dict(row, native_session_id=f"00000000-0000-4000-8000-{i:012d}")
+                for i, row in enumerate(rows, start=1)
+            ]),
         ):
             HARNESS.cmd_identity_gate(args(
                 self.root, executor_surface=list(refs), executor=provider,

@@ -17,6 +17,7 @@ dry-run checker with `--check-command`.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -119,9 +120,93 @@ def _text_starts_agent_launch(text: str) -> bool:
     return os.path.basename(tokens[0]).lower() in AGENT_LAUNCH_NAMES
 
 
+def _python_document_data(command: str) -> str:
+    """Exclude literal document text in a single quoted Python stdin program.
+
+    Newlines inside Python strings are not shell command boundaries. Only an
+    exact, unexpanded Python heredoc is recognized here; shell heredocs,
+    pipelines, unknown headers and code that can evaluate/launch commands keep
+    the conservative existing scan. This changes classification data only.
+    """
+    pattern = re.compile(
+        r"(?m)^(?P<header>[^\r\n]*?)<<\s*(?P<quote>['\"])"
+        r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)[ \t]*\r?\n"
+        r"(?P<body>.*?)\r?\n(?P=delimiter)(?:\r?\n|$)", re.S,
+    )
+    executable_calls = {
+        "eval", "exec", "compile", "__import__", "getattr", "setattr",
+        "globals", "locals", "vars", "startfile",
+        "system", "popen", "Popen", "run", "call", "check_call", "check_output",
+        "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp",
+        "execlpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv",
+        "spawnve", "spawnvp", "spawnvpe", "posix_spawn", "posix_spawnp",
+        "create_subprocess_exec", "create_subprocess_shell",
+    }
+    # This is a document-update exception, not a general Python interpreter.
+    # Unknown imports and executable references (including aliases) retain the
+    # old scan. The original update uses only these standard-library modules.
+    document_modules = {"pathlib", "datetime", "json", "hashlib", "os"}
+
+    def replace(match: re.Match[str]) -> str:
+        try:
+            argv = shlex.split(match["header"], posix=True)
+            if argv[:1] == ["rtk"]:
+                argv = argv[1:]
+                if argv[:1] == ["proxy"]:
+                    argv = argv[1:]
+            if (len(argv) < 2
+                    or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", os.path.basename(argv[0]))
+                    or any(c in argv[0] for c in "$`\\\r\n")
+                    or argv[-1] != "-"
+                    or any(v not in ("-B", "-u", "-I", "-E", "-s", "-S") for v in argv[1:-1])):
+                return match[0]
+            body = match["body"]
+            tree = ast.parse(body)
+        except (SyntaxError, ValueError, RecursionError):
+            return match[0]
+        nodes = list(ast.walk(tree))
+        for node in nodes:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                modules = ([node.module or ""] if isinstance(node, ast.ImportFrom)
+                           else [item.name for item in node.names])
+                if (any(m not in document_modules for m in modules)
+                        or isinstance(node, ast.ImportFrom) and node.level
+                        or any(item.name in executable_calls for item in node.names)):
+                    return match[0]
+            if isinstance(node, (ast.Name, ast.Attribute)):
+                reference = node.id if isinstance(node, ast.Name) else node.attr
+                if reference in executable_calls or reference.startswith("__"):
+                    return match[0]
+            if isinstance(node, ast.Call):
+                name = (node.func.id if isinstance(node.func, ast.Name)
+                        else node.func.attr if isinstance(node.func, ast.Attribute) else None)
+                if name is None or name in executable_calls:
+                    return match[0]
+        # AST column offsets are UTF-8 bytes, including on non-ASCII documents.
+        raw = body.encode("utf-8")
+        starts, offset = [], 0
+        for line in raw.split(b"\n"):
+            starts.append(offset)
+            offset += len(line) + 1
+        masked = bytearray(raw)
+        for node in nodes:
+            if (isinstance(node, ast.JoinedStr)
+                    or isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))):
+                begin = starts[node.lineno - 1] + node.col_offset
+                end = starts[node.end_lineno - 1] + node.end_col_offset
+                for index in range(begin, end):
+                    if masked[index] not in (10, 13):
+                        masked[index] = 32
+        start = match.start("body") - match.start()
+        stop = match.end("body") - match.start()
+        return match[0][:start] + masked.decode("utf-8") + match[0][stop:]
+
+    return pattern.sub(replace, command)
+
+
 def _shell_starts_agent_launch(command: str) -> bool:
     """Detect a direct agent launch in any simple shell command segment."""
-    for segment in re.split(r"(?:^|\s*(?:&&|\|\||;|\n)\s*)", command):
+    for segment in re.split(r"(?:^|\s*(?:&&|\|\||;|\n)\s*)", _python_document_data(command)):
         if _text_starts_agent_launch(segment.strip()):
             return True
     return False

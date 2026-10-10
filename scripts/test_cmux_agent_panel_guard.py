@@ -107,6 +107,83 @@ class PanelGuardTests(unittest.TestCase):
         )
         self.assert_allowed("rtk rg -n Claude README.md")
 
+    def test_python_file_update_with_multiline_agent_prose_is_allowed(self) -> None:
+        # The original failure wrote a HANDOFF string; no agent was launched.
+        for python in ("python3", "/opt/homebrew/bin/python3.14"):
+            for delimiter in ("'PY'", '"PY"'):
+                command = (
+                    f"rtk proxy {python} -B - <<{delimiter}\n"
+                    "from pathlib import Path\n"
+                    "base = '/tmp/evidence'\n"
+                    "body = f'''Checkpoint\n"
+                    "Codex daemon48363 attribution: {base}/result.json\n"
+                    "Claude original session retained.\n'''\n"
+                    "Path('/tmp/HANDOFF.md').write_text(body)\nPY\n"
+                )
+                with self.subTest(python=python, delimiter=delimiter):
+                    self.assert_allowed(command)
+
+    def test_python_document_update_does_not_hide_adjacent_launch(self) -> None:
+        document = "python3 - <<'PY'\ntext = '''\nCodex status\n'''\nPY\n"
+        self.assert_blocked(document + "rtk claude --resume existing-id")
+        self.assert_blocked("codex\n" + document)
+
+    def test_nonliteral_or_executing_heredocs_are_not_exempted(self) -> None:
+        commands = [
+            "sh <<'SH'\ncodex\nSH\n",
+            "python3 - <<PY\ntext = '''$(\ncodex\n)'''\nPY\n",
+            "python3 - <<'PY' | sh\nprint('''\ncodex\n''')\nPY\n",
+            "python3 - <<'PY'\nimport os\nos.system('''\ncodex\n''')\nPY\n",
+            "python3 - <<'PY'\nfrom subprocess import run as launch\nlaunch('''\ncodex\n''', shell=True)\nPY\n",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_blocked(command)
+
+    def test_python_document_update_is_allowed_at_hook_entry(self) -> None:
+        command = ("rtk proxy python3 -B - <<'PY'\n"
+                   "from pathlib import Path\n"
+                   "Path('/tmp/HANDOFF.md').write_text('''Checkpoint\nCodex status\n''')\nPY\n")
+        for tool, key in (("Bash", "command"), ("exec_command", "cmd")):
+            payload = {"tool_name": tool, "tool_input": {key: command}}
+            result = subprocess.run([sys.executable, "-B", str(MODULE_PATH)],
+                input=json.dumps(payload), text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_executable_aliases_and_unknown_imports_keep_launch_scan(self) -> None:
+        for setup in (
+                "import os\nlaunch = os.system",
+                "import os as operating_system\nlaunch = operating_system.popen",
+                "launch = eval",
+                "from os import system as launch",
+                "import builtins as helpers\nlaunch = helpers.eval",
+                "from some_package import launch",
+                "from .pathlib import launch",
+                "launch = globals",
+                "launch = ().__class__",
+        ):
+            command = ("python3 - <<'PY'\n" + setup
+                       + "\nlaunch('''\ncodex\n''')\nPY\n")
+            with self.subTest(setup=setup):
+                self.assert_blocked(command)
+
+    def test_unknown_python_headers_and_invalid_programs_keep_launch_scan(self) -> None:
+        for header in ('python3 -X unknown -', '"$TASK_PY/python3" -',
+                       '"$(choose)/python3" -', 'python3 - > /tmp/out'):
+            command = header + " <<'PY'\ntext = '''\ncodex\n'''\nPY\n"
+            with self.subTest(header=header):
+                self.assert_blocked(command)
+        self.assert_blocked("python3 - <<'PY'\ntext = '''\ncodex\nPY\n")
+
+    def test_non_ascii_document_offsets_and_crlf_preserve_shell_boundaries(self) -> None:
+        command = ("python3 - <<'PY'\nfrom pathlib import Path\n"
+                   "Path('/tmp/HANDOFF.md').write_text('''中文\u2028说明\n"
+                   "Codex status\nClaude status\n''')\nPY\n")
+        for rendered in (command, command.replace("\n", "\r\n")):
+            with self.subTest(crlf="\r" in rendered):
+                self.assert_allowed(rendered)
+                self.assert_blocked(rendered + "claude --resume existing-id\n")
+
     def test_non_shell_tool_payload_is_not_treated_as_a_command(self) -> None:
         forbidden_example = "cmux new-" + "surface followed by claude"
         payload = {"toolName": "apply_patch", "input": {"patch": forbidden_example}}

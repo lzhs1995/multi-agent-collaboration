@@ -31,6 +31,7 @@ import hashlib
 import math
 import os
 import cmux_hook_identity as hook_identity
+import cmux_hook_scope as hook_scope
 import re
 import stat
 import sys
@@ -141,6 +142,20 @@ def _has_active_markers() -> bool:
     return False
 
 
+def _scope_candidates():
+    """Read marker evidence without claiming jurisdiction over its caller."""
+    markers = []
+    for pattern in ("*.json", "*/*.json"):
+        for path in ACTIVE_DIR.glob(pattern):
+            if path.name.startswith('.'):
+                continue
+            marker = _read_json(path)
+            if isinstance(marker, dict) and _marker_fresh(marker):
+                workspace = path.parent.name if path.parent != ACTIVE_DIR else path.stem
+                markers.append(dict(marker, _scope_workspace=workspace))
+    return markers
+
+
 def _active_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Every fresh marker for this workspace: v2 directory files, then v1 file.
 
@@ -150,7 +165,11 @@ def _active_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     concurrent collaborations a final message can assert evidence that any of
     the armed artifact trees refutes.
     """
+    selected = hook_scope.current()
+    if selected is not None:
+        return selected
     ws = _workspace_key(payload)
+    surface = _surface_key(payload)
     markers: list[dict[str, Any]] = []
     d = ACTIVE_DIR / ws
     if d.is_dir():
@@ -158,10 +177,10 @@ def _active_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if p.name.startswith("."):
                 continue
             m = _read_json(p)
-            if isinstance(m, dict) and _marker_fresh(m):
+            if isinstance(m, dict) and _marker_fresh(m) and hook_scope.applies(m, payload, ws, surface):
                 markers.append(m)
     legacy = _read_json(ACTIVE_DIR / f"{ws}.json")
-    if isinstance(legacy, dict) and _marker_fresh(legacy):
+    if isinstance(legacy, dict) and _marker_fresh(legacy) and hook_scope.applies(legacy, payload, ws, surface):
         markers.append(legacy)
     return markers
 
@@ -661,15 +680,15 @@ def _evaluate_with_marker(payload, stop_output=None):
             stop_output['value'] = _waiting_supervisor_stop_output(payload)
         return True, "Stop hook reentry; task and callback remain unconfirmed", None
     try:
-        if not _has_active_markers():
-            return True, "no armed multi-agent task — pass through", None
-        with hook_identity.evaluation(payload):
+        with hook_scope.evaluation(payload, _scope_candidates()) as markers:
+            if not markers:
+                return True, "no task enrollment for this session — pass through", None
             result = _evaluate_resolved(payload)
             if result[0] and stop_output is not None:
                 stop_output['value'] = _waiting_supervisor_stop_output(payload, resolved=True)
             return result
     except hook_identity.ERRORS as exc:
-        return False, "HOOK_CALLER_UNRESOLVED: " + str(exc), None
+        return False, "TASK_EVIDENCE_INVALID: " + str(exc), None
 
 
 def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
@@ -679,16 +698,8 @@ def evaluate(payload: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _block(message: str, marker_hint: str) -> int:
-    if message.startswith("HOOK_CALLER_UNRESOLVED:"):
-        sys.stderr.write(
-            "cmux Stop guard could not verify the hook caller.\n"
-            f"{message}\n\n"
-            "An applicable task marker exists, but its caller workspace and "
-            "surface could not be authenticated. Preserve the task markers, "
-            "report, and callback evidence. The supervisor must diagnose caller "
-            "identity resolution before retrying this gate. This result does "
-            "not judge the final message or confirm callback delivery.\n"
-        )
+    if message.startswith("TASK_EVIDENCE_INVALID:"):
+        sys.stderr.write(f"Task evidence could not be evaluated: {message}\n")
         return 2
     # A returned original attempt: transport recovery advice would contradict
     # the PreToolUse seal and invite a duplicate callback.
@@ -752,12 +763,12 @@ def _waiting_supervisor_stop_output(payload, resolved=False):
     if payload.get("hook_event_name") != "Stop":
         return None
     try:
-        if not _has_active_markers():
-            return None
         # main 已在同次身份上下文内时不重新解析，避免两个2.5秒预算串联。
         from contextlib import nullcontext
-        context = nullcontext() if resolved else hook_identity.evaluation(payload)
-        with context:
+        context = nullcontext(hook_scope.current()) if resolved else hook_scope.evaluation(payload, _scope_candidates())
+        with context as selected:
+            if not selected:
+                return None
             workspace, surface = _workspace_key(payload), _surface_key(payload)
             markers = _active_markers(payload)
             for marker in markers:

@@ -1,5 +1,30 @@
 # Native caller inventory failures
 
+## Recovery without a session lock
+
+Identity discovery is a transport prerequisite, never a global permission to
+work. A task hook that cannot authenticate its caller must select no task and
+return success without repeated blocking output. This applies to enrolled and
+unenrolled sessions alike: shell/file tools, `cmux-agent self`, diagnostics,
+goal bookkeeping, authorized solo work and honest Stop remain available.
+Do not clear task markers, thaw or edit frozen evidence, fabricate an identity,
+confirm callbacks, or silently accept work while bypassing an unresolved scope.
+After discovery recovers, the next evaluation rechecks the live task normally;
+there is no cached bypass or permanent disarm.
+
+All active Codex supervisors may initiate a fresh handshake within user scope.
+A successor need not use the predecessor's startup command or session id.
+Use native foreground-thread selection and current kernel/workspace evidence;
+legacy argv recognition remains compatibility only, not a required launch mode.
+Business-task inheritance never transfers the previous process identity.
+Terminal input still requires verified live sender and receiver UUIDs. A missing
+identity may stop that input, but must not stop local recovery or the task.
+
+Regression coverage: enrolled supervisor and executor resolution failure,
+timeouts, malformed proof, ordinary diagnostics/edits/bookkeeping and Stop;
+unchanged task evidence, restored enforcement after recovery, context cleanup,
+and actual bridge rejection of missing/ambiguous or cross-workspace identities.
+
 A zero-input identity refusal occurs before executor delivery. Do not call it a
 Claude API failure, unavailable executor, or missed ACK. Preserve the first
 failure and continue authorized independent work while repairing discovery.
@@ -27,9 +52,16 @@ Their `dock_scope=global` flag excludes them from local peer discovery and from
 both caller and target bindings. Duplicate UUID rows still refuse; filtering
 must not erase an ambiguous local/global identity.
 
-Do not infer the caller from focus, titles, remembered surface numbers or stale
-observation files. Options before resume and thread switching require separate
-supported identity proof; this narrow fix does not claim those cases are solved.
+Do not infer the caller from focus, titles or remembered surface numbers.
+New or switched Codex threads use the native TUI foreground selection, together
+with kernel PID/birth/executable/UID/argv, managed tool ancestry, terminal and
+live cmux UUID checks. Authenticate its opt-in marker, private canonical files,
+schema, process lifetime and unchanged source before and after discovery.
+A null selection never revives the startup argv. Missing required or previously
+observed records, malformed records, drift and duplicate clients refuse input.
+Only clients without native observation support retain legacy resume matching.
+Keep inherited business-session identity separate from the current caller;
+a discovery refusal is local and does not establish executor unavailability.
 
 ## Bounded diagnosis and acceptance
 
@@ -50,3 +82,32 @@ basename selection, missing/duplicate sessions and identity drift;
 `test_cmux_workspace_guard.py` preserves workspace and UUID boundaries.
 `test_caller_inventory_boundaries.py` covers typed exit evidence, stable excluded
 candidates, changed/unknown/duplicate caller candidates, and nested global docks.
+
+## Interrupted Claude with a residual Bash display
+
+The current interruption line and an empty composer can coexist with an old
+Bash status display. Neither the display alone nor the absence of one child
+process establishes a safe boundary. `cmux_claude_interruption.py` permits only
+the harness's non-submitting `B<ordinal>_<8hex>` probe when all of these agree:
+
+- The designated native Claude session, process, terminal and workspace binding.
+- A complete bordered empty composer, the current interruption line, one Bash
+  status display and no queued input. The exact optional goal-duration suffix
+  on the standalone clear hint is accepted outside the composer only.
+- The final three native records: Bash tool use, the matching rejected result,
+  and user interruption, with matching session, record parents, tool id,
+  assistant id, literal error flag and ordered timestamps.
+- A bounded unchanged transcript tail and unchanged process identities; every
+  remaining descendant or process-group peer must predate the rejected tool.
+
+The harness rechecks these facts before typing and before every cleanup key.
+Cleanup removes only the still-visible prefix of its own short probe. Native
+appends, changed identities, foreign input or a new queue permanently invalidate
+that attempt; it never clears user text, presses Enter or resumes the rejected
+tool. Continue the original task after a valid probe. Do not recreate its id,
+repeat an already submitted challenge or migrate an in-flight controller.
+
+`test_claude_interrupted_probe.py` covers native-chain corruption, file/process
+drift, queued or foreign drafts and cleanup races. Formal messages and callbacks
+retain their existing one-attempt and exact native-reception rules. Passing this
+probe is not an ACK, successful delivery or business acceptance.

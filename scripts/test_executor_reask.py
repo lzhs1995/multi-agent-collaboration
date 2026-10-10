@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """空闲 executor 60 秒主动求派与其 Stop hook 的离线回归（无真实 bridge 输入）。"""
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -14,9 +16,11 @@ sys.path.insert(0, str(HERE))
 import executor_ready as ready  # noqa: E402
 import executor_reask as reask  # noqa: E402
 import cmux_executor_reask_stop_guard as guard  # noqa: E402
+import executor_reply as replies
 
 CALLER = 'E7C1C83C-946C-4E59-8753-F506F2069A12'
 SUP = '2A2CDBE8-DD07-4185-A972-2E56BB3135DF'
+WORKSPACE = '26E665BA-7E98-49DE-B0EA-DDE37AFBBB88'
 
 
 class Sender:
@@ -25,7 +29,8 @@ class Sender:
 
     def __call__(self, state, marker, text):
         self.calls.append((marker, text))
-        return dict(outcome=self.outcome, terminal=self.terminal)
+        return dict(outcome=self.outcome, terminal=self.terminal,
+                    native_received=self.outcome == 'CONFIRMED', terminal_attempted=self.terminal)
 
 
 class Base(unittest.TestCase):
@@ -48,6 +53,12 @@ class Base(unittest.TestCase):
     def user(self, text):
         with self.transcript.open('a') as fh:
             fh.write(json.dumps(dict(type='user', message=dict(role='user', content=text))) + '\n')
+
+    def reply(self, **overrides):
+        state = reask.load(CALLER)
+        body = replies.template(state, state['asks'][-1]['marker'])
+        body.update(trigger='successor release installed', **overrides)
+        return body
 
 
 class ReaskTest(Base):
@@ -91,10 +102,12 @@ class ReaskTest(Base):
         self.assertLessEqual(len(wire.encode('utf-8')), reask.MAX_TEXT)
         self.assertNotIn('will not be repeated', text)
 
-    def test_transcript_user_turn_is_a_reply(self):
+    def test_transcript_requires_exact_reply_not_unrelated_user_turn(self):
         self.begin()
         reask.tick(CALLER, 1001.0, Sender())
         self.user('TASK r24 pack at /x')
+        self.assertEqual(reask.tick(CALLER, 1002.0, Sender())['state'], reask.WAITING)
+        self.user(json.dumps(self.reply()))
         state = reask.tick(CALLER, 1002.0, Sender())
         self.assertEqual(state['state'], reask.ANSWERED)
         self.assertEqual(state['reply']['source'], 'transcript')
@@ -137,17 +150,19 @@ class ReaskTest(Base):
         reask.tick(CALLER, 1.0, Sender())
         marker = reask.load(CALLER)['asks'][-1]['marker']
         Path(state['mailbox'], marker + '.json').write_text(json.dumps(
-            dict(marker=marker, caller_surface_uuid=CALLER, status='TASK')))
+            self.reply(status='TASK')))
         state = reask.tick(CALLER, 2.0, Sender())
         self.assertEqual(state['state'], reask.ANSWERED)
         self.assertEqual(state['reply']['source'], 'mailbox')
 
-    def test_channel_file_citing_marker_is_reply_but_own_current_is_not(self):
+    def test_channel_reply_requires_exact_binding_not_citation_or_own_current(self):
         self.begin(now=0.0)
         reask.tick(CALLER, 1.0, Sender())
         self.assertEqual(reask.tick(CALLER, 2.0, Sender())['state'], reask.WAITING)
         marker = reask.load(CALLER)['asks'][-1]['marker']
         (self.channel / 'ROOT_REPLY.json').write_text(json.dumps(dict(answers=marker)))
+        self.assertEqual(reask.tick(CALLER, 3.0, Sender())['state'], reask.WAITING)
+        (self.channel / 'ROOT_REPLY.json').write_text(json.dumps(self.reply()))
         state = reask.tick(CALLER, 3.0, Sender())
         self.assertEqual(state['state'], reask.ANSWERED)
         self.assertEqual(state['reply']['source'], 'channel')
@@ -239,6 +254,105 @@ class ReaskTest(Base):
         advance.assert_not_called()
 
 
+class ReaskDurabilityTest(Base):
+    def test_wrong_reply_bindings_rejected_in_every_channel(self):
+        self.begin(now=0.0)
+        reask.tick(CALLER, 1.0, Sender())
+        changes = [dict(task_id='other'), dict(episode_id='old'), dict(supervisor_uuid=CALLER),
+                   dict(caller_surface_uuid=SUP), dict(marker='EXECUTOR_READY_unknown'),
+                   dict(queued=True), dict(received=False), dict(trigger=''),
+                   dict(trigger='REPLACE_WITH_CONCRETE_TRIGGER')]
+        for source in ('mailbox', 'channel', 'transcript'):
+            for change in changes:
+                with self.subTest(source=source, change=change):
+                    body = self.reply()
+                    body.update(change)
+                    state = reask.load(CALLER)
+                    path = (Path(state['mailbox']) if source == 'mailbox' else self.channel) / 'reply.json'
+                    if source == 'transcript':
+                        self.user(json.dumps(body))
+                    else:
+                        ready.write_json(path, body)
+                    self.assertEqual(reask.tick(CALLER, 2.0, Sender())['state'], reask.WAITING)
+                    if source != 'transcript':
+                        path.unlink()
+
+    def test_no_channels_and_no_input_never_count_as_delivered(self):
+        self.begin()
+        failure = dict(written=[], errors=[dict(error_type='OSError')])
+        with mock.patch.object(reask, 'write_channels', return_value=failure):
+            state = reask.tick(CALLER, 1001.0, Sender('SKIPPED_COMPOSE', False))
+        for field in ('ask_count', 'file_posts', 'terminal_sends', 'terminal_attempts', 'native_receipts'):
+            self.assertEqual(state[field], 0, field)
+        self.assertEqual((state['check_count'], state['attempt_count']), (1, 1))
+        self.assertEqual(state['asks'][0]['channels']['errors'], failure['errors'])
+
+    def test_cli_and_stop_share_nonblocking_episode_lock(self):
+        self.begin()
+        send = Sender()
+        with reask.episode_lock(CALLER):
+            self.assertEqual(reask.tick(CALLER, 1001.0, send)['outcome'], 'EPISODE_BUSY')
+            block, reason = guard.decide(dict(hook_event_name='Stop'), CALLER, 1001.0)
+            self.assertTrue(block)
+            self.assertIn('状态锁', reason)
+        self.assertEqual(send.calls, [])
+        self.assertEqual(reask.load(CALLER)['ask_count'], 0)
+
+    def test_explicit_stop_does_not_reopen_without_operator_resume(self):
+        self.begin()
+        reask.tick(CALLER, 1001.0, Sender())
+        reask.stop(CALLER)
+        self.assertEqual(reask.start(CALLER, SUP, now=2000.0)['state'], reask.STOPPED)
+        self.assertEqual(ready.read_json(reask.inbox_path(reask.load(CALLER)))['status'], reask.STOPPED)
+        self.assertEqual(reask.start(CALLER, SUP, now=2001.0, resume_stopped=True)['state'], reask.WAITING)
+
+    def test_only_fresh_same_supervisor_bound_task_ends_episode(self):
+        self.begin()
+        state = reask.tick(CALLER, 1001.0, Sender())
+        binding = dict(surface_uuid=CALLER, supervisor_uuid=SUP, task_id='next', state='BOUND',
+                       last_bound_epoch=2000.0)
+        for delta in (dict(supervisor_uuid=CALLER), dict(last_bound_epoch=500.0), dict(task_id='r24')):
+            with mock.patch.object(reask, 'idle_binding', return_value=dict(binding, **delta)):
+                self.assertEqual(reask.tick(CALLER, 1002.0, Sender())['state'], reask.WAITING)
+        with mock.patch.object(reask, 'idle_binding', return_value=binding):
+            state = reask.tick(CALLER, 1003.0, Sender())
+        self.assertEqual(state['exit_reason'], 'AUTHENTICATED_NEW_DISPATCH')
+        self.assertEqual(ready.read_json(reask.inbox_path(state))['status'], reask.CONSUMED)
+
+    def test_late_file_reply_survives_history_rollover_future_marker_does_not(self):
+        state = self.begin(now=0.0)
+        reask.tick(CALLER, 1.0, Sender('SKIPPED_COMPOSE', False))
+        first_reply = self.reply()
+        for index in range(1, reask.HISTORY + 5):
+            state = reask.tick(CALLER, 1.0 + index * reask.INTERVAL, Sender('SKIPPED_COMPOSE', False))
+        self.assertNotIn(first_reply['marker'], [a['marker'] for a in state['asks']])
+        future = dict(first_reply, marker=reask.issue_marker(state, state['attempt_count'] + 1))
+        path = Path(state['mailbox']) / 'reply.json'
+        ready.write_json(path, future)
+        self.assertIsNone(reask.find_reply(state))
+        ready.write_json(path, first_reply)
+        self.assertEqual(reask.find_reply(state)['source'], 'mailbox')
+        self.assertLessEqual(len(state['asks']), reask.HISTORY)
+
+    def test_uncertain_original_survives_rollover_and_only_reconciles(self):
+        self.begin()
+        first = reask.tick(CALLER, 1001.0, Sender('QUEUED', True))['asks'][0]['marker']
+        bridge = mock.Mock()
+        with mock.patch.object(ready, '_bridge', return_value=bridge), \
+                mock.patch.object(ready, 'advance_ask') as advance, \
+                mock.patch.object(ready, 'write_record') as write:
+            for index in range(1, reask.HISTORY + 5):
+                state = reask.tick(CALLER, 1001.0 + index * reask.INTERVAL)
+            self.assertTrue(advance.called)
+            for call in advance.call_args_list:
+                self.assertNotIn('allow_send', call.kwargs)
+                self.assertEqual(call.args[3]['marker'], first)
+            write.assert_not_called()
+        self.assertEqual(state['terminal_pending']['marker'], first)
+        self.assertEqual(state['terminal_sends'], 1)
+        self.assertEqual(state['native_receipts'], 0)
+
+
 class StopGuardTest(Base):
     def payload(self, active=False):
         return dict(hook_event_name='Stop', stop_hook_active=active,
@@ -260,10 +374,10 @@ class StopGuardTest(Base):
     def test_answered_blocks_once_then_allows(self):
         self.begin()
         reask.tick(CALLER, 1001.0, Sender())
-        self.user('STATUS: WAITING_DEPENDENCY until install')
+        self.user(json.dumps(self.reply()))
         block, reason = guard.decide(self.payload(), CALLER, 1002.0)
         self.assertTrue(block)
-        self.assertIn('WAITING_DEPENDENCY until install', reason)
+        self.assertIn('successor release installed', reason)
         self.assertEqual(guard.decide(self.payload(), CALLER, 1003.0), (False, ''))
 
     def test_stopped_allows(self):
@@ -287,7 +401,7 @@ class StopGuardTest(Base):
         reask.save(state)
         self.assertEqual(guard.decide(self.payload(), CALLER, 700.0), (False, ''))
 
-    def test_cli_entry_prints_block_without_internal_error(self):
+    def test_cli_entry_does_not_trust_raw_daemon_environment(self):
         self.begin()
         env = dict(os.environ, HOME=str(self.home), CMUX_SURFACE_ID=CALLER)
         # 子进程 HOME 不同于 mock，需在其 HOME 下重建等待段。
@@ -297,8 +411,19 @@ class StopGuardTest(Base):
         run = subprocess.run([sys.executable, '-B', str(HERE / 'cmux_executor_reask_stop_guard.py')],
                              input=json.dumps(self.payload()), capture_output=True, text=True,
                              env=env, check=True)
-        self.assertEqual(json.loads(run.stdout)['decision'], 'block')
+        self.assertEqual(run.stdout, '')
         self.assertNotIn('INTERNAL_ERROR', run.stderr)
+
+    def test_authenticated_hook_blocks_without_terminal_input(self):
+        self.begin()
+        with mock.patch.object(guard.sys, 'stdin', io.StringIO(json.dumps(self.payload()))), \
+             mock.patch.object(guard.hook_identity, 'evaluation', return_value=contextlib.nullcontext()), \
+             mock.patch.object(guard.hook_identity, 'identity', return_value=(WORKSPACE, CALLER)), \
+             mock.patch.object(reask, 'default_send') as send, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(guard.main(), 0)
+        self.assertEqual(json.loads(output.getvalue())['decision'], 'block')
+        send.assert_not_called()
 
 
 if __name__ == '__main__':

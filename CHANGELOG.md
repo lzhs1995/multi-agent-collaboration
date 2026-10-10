@@ -1,3 +1,86 @@
+# 0.4.17 — 2026-10-10
+
+- Remove the conversation-wide tool/Stop lock on unresolved task-hook identity,
+  including enrolled native sessions. Preserve markers, frozen reports and
+  callbacks; resume normal checks after discovery recovers.
+- Retain kernel/workspace authentication at every terminal input. New and
+  successor Codex supervisors use native foreground-thread selection; no
+  particular resume command or predecessor session id is required.
+- Include the 0.4.15/0.4.16 foreground discovery and task enrollment fixes in the
+  public source, with isolated same-release imports and final session rechecks.
+- Keep diagnostics, repair, bookkeeping and authorized solo work available;
+  choose zero, one or two executors by current capacity and independent scope.
+
+# 0.4.13 — 2026-10-10
+
+- Compare complete static callback arguments instead of shell text when
+  admitting the sole original NO_INPUT successor. Equivalent literal quoting,
+  including unquoted Unicode paths without spaces, no longer causes rejection.
+- Continue rejecting shell expansion, comments, control tails, wrappers,
+  background execution and conflicting callback metadata. Original task,
+  report, attempt, Python and controller bindings and the attempt budget remain.
+
+# 0.4.12 — 2026-10-10
+
+- Distinguish literal document text from agent launches in a single quoted
+  Python stdin heredoc. A HANDOFF paragraph beginning with an agent name no
+  longer blocks a file update. This affects classification only.
+- Retain the conservative launch scan for shell expansion, pipes, unknown
+  interpreters or imports, executable references and aliases, invalid Python,
+  and adjacent shell commands. Cover UTF-8 and CRLF document boundaries.
+
+# 0.4.11 — 2026-10-10
+
+- Authenticate either original endpoint when explicitly reconciling a callback
+  without input. A supervisor can verify its received callback without being
+  misclassified as a new sender targeting itself. Ordinary sends retain their
+  existing identity checks.
+- Parse callback modes strictly. Dynamic arguments, truthy strings, duplicates
+  and conflicting queue modes cannot obtain receiver-side observation. Preserve
+  original process, session, task, report and pre-input native-journal bindings.
+- Keep reconciliation hints on the frozen task's original Python and controller.
+  Missing or conflicting command metadata leaves an explicit unresolved hint,
+  without discarding genuine native reception or substituting a newer release.
+
+# 0.4.10 — 2026-10-10
+
+- Treat exact bridge CLI help as a read-only operation, including literal
+  Python script invocations and individual commands inside Codex tool batches.
+  Help does not require a task pack, caller lookup or native delivery receipt.
+- Continue checking real sends in mixed batches. Help text inside payloads,
+  Python code and dynamically edited commands cannot exempt a send from native
+  verification. Original controllers and in-flight attempts remain unchanged.
+
+# 0.4.9 — 2026-10-10
+
+- Recognize the optional goal-duration suffix on the standalone Claude clear
+  hint only outside the complete composer borders. Draft text and unknown
+  suffixes retain the existing zero-input refusal.
+- Permit the non-submitting short bridge probe after an authenticated native
+  Bash rejection/interruption chain with an empty composer and no surviving
+  tool process. Recheck the bound transcript, process identities and owned draft
+  before each cleanup key; any drift permanently invalidates the attempt.
+- Keep formal submission, queue and native-reception rules unchanged. A residual
+  Bash display is not a reason to restart a session or repeat a rejected tool.
+  Preserve zero-input failures and continue the same task through its safe phase.
+
+# 0.4.8 — 2026-10-10
+
+- Add one optional launchd configuration guardian for immutable releases. Repair
+  only owned Claude/Codex hooks and cc-switch Claude profiles, including imports;
+  preserve provider selection, credentials, foreign hooks and unrelated settings.
+- Bind executor replies to caller, supervisor, task, episode and an actually
+  issued marker. Preserve late replies and unresolved terminal attempts after
+  bounded history rollover; never replay an uncertain message.
+- Share a nonblocking episode lock between explicit reasks and the optional Stop
+  hook. Keep operator stops, authenticated task transitions and actual delivery
+  counts separate from attempts and file writes.
+- Add a bounded durable supervisor inbox to the existing PostToolUse hook, even
+  without an active task marker. Resolve the native caller once per hook; file
+  discovery is not native delivery or task acceptance.
+- Document configuration restoration, current-client adoption, native receipt,
+  callback settlement and return to the original task as separate evidence.
+
 # 0.4.7 — 2026-10-09
 
 - Emit verified PostToolUse results in the official

@@ -743,7 +743,8 @@ def _claude_bordered_compose(screen):
         # footer. Never remove an occurrence inside the composer, or permit
         # arbitrary text after the normal bypass row.
         if rest and re.fullmatch(
-                r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens",
+                r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens"
+                rf"(?: · ◎ /goal active \({_CLAUDE_DURATION}\))?",
                 rest[-1]):
             rest = rest[:-1]
         if rest and re.fullmatch(elapsed, rest[0]):

@@ -25,6 +25,7 @@ import sys
 import threading
 import time
 import cmux_prompt_reference as prompt_reference
+import executor_reply as reply_contract
 
 PREFIX = 'EXECUTOR_READY'
 ASK_INTERVAL = 60.0  # 兼容旧参数：现在仅为原请求的只读核收间隔。
@@ -40,7 +41,7 @@ MAX_REQUEST_SCAN = 128
 ASKING, ANSWERED, STOPPED = 'ASKING', 'ANSWERED', 'STOPPED'  # ASKING 仅用于识别旧进程。
 WAITING_DEPENDENCY, TIMED_OUT = 'WAITING_DEPENDENCY', 'TIMED_OUT'
 REPLY_HEAD = re.compile(r'^\s*(?:STATUS\s*:|TASK(?:[\s:|]|$)|BLOCKED\b|WAITING_DEPENDENCY\b|SOLO\b|ACK\b)')
-REPLY_STATES = {'ACK', 'TASK', 'DISPATCHED', 'BLOCKED', WAITING_DEPENDENCY, 'SOLO'}
+REPLY_STATES = reply_contract.REPLY_STATES
 SKIP_PREFIXES = ('This session is being continued', 'Stop hook feedback', '<command-',
                  '<local-command', '[Request interrupted', 'EXECUTOR_IDLE', PREFIX)
 
@@ -150,7 +151,7 @@ def write_json(path, value):
 
 
 def build_text(executor_ref, marker, task_id='', note='', attempt=1, mailbox='', caller_uuid='',
-               episode_id=''):
+               episode_id='', supervisor=''):
     text = (f'{PREFIX}|{executor_ref}|{marker} ask #{attempt}: previous task '
             f'{task_id or "(unknown)"} is no longer armed; this executor is idle. '
             'Please review this single request and dispatch the next task, or reply '
@@ -158,7 +159,9 @@ def build_text(executor_ref, marker, task_id='', note='', attempt=1, mailbox='',
             'may end while waiting; this request will not be repeated automatically.')
     if mailbox:
         reply = dict(marker=marker, caller_surface_uuid=caller_uuid or executor_ref,
-                     task_id=task_id, episode_id=episode_id, status=WAITING_DEPENDENCY)
+                     supervisor_uuid=supervisor,
+                     task_id=task_id, episode_id=episode_id, status=WAITING_DEPENDENCY,
+                     trigger='REPLACE_WITH_CONCRETE_TRIGGER')
         text += (f' Reply here, or write {mailbox}/{marker}.json containing '
                  + json.dumps(reply, ensure_ascii=False) + '.')
     note = ' '.join(str(note).split())
@@ -275,12 +278,11 @@ def user_texts(entry):
             and not t.lstrip().startswith(SKIP_PREFIXES) and '<system-reminder>' not in t]
 
 
-def looks_like_reply(text, markers):
-    # marker 被引用、排队或出现在工具输出中，均不能独立充当回复。
-    return bool(REPLY_HEAD.match(text)) or text.lstrip().startswith(('claude:identity|', 'codex:identity|'))
+def looks_like_reply(text, markers, **binding):
+    return reply_contract.valid(reply_contract.from_text(text), markers, **binding)
 
 
-def find_reply(mailbox, tail, markers, since_epoch, caller_uuid='', task_id='', episode_id=''):
+def find_reply(mailbox, tail, markers, since_epoch, caller_uuid='', task_id='', episode_id='', supervisor=''):
     markers = [m for m in markers[-ASK_HISTORY:] if isinstance(m, str)
                and re.fullmatch(r'[A-Za-z0-9_-]{1,160}', m)]
     if mailbox:
@@ -293,17 +295,8 @@ def find_reply(mailbox, tail, markers, since_epoch, caller_uuid='', task_id='', 
             except OSError:
                 continue
             body = read_json(path)
-            if (not body or body.get('status') not in REPLY_STATES
-                    or body.get('queued') is True or body.get('received') is False):
-                continue
-            marker = body.get('marker')
-            if not episode_id or body.get('episode_id') != episode_id:
-                continue
-            if markers and marker not in markers:
-                continue
-            if body.get('caller_surface_uuid') != caller_uuid:
-                continue
-            if body.get('task_id') != task_id:
+            if not reply_contract.valid(body, markers, caller=caller_uuid,
+                                        task_id=task_id, episode_id=episode_id, supervisor=supervisor):
                 continue
             return dict(source='mailbox', path=str(path), status=body['status'],
                         body_sha256=digest(json.dumps(body, sort_keys=True)),
@@ -317,8 +310,9 @@ def find_reply(mailbox, tail, markers, since_epoch, caller_uuid='', task_id='', 
             continue
         if isinstance(entry, dict):
             for text in user_texts(entry):
-                if looks_like_reply(text, markers):
-                    return dict(source='transcript', status='', text=text[:800],
+                if looks_like_reply(text, markers, caller=caller_uuid,
+                                    task_id=task_id, episode_id=episode_id, supervisor=supervisor):
+                    return dict(source='transcript', status=reply_contract.from_text(text)['status'], text=text[:800],
                                 line_sha256=hashlib.sha256(line).hexdigest(),
                                 position=tail.position(), at_epoch=time.time())
     return None
@@ -355,7 +349,7 @@ def prepare_ask(bridge, supervisor, caller_uuid, executor_ref, task_id='', note=
                 mailbox='', clock=time.time, episode_id=''):
     marker = f'{PREFIX}_{secrets.token_hex(8)}'
     text = build_text(executor_ref, marker, task_id, note, attempt, mailbox, caller_uuid,
-                      episode_id)
+                      episode_id, supervisor)
     if bridge._looks_like_task_dispatch(text):
         raise RuntimeError('ready request must never look like a task dispatch')
     path, _record = write_record(caller_uuid, marker, text, supervisor, task_id, episode_id)
@@ -532,7 +526,7 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
                     break
                 markers = [a.get('marker', '') for a in record['asks'] if isinstance(a, dict)]
                 reply = find_reply(mailbox, tail, markers, started, caller_uuid, task_id,
-                                   record['episode_id'])
+                                   record['episode_id'], supervisor)
                 if reply:
                     record.update(state=ANSWERED, reply=reply, exit_reason='REPLY_RECEIVED')
                     break

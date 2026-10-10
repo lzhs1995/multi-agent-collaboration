@@ -12,6 +12,7 @@ import time
 import uuid
 from datetime import datetime
 import cmux_daemon_identity as identity
+import cmux_foreground_thread as foreground
 
 SCHEMA = "native-delivery-v1"
 MAX_RECORD = 8 * 1024 * 1024
@@ -60,6 +61,15 @@ def _provider(p):
     return None
 
 def _live_session(p, provider):
+    if provider == "codex":
+        try:
+            selected = foreground.read(p)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise NativeDeliveryError("NATIVE_FOREGROUND_INVALID") from exc
+        if selected is not None:
+            if selected["thread_id"] is None:
+                raise NativeDeliveryError("NATIVE_FOREGROUND_CLEARED")
+            return selected["thread_id"]
     # Claude 原生 /resume 会更新 PID 注册而不改变 argv；只读客户端自己的注册。
     # 不接受本包自行写入的 session 声明，也不把工具进程的祖先当 hook 证明。
     if provider == "claude":
