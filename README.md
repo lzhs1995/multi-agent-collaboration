@@ -1,8 +1,8 @@
-Current release: **0.4.19**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md).
+Current release: **0.4.20**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). This version recognizes measured wrapped Claude footers and distinguishes document/search text from terminal writes.
 
 # Multi-Agent Collaboration
 
-Current release: **0.4.18**. New and successor Codex supervisors use their active
+New and successor Codex supervisors use their active
 native foreground thread. Caller discovery failure cannot lock ordinary tools or
 Stop; task evidence stays intact and terminal input still verifies both endpoints.
 See [recovery without a session lock](references/native-caller-inventory.md#recovery-without-a-session-lock).
@@ -11,7 +11,7 @@ Evidence-bound collaboration for Codex and Claude Code in macOS cmux.
 中文：复用完整上下文会话，明确分工，以真实报告和主动 callback 完成协作；
 压缩故障及时干预，不以重开会话、假 ACK 或反复轮询代替恢复。
 
-Current source: **0.4.8**. New messages use bounded single-line notices for pinned
+New messages use bounded single-line notices for pinned
 bodies; formal packs and callbacks retain their dedicated task-bound routes.
 Enter or Tab only requests submission. Reception requires the complete exact
 payload in a new record of the bound receiver's native journal. See the

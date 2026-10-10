@@ -749,7 +749,8 @@ _COMPOSE_CHROME_RE = re.compile(
 _CLAUDE_BORDER_RE = re.compile(r"─{8,}")
 _CLAUDE_DURATION = r"(?:\d+h(?:\s+\d+m)?|\d+m(?:\s+\d+s)?|\d+s)"
 _CLAUDE_TOOL = r"[A-Za-z][\w.:-]*"
-_CLAUDE_COUNTS = rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
+_CLAUDE_COUNTS = (rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
+                  r"(?:\s*\|\s*\+[1-9]\d* more)?")
 _CLAUDE_ACTIVE_TOOL_RE = re.compile(
     rf"[◐◑◒◓]\s+{_CLAUDE_TOOL}:\s+[^|\n]+(?:\s*\|\s*{_CLAUDE_COUNTS})?")
 _CLAUDE_SUMMARY_RE = re.compile(
@@ -779,19 +780,29 @@ def _claude_bordered_compose(screen):
             r"(?:\[claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
             r"\[(?:Opus|Sonnet|Claude)\s+[^\]\n]+\])", fields[0], re.I)):
         return None
-    if len(fields) >= 2 and not re.fullmatch(
-            r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?", fields[1]):
-        return None
     elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
     # Measured 2026-10-09: only the inline time field carries this exact
     # optional hint. Its count is an integer or k with at most one decimal;
     # unknown suffixes and matching text inside the borders remain untouched.
     inline_elapsed = (elapsed + r"(?: +new task\? /clear to save "
                       r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens)?")
+    cwd_field = r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?"
+    footer_start = 1
+    # Measured 2026-10-10 (surface:4546): model-only row, then the complete
+    # cwd/time row. Consume only this exact footer shape, never composer text
+    # or an arbitrary continuation row. The remaining chrome is still required.
+    if len(fields) == 1 and len(footer) > 1:
+        wrapped = [part.strip() for part in footer[1].split("│")]
+        if (len(wrapped) == 2 and re.fullmatch(cwd_field, wrapped[0])
+                and re.fullmatch(inline_elapsed, wrapped[1])):
+            fields.extend(wrapped)
+            footer_start = 2
+    if len(fields) >= 2 and not re.fullmatch(cwd_field, fields[1]):
+        return None
     if len(fields) == 3 and not re.fullmatch(inline_elapsed, fields[2]):
         return None
     if len(footer) > 1:
-        rest = footer[1:]
+        rest = footer[footer_start:]
         # The same measured hint can occupy its own row AFTER the complete
         # footer. Never remove an occurrence inside the composer, or permit
         # arbitrary text after the normal bypass row.

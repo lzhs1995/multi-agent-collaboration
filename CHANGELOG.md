@@ -1,3 +1,10 @@
+# 0.4.20
+
+- Recognize measured Claude tool-count overflow and wrapped model/cwd/time footers without consuming drafts or active turns.
+- Treat literal document heredocs and quoted searches as data; lexer failures alone no longer block ordinary tools.
+- Preserve checks on actual raw terminal writers, including nested shells and malformed trailing quotes.
+- Clarify native caller discovery and user-authorized cross-workspace successor communication in current guidance.
+
 # 0.4.19
 
 - Remove global workflow tool/Stop blocks, including closeout and reask loops; retain automatic invocation evidence.

@@ -236,6 +236,27 @@ def _verified_helper_command(command):
         return False
 
 
+def _command_head(words):
+    """Locate the executable after ordinary shell launch wrappers."""
+    words = list(words)
+    wrappers = {"rtk", "proxy", "env", "exec", "command", "nohup", "sudo"}
+    valued_options = {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt"}
+    wrapped = False
+    while words:
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]):
+            words.pop(0)
+        elif Path(words[0]).name in wrappers:
+            wrapped = True
+            words.pop(0)
+        elif wrapped and words[0].startswith("-"):
+            option = words.pop(0)
+            if option in valued_options and words:
+                words.pop(0)
+        else:
+            break
+    return words
+
+
 def validate_command(command, *, _allow_helper=True):
     """Block raw outbound paths; reads remain available across workspaces.
 
@@ -246,31 +267,57 @@ def validate_command(command, *, _allow_helper=True):
     command = str(command).replace("\\\n", "")
     if _allow_helper and _verified_helper_command(command):
         return True, "verified same-release helper; bridge rechecks every input"
+    if "<<" in command:
+        # Reuse the panel guard's bounded AST classification of literal Python
+        # document strings. Heredoc data is not a sequence of shell commands.
+        # Executing/unknown Python, shell heredocs and adjacent commands retain
+        # their original text. Import lazily to avoid the module import cycle.
+        from cmux_agent_panel_guard import _python_document_data
+        command = _python_document_data(command)
     # Tokenize shell syntax so a quoted search pattern is not an invocation.
     # Inspect nested shell -c separately; --help never exempts a compound write.
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    tokens = []
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
-        lexer.whitespace = " \t\r"
-        lexer.whitespace_split = True
-        tokens = list(lexer)
+        for token in lexer:
+            tokens.append(token)
     except ValueError:
-        return False, "WORKSPACE_SCOPE_DENIED: unparseable shell input"
+        # A shell lexer is not a Python/document parser. Parse failure alone
+        # cannot put an ordinary tool under terminal-transport jurisdiction.
+        # Preserve the already parsed invocation, including a partial final
+        # word, so `cmux send ... "unterminated` still rejects before input.
+        if tokens and tokens[-1] in ("-c", "-lc", "-ic"):
+            tokens.append(lexer.token)
+        else:
+            tokens.extend(lexer.token.split())
     blocked = False
-    for i, token in enumerate(tokens):
-        name = Path(token).name
+    segments, current = [], []
+    for token in tokens:
+        if token and all(c in ";&|()\n" for c in token):
+            segments.append(current)
+            current = []
+        else:
+            current.append(token)
+    segments.append(current)
+    for segment in segments:
+        words = _command_head(segment)
+        if not words:
+            continue
+        name, arguments = Path(words[0]).name, words[1:]
         if name in ("cmux", "cmux-agent"):
-            for arg in tokens[i + 1:]:
-                if arg and all(c in ";&|()\n" for c in arg):
-                    break
+            for arg in arguments:
                 if arg in ("send", "send-key", "send-text", "paste", "ask", "broadcast"):
                     blocked = True
                     break
-        if name in ("sh", "bash", "zsh") and i + 2 < len(tokens):
-            if tokens[i + 1] in ("-c", "-lc", "-ic"):
-                ok, _ = validate_command(tokens[i + 2], _allow_helper=False)
+                if re.fullmatch(r"(?:surface|terminal)\.(?:send|send_text|send_key|write|paste)", arg):
+                    blocked = True
+                    break
+        if name in ("sh", "bash", "zsh") and len(arguments) >= 2:
+            if arguments[0] in ("-c", "-lc", "-ic"):
+                ok, _ = validate_command(arguments[1], _allow_helper=False)
                 blocked = blocked or not ok
-    if re.search(r"\b(?:surface|terminal)\.(?:send|send_text|send_key|write)\b", command):
-        blocked = True
     if blocked:
         return False, ("WORKSPACE_SCOPE_DENIED: raw terminal input bypasses UUID binding; "
                        "use the installed cmux_bridge transport. No cross-workspace handshake, "
