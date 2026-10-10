@@ -18,6 +18,11 @@ import cmux_lease_guard as lease
 
 
 class HookMarkerJurisdictionTests(unittest.TestCase):
+    session = '4ec8ad00-956d-4d00-b302-64927c25ce3f'
+
+    def peers(self):
+        return [dict(role='supervisor', surface_uuid='actual-surface', native_session_id=self.session)]
+
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
@@ -49,6 +54,7 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
     def marker(self, workspace='actual', *, v2=False, **extra):
         path = (self.active / workspace / 'task.json' if v2
                 else self.active / (workspace + '.json'))
+        extra.setdefault('participants', self.peers())
         self.write(path, dict(task_id='task', artifact_root=str(self.root / 'task'), **extra))
         return path
 
@@ -70,6 +76,7 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
         self.resolve.return_value = ('actual', 'actual-surface')
 
     def main(self, mod, payload):
+        payload = dict(payload, session_id=self.session)
         with patch.object(sys, 'argv', [mod.__file__]), \
                 patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \
                 patch.object(sys, 'stdout', io.StringIO()), \
@@ -95,34 +102,30 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
             self.assertEqual(self.main(mod, payload), (0, ''))
         self.resolve.assert_not_called()
 
-    def test_global_v1_marker_requires_discovery_in_all_mains(self):
-        self.marker(workspace='not-inherited')
+    def test_unrelated_v1_marker_does_not_require_discovery(self):
+        self.marker(workspace='not-inherited', participants=[dict(
+            role='executor', surface_uuid='elsewhere', native_session_id='other-session')])
         for mod, payload in self.payloads:
             with self.subTest(guard=mod.__name__):
                 rc, err = self.main(mod, payload)
-                self.assertEqual(rc, 2)
-                self.assertIn('HOOK_CALLER_UNRESOLVED', err)
-        self.assertEqual(self.resolve.call_count, 3)
+                self.assertEqual((rc, err), (0, ''))
+        self.resolve.assert_not_called()
 
-    def test_global_v2_marker_requires_discovery_in_all_mains(self):
-        self.marker(workspace='not-inherited', v2=True)
+    def test_unrelated_v2_marker_does_not_require_discovery(self):
+        self.marker(workspace='not-inherited', v2=True, participants=[dict(
+            role='executor', surface_uuid='elsewhere', native_session_id='other-session')])
         for mod, payload in self.payloads:
             with self.subTest(guard=mod.__name__):
                 rc, err = self.main(mod, payload)
-                self.assertEqual(rc, 2)
-                self.assertIn('HOOK_CALLER_UNRESOLVED', err)
-        self.assertEqual(self.resolve.call_count, 3)
+                self.assertEqual((rc, err), (0, ''))
+        self.resolve.assert_not_called()
 
-    def test_expired_markers_skip_stop_and_closeout_but_not_lease(self):
+    def test_expired_markers_do_not_enroll_any_native_session(self):
         for v2 in (False, True):
             path = self.marker(v2=v2, **self.expired())
-            for mod, payload in self.payloads[:2]:
+            for mod, payload in self.payloads:
                 self.assertEqual(self.main(mod, payload), (0, ''))
             self.resolve.assert_not_called()
-            rc, err = self.main(*self.payloads[2])
-            self.assertEqual(rc, 2)
-            self.assertIn('HOOK_CALLER_UNRESOLVED', err)
-            self.resolve.reset_mock()
             path.unlink()
 
     def test_stop_identity_error_does_not_accuse_consensus_or_suggest_disarm(self):
@@ -177,18 +180,20 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
             self.assertIn('ARTIFACT_ROOT_NOT_ABSOLUTE', err)
         self.resolve.assert_not_called()
 
-    def test_explicit_root_cannot_skip_discovery_when_any_marker_exists(self):
-        self.marker(workspace='not-inherited', v2=True)
-        rc, err = self.main(lease, self.explicit(self.root / 'explicit'))
+    def test_explicit_root_ignores_unrelated_marker_but_checks_lease(self):
+        self.marker(workspace='not-inherited', v2=True, participants=[])
+        root = self.root / 'explicit'
+        self.lease_file(root)
+        rc, err = self.main(lease, self.explicit(root))
         self.assertEqual(rc, 2)
-        self.assertIn('HOOK_CALLER_UNRESOLVED', err)
-        self.resolve.assert_called_once()
+        self.assertIn('LEASE_CONFLICT', err)
+        self.resolve.assert_not_called()
 
     def test_explicit_root_cannot_hide_second_resolved_workspace_lease(self):
         self.resolved()
         self.marker(v2=True)
         second = self.root / 'second'
-        self.write(self.active / 'actual' / 'second.json', dict(artifact_root=str(second)))
+        self.write(self.active / 'actual' / 'second.json', dict(artifact_root=str(second), participants=self.peers()))
         self.lease_file(second)
         self.lease_file(self.root / 'foreign')
         self.write(self.active / 'inherited.json', dict(artifact_root=str(self.root / 'foreign')))
@@ -204,18 +209,19 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
         self.assertEqual(self.main(lease, self.explicit(self.root / 'explicit')), (0, ''))
         self.resolve.assert_called_once()
 
-    def test_expired_marker_still_enforces_its_lease_after_discovery(self):
+    def test_expired_marker_does_not_override_explicit_root(self):
         self.resolved()
         self.marker(v2=True, **self.expired())
         self.lease_file(self.root / 'task')
-        rc, err = self.main(lease, self.explicit(self.root / 'explicit'))
+        self.assertEqual(self.main(lease, self.explicit(self.root / 'explicit')), (0, ''))
+        self.resolve.assert_not_called()
+        rc, err = self.main(lease, self.explicit(self.root / 'task'))
         self.assertEqual(rc, 2)
         self.assertIn('LEASE_CONFLICT', err)
-        self.resolve.assert_called_once()
 
     def test_valid_explicit_root_cannot_hide_invalid_marker_root(self):
         self.resolved()
-        self.write(self.active / 'actual.json', dict(artifact_root='relative'))
+        self.write(self.active / 'actual.json', dict(artifact_root='relative', participants=self.peers()))
         rc, err = self.main(lease, self.explicit(self.root / 'explicit'))
         self.assertEqual(rc, 2)
         self.assertIn('ARTIFACT_ROOT_NOT_ABSOLUTE', err)
@@ -229,7 +235,7 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
 
     def test_marker_registry_fallback_is_enforced_with_explicit_root(self):
         self.resolved()
-        self.write(self.active / 'actual.json', dict(task_id='registered'))
+        self.write(self.active / 'actual.json', dict(task_id='registered', participants=self.peers()))
         root = self.root / 'registered'
         self.write(self.registry / 'registered.json', dict(artifact_root=str(root)))
         self.lease_file(root)
@@ -239,7 +245,7 @@ class HookMarkerJurisdictionTests(unittest.TestCase):
 
     def test_missing_marker_registry_root_is_not_hidden_by_explicit_root(self):
         self.resolved()
-        self.write(self.active / 'actual.json', dict(task_id='unregistered'))
+        self.write(self.active / 'actual.json', dict(task_id='unregistered', participants=self.peers()))
         rc, err = self.main(lease, self.explicit(self.root / 'explicit'))
         self.assertEqual(rc, 2)
         self.assertIn('no registered artifact_root', err)

@@ -5,9 +5,26 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+For provider switching, global hook ownership, explicitly authorized 60-second
+follow-ups and per-session adoption, follow
+[configuration and request lifecycle](references/configuration-and-reasks.md).
+Keep one guardian and one shared sender; a queued request is still pending.
+
+Global installation is not task enrollment. Ordinary Codex/Claude conversations
+may use tools and finish without supervisor approval. Task hooks apply only after
+this workflow explicitly enrolls the current native session with its workspace,
+surface and role; another task, shared directory, or reused pane grants no scope.
+See [session enrollment](references/configuration-and-reasks.md#task-scope-is-explicit-session-enrollment).
+
 For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.
+
+For an empty Claude composer with a residual Bash display after interruption,
+use the [authenticated non-submitting probe](references/native-caller-inventory.md#interrupted-claude-with-a-residual-bash-display).
+Preserve the rejected tool and original zero-input evidence. Only the harness
+may test and remove its short owned token; formal delivery still requires its
+normal gates and new complete native reception.
 
 Hook reconciliation carries its authenticated native caller source through nested
 bridge checks and recollects live process evidence at each boundary. It must not

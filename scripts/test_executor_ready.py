@@ -87,7 +87,8 @@ class FiniteReadyTests(unittest.TestCase):
     def mailbox_reply(self, record, **overrides):
         marker = (record['asks'] or [{}])[-1].get('marker')
         body = dict(marker=marker, caller_surface_uuid=self.caller,
-                    task_id='task-x', episode_id=record['episode_id'], status='SOLO')
+                    supervisor_uuid='surface:1', task_id='task-x',
+                    episode_id=record['episode_id'], status='SOLO', trigger='scope complete')
         body.update(overrides)
         path = Path(record['mailbox']) / (marker + '.json' if marker else 'reply.json')
         ready.write_json(path, body)
@@ -209,12 +210,12 @@ class FiniteReadyTests(unittest.TestCase):
         self.assertEqual(result['reply']['status'], 'SOLO')
         self.assertEqual(len(self.bridge.submitted), 1)
 
-    def test_mailbox_can_answer_a_passive_idle_episode_without_any_request(self):
+    def test_mailbox_cannot_answer_a_passive_episode_with_no_issued_marker(self):
         record = self.run_loop(one_shot=True)
         self.mailbox_reply(record, status=ready.WAITING_DEPENDENCY)
         result = self.run_loop()
-        self.assertEqual(result['state'], ready.ANSWERED)
-        self.assertEqual(result['reply']['status'], ready.WAITING_DEPENDENCY)
+        self.assertEqual(result['state'], ready.TIMED_OUT)
+        self.assertIsNone(result['reply'])
         self.assertEqual(self.bridge.submitted, [])
 
     def test_mailbox_wrong_binding_and_transport_status_cannot_claim_reply(self):
@@ -244,7 +245,7 @@ class FiniteReadyTests(unittest.TestCase):
     def test_mailbox_requires_explicit_task_binding_even_when_task_id_is_empty(self):
         mailbox = self.root / 'mailbox'
         body = dict(marker='expected', caller_surface_uuid=self.caller, status='SOLO',
-                    episode_id='episode')
+                    episode_id='episode', trigger='scope complete')
         for fields in (body, dict(body, task_id='foreign')):
             ready.write_json(mailbox / 'expected.json', fields)
             self.assertIsNone(ready.find_reply(mailbox, None, ['expected'], 0,
@@ -265,6 +266,10 @@ class FiniteReadyTests(unittest.TestCase):
         template = body.split(' containing ', 1)[1].split('}.', 1)[0] + '}'
         body = json.loads(template)
         self.assertEqual(body['episode_id'], record['episode_id'])
+        self.assertEqual(body['supervisor_uuid'], 'surface:1')
+        self.assertFalse(ready.reply_contract.valid(body, [body['marker']], caller=self.caller,
+                                                   task_id='task-x', episode_id=record['episode_id']))
+        body['trigger'] = 'install successor after its offline suite passes'
         ready.write_json(Path(record['mailbox']) / (body['marker'] + '.json'), body)
         self.assertIsNotNone(ready.find_reply(record['mailbox'], None, [body['marker']],
                                              record['started_epoch'], self.caller, 'task-x',
@@ -303,7 +308,11 @@ class FiniteReadyTests(unittest.TestCase):
                  dict(type='user', isMeta=True, message=dict(content='STATUS: meta')),
                  dict(type='assistant', message=dict(content='STATUS: mine')),
                  dict(type='user', message=dict(content='Stop hook feedback: SOLO'))]
-        real = dict(type='user', message=dict(role='user', content='STATUS: WAITING_DEPENDENCY actual reply'))
+        asked = self.ask(transcript=str(transcript))
+        body = dict(marker=asked['asks'][0]['marker'], caller_surface_uuid=self.caller,
+                    supervisor_uuid='surface:1', task_id='task-x', episode_id=asked['episode_id'],
+                    status='WAITING_DEPENDENCY', trigger='release installed')
+        real = dict(type='user', message=dict(role='user', content=json.dumps(body)))
 
         def feed(clock):
             with transcript.open('a') as handle:
@@ -314,14 +323,16 @@ class FiniteReadyTests(unittest.TestCase):
         self.assertEqual(record['state'], ready.ANSWERED)
         self.assertEqual(record['reply']['source'], 'transcript')
         self.assertEqual(noise, [])
-        self.assertEqual(self.bridge.submitted, [])
+        self.assertEqual(len(self.bridge.submitted), 1)
 
     def test_downtime_reply_uses_original_transcript_inode_and_offset(self):
         transcript = self.root / 'transcript.jsonl'
         transcript.write_text('')
-        self.ask(transcript=str(transcript))
+        asked = self.ask(transcript=str(transcript))
+        reply = dict(marker=asked['asks'][0]['marker'], caller_surface_uuid=self.caller,
+                     supervisor_uuid='surface:1', task_id='task-x', episode_id=asked['episode_id'], status='ACK')
         with transcript.open('a') as handle:
-            handle.write(json.dumps(dict(type='user', message=dict(content='ACK original request'))) + '\n')
+            handle.write(json.dumps(dict(type='user', message=dict(content=json.dumps(reply)))) + '\n')
         record = self.run_loop(transcript=str(transcript))
         self.assertEqual(record['state'], ready.ANSWERED)
         self.assertEqual(len(self.bridge.submitted), 1)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import cmux_hook_identity as hook_identity
+import cmux_hook_scope as hook_scope
 import re
 import shlex
 import sys
@@ -77,7 +78,10 @@ def _workspace_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     the old path would silently stop seeing armed tasks after the writer
     migrated — that is why both shapes are consulted here.
     """
-    ws = _workspace_key(payload)
+    selected = hook_scope.current()
+    if selected is not None:
+        return selected
+    ws, surface = hook_identity.identity(payload)
     markers: list[dict[str, Any]] = []
     d = ACTIVE_DIR / ws
     if d.is_dir():
@@ -85,10 +89,10 @@ def _workspace_markers(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if p.name.startswith("."):
                 continue
             m = _read_json(p)
-            if isinstance(m, dict):
+            if isinstance(m, dict) and hook_scope.applies(m, payload, ws, surface):
                 markers.append(m)
     legacy = _read_json(ACTIVE_DIR / f"{ws}.json")
-    if isinstance(legacy, dict):
+    if isinstance(legacy, dict) and hook_scope.applies(legacy, payload, ws, surface):
         markers.append(legacy)
     return markers
 
@@ -325,10 +329,18 @@ def evaluate(payload):
     if not payload or _tool_name(payload) in ("read", "glob", "grep"):
         return True, "no absolute mutation target detected"
     try:
-        if not _has_workspace_markers():
-            return _evaluate_resolved(payload, markers=[])
-        with hook_identity.evaluation(payload):
-            return _evaluate_resolved(payload)
+        from cmux_consensus_stop_guard import _marker_fresh
+        candidates = []
+        for pattern in ('*.json', '*/*.json'):
+            for path in ACTIVE_DIR.glob(pattern):
+                if path.name.startswith('.'):
+                    continue
+                marker = _read_json(path)
+                if isinstance(marker, dict) and _marker_fresh(marker):
+                    workspace = path.parent.name if path.parent != ACTIVE_DIR else path.stem
+                    candidates.append(dict(marker, _scope_workspace=workspace))
+        with hook_scope.evaluation(payload, candidates) as markers:
+            return _evaluate_resolved(payload, markers=markers)
     except hook_identity.ERRORS as exc:
         return False, "HOOK_CALLER_UNRESOLVED: " + str(exc)
 

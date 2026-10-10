@@ -27,6 +27,7 @@ GUARDS = {
     "cmux_supervisor_report_guard": "PostToolUse",
 }
 RETIRED_GUARDS = {"cmux_submit_confirmation_guard", "cmux_send_proof_stop_guard"}
+OPTIONAL_GUARDS = {"cmux_executor_reask_stop_guard": "Stop"}
 
 
 def command(name):
@@ -59,13 +60,17 @@ def owned_command(value, home):
         return False
     path = Path(words[0])
     if (not path.is_absolute() or '..' in path.parts or path.suffix != '.py'
-            or path.stem not in set(GUARDS) | RETIRED_GUARDS
+            or path.stem not in set(GUARDS) | RETIRED_GUARDS | set(OPTIONAL_GUARDS)
             or path.parent.name != 'scripts'):
         return False
-    return path.parent.parent == ROOT or release_source(path.parent.parent, home)
+    source = path.parent.parent
+    aliases = [Path(home) / client / 'skills/multi-agent-collaboration'
+               for client in ('.agents', '.claude', '.codex')]
+    return (source == ROOT or release_source(source, home)
+            or source in aliases and release_source(source.resolve(), home))
 
 
-def transform(doc, uninstall=False, *, home=None):
+def transform(doc, uninstall=False, *, home=None, executor_reask=False):
     result = copy.deepcopy(doc)
     hooks = result.setdefault("hooks", {})
     if not isinstance(hooks, dict):
@@ -84,7 +89,10 @@ def transform(doc, uninstall=False, *, home=None):
                 entry['hooks'] = kept
                 cleaned.append(entry)
         hooks[event] = cleaned
-    for name, event in GUARDS.items():
+    expected = dict(GUARDS)
+    if executor_reask:
+        expected.update(OPTIONAL_GUARDS)
+    for name, event in expected.items():
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
             raise ValueError("hook event must be a list")
@@ -195,7 +203,7 @@ def replace_skill(path, snapshot, *, uninstall=False):
     return str(backup) if backup else None
 
 
-def manage(home, mode, apply=False):
+def manage(home, mode, apply=False, executor_reask=False):
     if sys.version_info < (3, 10):
         raise RuntimeError("Python 3.10+ required; do not wire macOS Python 3.9")
     home = Path(home).expanduser().resolve()
@@ -205,7 +213,8 @@ def manage(home, mode, apply=False):
         link = home / ("." + client) / "skills/multi-agent-collaboration"
         snapshot, owned = skill_plan(link, home)
         old, doc = read(config)
-        new = transform(doc, mode == "uninstall", home=home)
+        new = transform(doc, mode == "uninstall", home=home,
+                        executor_reask=executor_reask and client == 'claude')
         plans.append((config, link, snapshot, owned, old, doc, new))
     checks = {}
     # Check both clients before changing either one.
@@ -213,7 +222,8 @@ def manage(home, mode, apply=False):
         if read(config)[0] != old or skill_snapshot(link) != snapshot:
             raise RuntimeError('installation changed concurrently; rerun')
     for config, link, snapshot, owned, old, doc, new in plans:
-        checks[str(config)] = {"linked": owned, "configured": doc == transform(doc, home=home),
+        expected = transform(doc, home=home, executor_reask=executor_reask and config.parent.name == '.claude')
+        checks[str(config)] = {"linked": owned, "configured": doc == expected,
                                "changeNeeded": doc != new}
         if mode != "doctor" and apply:
             if doc != new:
@@ -223,7 +233,7 @@ def manage(home, mode, apply=False):
             elif mode == "uninstall" and snapshot[0] != 'absent':
                 checks[str(config)]['skillBackup'] = replace_skill(link, snapshot, uninstall=True)
     if mode == "doctor":
-        for name in GUARDS:
+        for name in dict(GUARDS, **(OPTIONAL_GUARDS if executor_reask else {})):
             run = subprocess.run(shlex.split(command(name)), input="{}", text=True,
                                  capture_output=True, timeout=15)
             checks[name] = {"benignExitZero": run.returncode == 0}
@@ -240,9 +250,10 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=("install", "doctor", "uninstall"))
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--executor-reask", action="store_true", help="explicitly enable user-authorized 60-second reasks for Claude")
     args = parser.parse_args()
     try:
-        result = manage(args.home, args.mode, args.apply)
+        result = manage(args.home, args.mode, args.apply, args.executor_reask)
         print(json.dumps(result, indent=2))
         sys.exit(0 if result["ok"] else 2)
     except Exception as exc:

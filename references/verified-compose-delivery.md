@@ -97,6 +97,19 @@ controller 支持的恢复入口才可在同一 attempt 内补一个现场支持
 该选项。callback 的旧 queue-only Python 接口不提供额外 Tab 配额。不能改 nonce、换会话、删 journal
 或重写旧 attempt 来取得新发送槽。
 
+原 callback 的发送者与已认证原接收者都可以通过原 controller 显式
+`--reconcile-only` 核收。主管观察收到的原回调时，hook 按原 journal 的
+反向端点认证，不把主管误判成一次向自己的新发送。此例外只接受真实布尔
+只读参数；动态值、展开参数、重复选项及与 queue-resume 混用均不接受。
+原 executor、workspace、pane、接收进程、原始 EOF fence、完整消息和
+报告/任务包一致性仍逐项核验；普通发送不享有反向端点例外。
+
+hook 的 callback 核收提示只能采用冻结包中一致的 `required_skill` 与
+`completion_command_argv` / `callback_command`，保留原 Python 和原
+controller，追加 `--reconcile-only`。原命令缺失或冲突时明确报不可用，
+不得猜测当前安装路径；已有真实原生接收证据仍保留。hook 仅作只读观察，
+正式 receipt 仍由原控制器发布。
+
 ## 封口、Stop 与主管报告发现
 
 PostToolUse 成功结果须符合客户端官方 schema：仅通过
@@ -105,6 +118,12 @@ PostToolUse 成功结果须符合客户端官方 schema：仅通过
 Codex 对未知顶层字段拒绝整份输出；原生记录存在与自动 hook 输出被接受
 分别核验。保留未确认时的 stderr/exit 2，普通无关工具保持静默。
 离线核官方 schema 后，再取活跃客户端实际自动调用记录；手动调用不算。
+
+只读 CLI 帮助不是一次投递：精确的 bridge `--help` / `-h` 调用，包括
+Python 脚本启动及 Codex 并行工具中的独立命令，不要求 task pack、身份
+查询或原生回执。同批次真实 send/callback 仍逐条核验；正文中的 `--help`、
+Python `-c` 和动态改写命令不能享此例外。遇到只读帮助被误报，保留原次
+工具证据并修解析器，不重发旧 callback，不补造任务包或回执。
 
 报告完成后先冻结报告、task pack 和原 attempt 既有记录，再走原 callback。
 封口阻止继续扩展测试、改报告、追加科研或重复发送；允许严格 task-bound
