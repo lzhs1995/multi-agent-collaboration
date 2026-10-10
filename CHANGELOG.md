@@ -1,3 +1,28 @@
+# 0.4.19
+
+- Remove global workflow tool/Stop blocks, including closeout and reask loops; retain automatic invocation evidence.
+- Resolve helper self through the native caller resolver instead of inherited daemon identity.
+- Add user-authorized maintenance/successor communication without old-supervisor settlement, with durable single-input native receipts.
+- Keep old callback journals, drafts, task acceptance and shared write scope separate.
+
+# 0.4.18 — 2026-10-10
+
+- Add a separate `successor-rebind-v1` artifact and guarded cross-workspace
+  successor pair route. Ordinary same-workspace transport stays fail-closed;
+  old task packs, callbacks, nonces and native journals remain immutable.
+- Require explicit user authorization, independent supervisor-failure evidence,
+  frozen old writers and fresh successor identity/receipt before any successor
+  input. A fixed historical `codex resume` value is never required.
+- Record the live-client adoption boundary: a native Claude `ConfigChange`
+  receipt is a real settings-watcher diagnostic only and never substitutes for
+  automatic `PreToolUse`/`Stop` adoption, native delivery, or task acceptance.
+- Require a fresh inventory before reporting coverage. Shared-daemon reloads do
+  not cover embedded Codex clients; an embedded client without a supported
+  reload endpoint remains `UNVERIFIED` and its session is preserved.
+- Preserve fail-closed transport when the caller's current cmux workspace cannot
+  be joined to a live tree: process/MCP liveness is not a handshake or delivery
+  receipt, and no input is permitted until the UUID proof is restored.
+
 # 0.4.17 — 2026-10-10
 
 - Remove the conversation-wide tool/Stop lock on unresolved task-hook identity,

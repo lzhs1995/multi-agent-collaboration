@@ -168,6 +168,59 @@ def pin_workspace(surface, *, workspace_uuid=None, target_uuid=None, caller_uuid
     return proof
 
 
+def pin_successor_pair(artifact, *, expected_caller=None, expected_target=None):
+    """Bind an explicitly authorized successor caller/receiver pair.
+
+    Ordinary bridge calls never use this route and therefore keep the strict
+    same-workspace contract.  The returned proof carries both workspace UUIDs
+    so a caller cannot accidentally reuse the old single-workspace pin.
+    """
+    from cmux_workspace_guard import require_successor_pair
+    return require_successor_pair(
+        artifact, expected_caller=expected_caller, expected_target=expected_target)
+
+
+def _run_successor(*args, artifact, check=True, capture=True):
+    """Run only explicit target RPCs under a successor pair proof."""
+    args = list(args)
+    proof = pin_successor_pair(artifact)
+    if args[:2] == ["rpc", "terminal.paste"]:
+        if len(args) != 3:
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: explicit paste parameters required")
+        try:
+            params = json.loads(args[2])
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: invalid paste parameters") from exc
+        if (not isinstance(params, dict) or params.get("submit_key") != "none"
+                or set(params) != {"text", "submit_key", "workspace_id", "surface_id"}
+                or not isinstance(params.get("text"), str) or not params["text"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: literal paste must not submit")
+        if uuid_value(params["workspace_id"]) != uuid_value(proof["target_workspace_uuid"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target workspace override")
+        if uuid_value(params["surface_id"]) != uuid_value(proof["target_surface_uuid"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target surface override")
+        args[2] = json.dumps(dict(params, workspace_id=proof["target_workspace_uuid"],
+                                   surface_id=proof["target_surface_uuid"]), ensure_ascii=False)
+    elif args and args[0] in {"send", "send-key"}:
+        if "--surface" not in args:
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: explicit surface required")
+        i = args.index("--surface") + 1
+        if uuid_value(args[i]) != uuid_value(proof["target_surface_uuid"]):
+            raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target surface override")
+        if "--workspace" in args:
+            wi = args.index("--workspace") + 1
+            if uuid_value(args[wi]) != uuid_value(proof["target_workspace_uuid"]):
+                raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target workspace override")
+        else:
+            args[1:1] = ["--workspace", proof["target_workspace_uuid"]]
+    else:
+        raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: unsupported route")
+    result = subprocess.run([CMUX] + args, capture_output=capture, text=True)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"cmux successor call failed (rc={result.returncode}): {result.stderr.strip()}")
+    return result.stdout.strip() if capture else ""
+
+
 def _run(*args, check=True, capture=True):
     """Run cmux with given args, return stdout string."""
     args = list(args)
@@ -1702,6 +1755,24 @@ def read_screen(surface, lines=200):
         target, workspace = rows[0]["surface_id"], rows[0]["workspace_id"]
     return _run("read-screen", "--workspace", workspace, "--surface", target,
                 "--lines", str(lines))
+
+
+def read_screen_successor(artifact, lines=200):
+    """Read the authorized successor receiver by its target workspace UUID."""
+    proof = pin_successor_pair(artifact)
+    result = subprocess.run(
+        [CMUX, "read-screen", "--workspace", proof["target_workspace_uuid"],
+         "--surface", proof["target_surface_uuid"], "--lines", str(lines)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise WorkspaceScopeError(
+            f"SUCCESSOR_REBIND_DENIED: read-screen failed (rc={result.returncode})")
+    # Recheck the caller and receiver after the read; a stale screen is never
+    # used to authorize paste or a key.
+    pin_successor_pair(artifact, expected_caller=proof["caller_surface_uuid"],
+                       expected_target=proof["target_surface_uuid"])
+    return result.stdout
 
 
 def wait_for_ack(surface, ack_prefix="PREFLIGHT_ACK", timeout=120, poll=3, lines=200, task_id=None, provider=None, nonce=None):

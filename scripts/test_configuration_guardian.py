@@ -56,6 +56,34 @@ class GuardianTests(unittest.TestCase):
         self.assertEqual(len(snapshots), 2)
         self.assertNotIn('fixture-secret', ''.join(p.read_text() for p in snapshots))
 
+    def test_mixed_gate_and_advisory_profiles_upgrade_without_foreign_hook_loss(self):
+        release = self.home / '.local/share/multi-agent-collaboration/releases/old/source/scripts'
+        hook = 'cmux_consensus_stop_guard.py'
+        owned = [f'python3 -B {release / hook}',
+                 f'python3 -B {release}/cmux_workflow_advisory.py --hook {hook}']
+        foreign = f'python3 /opt/foreign/scripts/cmux_workflow_advisory.py --hook {hook}'
+        self.doc['hooks']['Stop'][0]['hooks'].extend(
+            {'type': 'command', 'command': command} for command in owned + [foreign])
+        expected_foreign = g.foreign_hooks(self.doc, m, self.home)
+        db = self.db()
+        self.write(self.config, self.doc)
+        g.reconcile_files(self.home, m, True)
+        self.assertEqual(g.reconcile_profiles(self.home, m, True)['changed'], 1)
+        documents = [json.loads(self.config.read_text()), json.loads(
+            db.execute("SELECT settings_config FROM providers WHERE id='a'").fetchone()[0])]
+        for document in documents:
+            self.assertEqual(g.foreign_hooks(document, m, self.home), expected_foreign)
+            commands = [row['command'] for entries in document['hooks'].values()
+                        for entry in entries for row in entry['hooks']]
+            self.assertIn(foreign, commands)
+            self.assertFalse(set(owned) & set(commands))
+            for name in dict(m.GUARDS, **m.OPTIONAL_GUARDS):
+                self.assertEqual(commands.count(m.command(name)), 1)
+            self.assertEqual(document['env'], self.doc['env'])
+        self.assertEqual(g.reconcile_profiles(self.home, m, True)['changed'], 0)
+        self.assertFalse(any(row['change_needed'] for row in g.reconcile_files(self.home, m, True)))
+        db.close()
+
     def test_imported_profiles_and_common_snippet_preserve_credentials_selection_and_foreign_hooks(self):
         db = self.db()
         common = m.transform({'env': {'COMMON': 'keep'}, 'hooks': self.doc['hooks']}, executor_reask=True)

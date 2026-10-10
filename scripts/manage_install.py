@@ -13,6 +13,8 @@ import sys
 import tempfile
 import uuid
 
+from cmux_workflow_advisory import WORKFLOW_HOOKS
+
 ROOT = Path(__file__).resolve().parents[1]
 GUARDS = {
     "cmux_executor_closeout_guard": "PreToolUse",
@@ -31,7 +33,11 @@ OPTIONAL_GUARDS = {"cmux_executor_reask_stop_guard": "Stop"}
 
 
 def command(name):
-    return shlex.join([sys.executable, "-B", str(ROOT / "scripts" / (name + ".py"))])
+    filename = name + '.py'
+    if filename in WORKFLOW_HOOKS:
+        return shlex.join([sys.executable, '-B', str(ROOT / 'scripts/cmux_workflow_advisory.py'),
+                           '--hook', filename])
+    return shlex.join([sys.executable, '-B', str(ROOT / 'scripts' / filename)])
 
 
 def release_source(path, home):
@@ -56,11 +62,17 @@ def owned_command(value, home):
         return False
     while words and words[0] in ('-B', '-u'):
         words.pop(0)
-    if len(words) != 1:
+    if not words:
         return False
-    path = Path(words[0])
+    path = Path(words.pop(0))
+    if path.name == 'cmux_workflow_advisory.py':
+        # Do not consume similarly named foreign wrappers, malformed options,
+        # shell tails or a wrapper invoked for a hook owned by another tool.
+        if len(words) != 2 or words[0] != '--hook' or words[1] not in WORKFLOW_HOOKS:
+            return False
+    elif words or path.stem not in set(GUARDS) | RETIRED_GUARDS | set(OPTIONAL_GUARDS):
+        return False
     if (not path.is_absolute() or '..' in path.parts or path.suffix != '.py'
-            or path.stem not in set(GUARDS) | RETIRED_GUARDS | set(OPTIONAL_GUARDS)
             or path.parent.name != 'scripts'):
         return False
     source = path.parent.parent

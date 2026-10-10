@@ -180,6 +180,34 @@ def require_same_workspace(target, *, expected=None):
     return binding
 
 
+def require_successor_pair(artifact, *, expected_caller=None, expected_target=None):
+    """Validate the explicit successor artifact against the live two-workspace tree.
+
+    This is intentionally a separate entrypoint.  ``require_same_workspace``
+    remains unchanged and continues to reject every ordinary cross-workspace
+    operation.
+    """
+    from successor_rebind import resolve_pair
+    identity, tree, env, _proof = caller_snapshot()
+    pair = resolve_pair(identity, tree, artifact, env=env)
+    if expected_caller and uuid_value(expected_caller) != pair["caller"]["surface_uuid"]:
+        deny("successor caller expectation changed")
+    if expected_target and uuid_value(expected_target) != pair["target"]["surface_uuid"]:
+        deny("successor target expectation changed")
+    return {
+        "mode": pair["mode"], "artifact": pair["artifact"],
+        "caller_surface_uuid": pair["caller"]["surface_uuid"],
+        "caller_workspace_uuid": pair["caller"]["workspace_uuid"],
+        "caller_pane_uuid": pair["caller"]["pane_uuid"],
+        "target_surface_uuid": pair["target"]["surface_uuid"],
+        "target_workspace_uuid": pair["target"]["workspace_uuid"],
+        "target_pane_uuid": pair["target"]["pane_uuid"],
+        "caller_surface_ref": pair["caller"]["surface_ref"],
+        "target_surface_ref": pair["target"]["surface_ref"],
+        "target_tty": pair["target"].get("tty"),
+    }
+
+
 def _verified_helper_command(command):
     """只放行单条、完整同版固定路由；不接受 shell 或环境覆盖。"""
     if any(char in command for char in ('`', '$', '\n', '\r')):

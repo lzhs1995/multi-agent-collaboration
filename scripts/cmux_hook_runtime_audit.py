@@ -16,7 +16,12 @@ def _entrypoint():
     main = getattr(sys.modules.get('__main__'), '__file__', '')
     path = Path(main).resolve()
     scripts = Path(__file__).resolve().parent
-    return path.name if path.parent == scripts and path.name in HOOKS else None
+    if path.parent != scripts:
+        return None
+    if path.name == 'cmux_workflow_advisory.py':
+        from cmux_workflow_advisory import hook_from_argv
+        return hook_from_argv()
+    return path.name if path.name in HOOKS else None
 
 
 def _parent_chain():
@@ -36,14 +41,20 @@ def _parent_chain():
     return result
 
 
-def record(payload, scope_status):
+def record(payload, scope_status, *, original_hook=None, mode=None):
     """Keep one private latest receipt per session/event/hook, without stdin."""
     temporary = None
     try:
         hook = _entrypoint()
+        entrypoint = Path(getattr(sys.modules.get('__main__'), '__file__', '')).name
+        if original_hook is not None and original_hook != hook:
+            return
+        advisory = entrypoint == 'cmux_workflow_advisory.py'
+        if mode is not None and mode != ('advisory' if advisory else 'legacy-gate'):
+            return
         session = str(uuid.UUID(payload.get('session_id') or payload.get('sessionId')))
         event = payload.get('hook_event_name')
-        if not hook or event not in {'PreToolUse', 'Stop', 'SubagentStop'}:
+        if not hook or event not in {'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop'}:
             return
         source = Path(__file__).resolve().parents[1]
         version = (source / 'VERSION').read_text().strip()
@@ -54,6 +65,9 @@ def record(payload, scope_status):
             return
         receipt = dict(schema='hook-runtime-adoption-v1', source=str(source),
                        version=version, session_id=session, hook=hook, event=event,
+                       original_hook=hook, entrypoint=entrypoint,
+                       mode='advisory' if advisory else 'legacy-gate',
+                       native_receipt=False,
                        scope_status=scope_status, pid=os.getpid(), ppid=os.getppid(),
                        time_ns=time.time_ns(), parents=_parent_chain())
         target = root / (session + '.' + event + '.' + hook + '.json')

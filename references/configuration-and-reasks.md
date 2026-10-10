@@ -1,3 +1,5 @@
+> Current policy (0.4.19): [non-blocking recovery](nonblocking-recovery.md) overrides historical session-wide tool/Stop blocks and old-supervisor handshake restrictions below. Installed workflow hooks are advisory; explicit transport evidence and draft protection remain.
+
 # Global hooks, provider changes and executor follow-ups
 
 The shared collaboration release owns transport and communication hooks. Other
@@ -146,3 +148,39 @@ create these runtime receipts. A manually invoked hook is still a manual probe:
 check immediate native parent provenance and the real client event before
 claiming automatic adoption. Inventory every live client, including idle ones;
 missing post-install execution remains unverified, not implicitly successful.
+
+## ConfigChange and embedded-client boundary
+
+Claude's native settings watcher can invoke a temporary `ConfigChange` command
+without submitting a prompt. A receipt from that event must include the original
+session, settings path, release, process birth and parent chain. It is a
+diagnostic adoption fact only. It cannot be relabeled as automatic `PreToolUse` or
+`Stop`, complete hook coverage, native delivery, callback settlement, or business
+acceptance. Register a probe with a CAS merge, preserve unrelated settings, use a
+second genuine settings change when the watcher refreshes its cached snapshot,
+and remove the owned probe with another CAS merge. Missing receipt is unresolved;
+never feed synthetic hook JSON to the command.
+
+The managed Codex daemon's native config reload refreshes its loaded threads only.
+An older embedded Codex process outside that daemon has no inherited reload proof;
+unless a supported native endpoint is independently demonstrated, keep its exact
+session/rollout and report `UNVERIFIED`. Do not restart, replace, or alter its
+conversation merely to manufacture an adoption event.
+
+`cmux identify` returning a caller or focused surface is insufficient when the
+live tree cannot be joined. Process/MCP liveness and a screen read prove neither
+same-workspace handshake nor delivery. All terminal input remains blocked until
+the current caller, target surface, pane, native process and session are freshly
+authenticated. A successor supervisor may continue local authorized work and
+preserve evidence while this transport boundary is unresolved.
+## Successor supervisor rebind
+
+The fixed historical `codex resume` identity is not a transport requirement.
+After a proven supervisor failure, a user-authorized successor can establish a
+fresh binding through `successor-rebind-v1`, including an explicitly pinned
+cross-workspace caller/target pair. This route is separate from ordinary
+same-workspace transport and preserves the old controller, task pack, nonce,
+callback and native evidence as immutable records. Configuration reloads,
+process/MCP liveness and ConfigChange diagnostics do not establish a handshake
+or adoption; live UUID, process, session and transcript checks plus native
+reception are still required.

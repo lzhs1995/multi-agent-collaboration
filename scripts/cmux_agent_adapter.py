@@ -367,6 +367,7 @@ class Adapter:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("self", help="Resolve the current native caller, not inherited daemon environment")
     for name in ("ask", "send", "broadcast"):
         command = sub.add_parser(name)
         if name != "broadcast":
@@ -380,7 +381,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     adapter = Adapter()
     try:
-        if args.command == "reconcile":
+        if args.command == "self":
+            from cmux_workspace_guard import caller_snapshot
+            result, _tree, _env, proof = caller_snapshot()
+            result = dict(result, native_caller_verified=proof is not None)
+        elif args.command == "reconcile":
             result = adapter.deliver(args.surface, "reconcile", reconcile=True, intent=args.intent)
         elif args.command == "broadcast":
             result = adapter.broadcast(" ".join(args.message), args.request_id)

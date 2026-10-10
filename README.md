@@ -1,6 +1,8 @@
+Current release: **0.4.19**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md).
+
 # Multi-Agent Collaboration
 
-Current release: **0.4.17**. New and successor Codex supervisors use their active
+Current release: **0.4.18**. New and successor Codex supervisors use their active
 native foreground thread. Caller discovery failure cannot lock ordinary tools or
 Stop; task evidence stays intact and terminal input still verifies both endpoints.
 See [recovery without a session lock](references/native-caller-inventory.md#recovery-without-a-session-lock).
