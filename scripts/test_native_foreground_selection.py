@@ -5,6 +5,7 @@ metadata, session selection, binding and validation stay real. Every terminal
 input operation fails immediately in the fixture.
 """
 import json
+from contextlib import ExitStack
 from unittest import TestCase, main
 from unittest.mock import patch
 
@@ -16,8 +17,10 @@ import test_native_independent as independent
 
 class NativeForegroundTests(TestCase):
     def setUp(self):
-        self.case = self.enterContext(independent.NativeCase(provider='codex'))
-        self.enterContext(patch.object(foreground, '_seen', set()))
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.case = self.stack.enter_context(independent.NativeCase(provider='codex'))
+        self.stack.enter_context(patch.object(foreground, '_seen', set()))
         self.case.process['argv'] = [self.case.process['executable']]
         home = self.case.home / '.codex'
         home.chmod(0o700)
