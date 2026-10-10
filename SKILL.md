@@ -10,6 +10,12 @@ follow-ups and per-session adoption, follow
 [configuration and request lifecycle](references/configuration-and-reasks.md).
 Keep one guardian and one shared sender; a queued request is still pending.
 
+Global installation is not task enrollment. Ordinary Codex/Claude conversations
+may use tools and finish without supervisor approval. Task hooks apply only after
+this workflow explicitly enrolls the current native session with its workspace,
+surface and role; another task, shared directory, or reused pane grants no scope.
+See [session enrollment](references/configuration-and-reasks.md#task-scope-is-explicit-session-enrollment).
+
 For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
 Repair discovery before retrying a handshake; retain kernel/UUID authentication
 and distinguish local bridge failure from executor availability.

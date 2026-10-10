@@ -5,6 +5,30 @@ skills and global CLAUDE.md link here; they do not implement another sender or
 copy hook code. Pin one complete immutable release for each new task. An
 in-flight task keeps its original controller, task pack, journal and receipts.
 
+## Task scope is explicit session enrollment
+
+Installing this skill or its hooks globally does not enroll every conversation.
+Ordinary new Codex/Claude sessions need no supervisor and must retain normal tool
+use and turn completion. Reading, editing or auditing this skill is not enrollment.
+Only an explicitly requested collaboration uses the identity gate to pin the
+designated participants' native session IDs, workspace UUIDs, surface UUIDs and roles
+in the task marker. Scope is checked before caller authentication or task gates.
+A shared workspace, inherited daemon environment, reused surface or unrelated
+active marker cannot impose another task's rules on a new conversation.
+
+The Stop, executor-closeout and lease hooks require that enrollment before they
+enforce task evidence. A genuinely enrolled caller still authenticates; failed
+authentication never creates an acceptance or callback. Explicit artifact-root
+lease operations still check their declared resource. Native delivery and formal
+task commands retain their original operation-specific identity checks.
+
+Legacy markers without native session pins are retained as evidence, but cannot
+bind a newly started native conversation. Never fill their identity fields using
+a new session or the currently focused pane. An existing supervisor may migrate
+only from the original authenticated task/session evidence at a safe boundary;
+an unresolved original binding is reported separately from ordinary-session access.
+No marker, report, callback or research acceptance is deleted or manufactured.
+
 ## Configuration survives provider changes
 
 Claude hooks are executable registrations in `.claude/settings.json`, not in

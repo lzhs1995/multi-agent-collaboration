@@ -13,6 +13,7 @@ import time
 import uuid
 
 import cmux_hook_identity as hook_identity
+import cmux_hook_scope as hook_scope
 import cmux_consensus_stop_guard as stop_guard
 from cmux_evidence_io import MAX_EVIDENCE_BYTES, read_bytes
 from executor_closeout import terminal_report
@@ -132,10 +133,10 @@ def discover(payload, state_root=None):
             or not stop_guard.ACTIVE_DIR.exists()):
         return []
     with hook_identity.evaluation(payload):
-        return discover_bound(*hook_identity.identity(payload), state_root=state_root)
+        return discover_bound(*hook_identity.identity(payload), state_root=state_root, payload=payload)
 
 
-def discover_bound(workspace, caller, state_root=None):
+def discover_bound(workspace, caller, state_root=None, payload=None):
     """Use the caller authenticated once by this hook; no terminal input."""
     if not stop_guard.ACTIVE_DIR.exists():
         return []
@@ -180,6 +181,8 @@ def discover_bound(workspace, caller, state_root=None):
                 if (not isinstance(marker, dict) or not stop_guard._marker_fresh(marker)
                         or marker.get('workspace_uuid', workspace) != workspace):
                     continue
+                if payload is not None and not hook_scope.applies(marker, payload, workspace, caller):
+                    continue
                 peers = marker.get('participants', [])
                 if not isinstance(peers, list):
                     continue
@@ -211,7 +214,7 @@ def main():
         with hook_identity.evaluation(payload):
             workspace, caller = hook_identity.identity(payload)
             try:
-                notices = discover_bound(workspace, caller)
+                notices = discover_bound(workspace, caller, payload=payload)
             except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
                 pass
             try:

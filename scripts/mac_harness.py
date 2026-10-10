@@ -434,7 +434,7 @@ def _gate_executors(gate):
 def arm_task(task_id, root, supervisor="", executor="", *,
              supervisor_provider="", executor_provider="",
              supervisor_surface_uuid="", executor_surface_uuid="",
-             workspace_uuid="", executors=None):
+             workspace_uuid="", executors=None, native_participants=None):
     """Write a v2 collaboration marker and return it.
 
     ``executors`` is the multi-executor API: a list of dicts with
@@ -475,6 +475,20 @@ def arm_task(task_id, root, supervisor="", executor="", *,
     uuids = [p["surface_uuid"] for p in participants if p["surface_uuid"]]
     if len(uuids) != len(set(uuids)):
         raise ValueError("duplicate surface_uuid within one collaboration marker")
+
+    if native_participants is not None:
+        # Enrollment belongs to the native conversation, not to a reusable pane.
+        # cmd_identity_gate obtains these pins from the designated live clients.
+        pins = {p["surface_uuid"]: p for p in native_participants}
+        if len(pins) != len(participants) or set(pins) != set(uuids):
+            raise ValueError("native enrollment must cover exactly the task participants")
+        for participant in participants:
+            pin = pins[participant["surface_uuid"]]
+            if (pin.get("provider") != participant["provider"]
+                    or pin.get("role") != participant["role"]
+                    or not pin.get("native_session_id")):
+                raise ValueError("native enrollment participant mismatch")
+            participant["native_session_id"] = str(_uuid.UUID(pin["native_session_id"]))
 
     collaboration_id = str(_uuid.uuid4())
     now = _now()
@@ -901,6 +915,13 @@ def cmd_identity_gate(args):
             "pane_ref": pane_ref,
         })
 
+    import cmux_hook_scope as hook_scope
+    native_participants = hook_scope.bind_participants(cmux, workspace_uuid, [
+        dict(role="supervisor", surface_uuid=supervisor_uuid, provider=supervisor_provider),
+        *[dict(role="executor", surface_uuid=p["surface_uuid"], provider=p["provider"])
+          for p in executors_list],
+    ])
+
     gate = {
         "task_id": args.task_id,
         "status": "PASS",
@@ -923,6 +944,7 @@ def cmd_identity_gate(args):
         "side_panel": True,
         "identity_source": "live-caller+live-tree+same-workspace-uuid",
         "workspace_proofs": workspace_proofs,
+        "native_participants": native_participants,
         "updated_at": _now(),
     }
     _write(root / "identity-gate.json", gate)
@@ -932,6 +954,7 @@ def cmd_identity_gate(args):
         supervisor_surface_uuid=supervisor_uuid,
         workspace_uuid=workspace_uuid,
         executors=executors_list,
+        native_participants=native_participants,
     )
     _ok(f"identity-gate PASS  supervisor={supervisor_ref}  executor(s)={','.join(executor_refs)}")
     _info("task ARMED — Stop guard will require consensus evidence before turn-end")

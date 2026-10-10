@@ -110,7 +110,8 @@ class SupervisorReportGuardTests(unittest.TestCase):
         pack_path, receipt = root / 'task-pack.json', root / 'receipt.json'
         marker = dict(task_id=task_id, workspace_uuid=workspace, artifact_root=str(root),
                       participants=[
-                          dict(role='supervisor', surface_ref='surface:1', surface_uuid=supervisor),
+                          dict(role='supervisor', surface_ref='surface:1', surface_uuid=supervisor,
+                               native_session_id=identity_fixtures.S),
                           dict(role='executor', surface_uuid=executor)])
         pack = dict(draft=False, task_id=task_id, executor_uuid=executor,
                     completion_nonce='nonce-' + str(self.sequence),
