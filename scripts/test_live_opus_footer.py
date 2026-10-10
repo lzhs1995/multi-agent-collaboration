@@ -34,6 +34,15 @@ class LiveOpusFooterTests(unittest.TestCase):
                 self.assertFalse(b._queued_or_active_input(screen))
                 self.assertFalse(b.receiver_cannot_submit_now(screen))
 
+    def test_split_cwd_and_elapsed_rows_are_a_complete_measured_footer(self):
+        screen = captured(4546).replace(
+            "fixture/wrapped-footer git:(main) │ ⏱️  144h 52m",
+            "fixture/wrapped-footer git:(main)\n  ⏱️  144h 52m")
+        self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")
+        self.assertTrue(b.compose_block_is_empty(screen))
+        self.assertFalse(b._queued_or_active_input(screen))
+        self.assertFalse(b.receiver_cannot_submit_now(screen))
+
     def test_old_report_or_error_keywords_do_not_override_current_footer(self):
         for surface in (2599, 4546):
             screen = ("WAITING_SUPERVISOR REPORT_READY CALLBACK_UNCONFIRMED\n"

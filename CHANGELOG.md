@@ -1,3 +1,9 @@
+# 0.4.22
+
+- Accept the measured Claude layout that renders the model, cwd and elapsed
+  fields on three separate footer rows. Unknown or incomplete footer layouts
+  remain protected and cannot authorize input.
+
 # 0.4.21
 
 - Resolve native callers after shell exec optimization: a direct managed-daemon child supplies its kernel-observed thread selector and is rechecked for process drift.

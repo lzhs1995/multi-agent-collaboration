@@ -5,8 +5,8 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.21 retains the removal of session-wide workflow blocks and recognizes
-the measured wrapped Claude footer and tool-count overflow. Ordinary document
+Version 0.4.22 retains the removal of session-wide workflow blocks and recognizes
+the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
 review rounds and executor reasks must never prevent tools, replies or Stop. The

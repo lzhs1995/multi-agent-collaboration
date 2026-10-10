@@ -770,7 +770,8 @@ def _claude_bordered_compose(screen):
                 if rows[i].strip() == rows[start - 1].strip()), None)
     if end is None:
         return None
-    footer = [row.strip() for row in rows[end + 1:] if row.strip()]
+    footer_rows = [row for row in rows[end + 1:] if row.strip()]
+    footer = [row.strip() for row in footer_rows]
     if not footer:
         return None
     # 当前实屏的 model/cwd/time/goal 同行；cwd 可以没有 git 信息。
@@ -788,15 +789,23 @@ def _claude_bordered_compose(screen):
                       r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens)?")
     cwd_field = r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?"
     footer_start = 1
-    # Measured 2026-10-10 (surface:4546): model-only row, then the complete
-    # cwd/time row. Consume only this exact footer shape, never composer text
-    # or an arbitrary continuation row. The remaining chrome is still required.
+    # Measured 2026-10-10 (surface:4546): model-only row, then either one
+    # complete cwd/time row or two separate cwd and elapsed rows. Consume only
+    # these exact footer shapes, never composer text or an arbitrary
+    # continuation row. The remaining chrome is still required.
     if len(fields) == 1 and len(footer) > 1:
         wrapped = [part.strip() for part in footer[1].split("│")]
         if (len(wrapped) == 2 and re.fullmatch(cwd_field, wrapped[0])
                 and re.fullmatch(inline_elapsed, wrapped[1])):
             fields.extend(wrapped)
             footer_start = 2
+        elif (len(footer) > 2
+              and footer_rows[1].startswith("  ")
+              and footer_rows[2].startswith("  ")
+              and re.fullmatch(cwd_field, footer[1])
+              and re.fullmatch(inline_elapsed, footer[2])):
+            fields.extend((footer[1], footer[2]))
+            footer_start = 3
     if len(fields) >= 2 and not re.fullmatch(cwd_field, fields[1]):
         return None
     if len(fields) == 3 and not re.fullmatch(inline_elapsed, fields[2]):
