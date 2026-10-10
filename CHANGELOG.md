@@ -1,3 +1,12 @@
+# 0.4.12 — 2026-10-10
+
+- Distinguish literal document text from agent launches in a single quoted
+  Python stdin heredoc. A HANDOFF paragraph beginning with an agent name no
+  longer blocks a file update. This affects classification only.
+- Retain the conservative launch scan for shell expansion, pipes, unknown
+  interpreters or imports, executable references and aliases, invalid Python,
+  and adjacent shell commands. Cover UTF-8 and CRLF document boundaries.
+
 # 0.4.11 — 2026-10-10
 
 - Authenticate either original endpoint when explicitly reconciling a callback
