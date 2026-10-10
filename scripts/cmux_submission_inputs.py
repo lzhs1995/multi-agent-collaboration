@@ -379,6 +379,23 @@ def _literal_shell_segments(command):
     return segments, dynamic or escaped or quote is not None
 
 
+def literal_command_argv(command):
+    """Return one complete static command's argv, or None for shell syntax.
+
+    Equal arguments may use different quoting. Never drop a comment or an
+    empty control tail, or treat expansion syntax as its unexpanded text.
+    """
+    if not isinstance(command, str) or any(char in command for char in '\r\n\0'):
+        return None
+    segments, dynamic = _literal_shell_segments(command)
+    if dynamic or segments != [command]:
+        return None
+    try:
+        return shlex.split(command, comments=False, posix=True) or None
+    except ValueError:
+        return None
+
+
 def delivery_calls(command, depth=0, *, exclude_help=True):
     if depth > 8:
         return []

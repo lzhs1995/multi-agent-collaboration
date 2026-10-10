@@ -1,3 +1,12 @@
+# 0.4.13 — 2026-10-10
+
+- Compare complete static callback arguments instead of shell text when
+  admitting the sole original NO_INPUT successor. Equivalent literal quoting,
+  including unquoted Unicode paths without spaces, no longer causes rejection.
+- Continue rejecting shell expansion, comments, control tails, wrappers,
+  background execution and conflicting callback metadata. Original task,
+  report, attempt, Python and controller bindings and the attempt budget remain.
+
 # 0.4.12 — 2026-10-10
 
 - Distinguish literal document text from agent launches in a single quoted
