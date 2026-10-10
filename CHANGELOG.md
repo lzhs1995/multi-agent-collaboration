@@ -1,3 +1,9 @@
+# 0.4.21
+
+- Resolve native callers after shell exec optimization: a direct managed-daemon child supplies its kernel-observed thread selector and is rechecked for process drift.
+- Keep native foreground, unique live client, TTY and UUID validation; a conflicting selector remains an error for that input operation only.
+- Include Python 3.10 test compatibility, synthetic public footer fixtures and consistent non-blocking workflow documentation.
+
 # 0.4.20
 
 - Recognize measured Claude tool-count overflow and wrapped model/cwd/time footers without consuming drafts or active turns.

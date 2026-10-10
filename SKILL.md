@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.20 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.21 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -17,6 +17,9 @@ drafts, avoid duplicate input and verify complete native reception.
 `cmux-agent self` resolves the same current native caller as the bridge. Raw
 `cmux identify` can report the shared daemon's inherited surface and is not a
 current-session identity verdict. Never require an old `codex resume` command.
+The native resolver supports tools executed directly by the managed daemon after
+shell exec optimization; no incidental shell or proxy ancestor is required. It
+checks the tool's actual kernel identity and current native foreground selection.
 
 Any successor supervisor authorized by the user may contact the specified existing
 executor, including across workspaces. For such communication use

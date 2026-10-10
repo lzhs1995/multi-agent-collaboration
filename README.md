@@ -1,4 +1,4 @@
-Current release: **0.4.20**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). This version recognizes measured wrapped Claude footers and distinguishes document/search text from terminal writes.
+Current release: **0.4.21**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). Native caller discovery also supports tools executed directly by the managed daemon, without requiring a surviving shell wrapper.
 
 # Multi-Agent Collaboration
 

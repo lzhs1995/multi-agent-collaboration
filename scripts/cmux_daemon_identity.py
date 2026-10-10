@@ -272,7 +272,12 @@ def _ancestry():
 
 
 def collect(env):
-    """Tool-shell contract: a thread selector requires matching tool ancestry."""
+    """Bind a tool's kernel-observed selector to its live native client.
+
+    A shell may exec its last command. The resulting Python process is then a
+    direct managed-daemon child, with no extra shell/rtk ancestor. Its own
+    immutable process identity supplies the tool selector in that exact case.
+    """
     if sys.platform != 'darwin' or not env.get('CODEX_THREAD_ID'):
         return None
     chain, daemon = _ancestry()
@@ -281,7 +286,24 @@ def collect(env):
     session = str(uuid.UUID(env['CODEX_THREAD_ID']))
     tool_threads = [p['env']['CODEX_THREAD_ID'] for p in chain[:-1]
                     if p['env'].get('CODEX_THREAD_ID')]
-    if not tool_threads or any(t != session for t in tool_threads):
+    if not tool_threads:
+        # Do not require an incidental wrapper to keep a selectable ancestor
+        # alive. Read this actual process; a caller-provided env dictionary or
+        # the daemon's inherited workspace cannot establish the thread.
+        if len(chain) != 1 or chain[0] != daemon or os.getppid() != daemon['pid']:
+            raise IdentityError('thread selector missing from tool ancestry')
+        current = process(os.getpid())
+        if (current['pid'] != os.getpid() or current['ppid'] != daemon['pid']
+                or current['env'].get('CODEX_THREAD_ID') != session):
+            raise IdentityError('thread selector differs from current tool ancestry')
+        if any(current['env'].get(k) != env.get(k) for k in
+               ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID')):
+            raise IdentityError('current tool environment differs from tool selector')
+        # _collect_client rereads every member of this chain after inventory,
+        # including PID/birth/executable/parent/selector, before returning proof.
+        chain = [current] + chain
+        tool_threads = [current['env']['CODEX_THREAD_ID']]
+    if any(t != session for t in tool_threads):
         raise IdentityError('thread selector differs from tool ancestry')
     if any(env.get(k) != daemon['env'].get(k) for k in
            ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID')):
@@ -405,7 +427,7 @@ def resolve(identity, tree, env, proof):
     if any(raw.get(k) != source[k] for k in ('surface_ref', 'workspace_ref', 'pane_ref')):
         raise IdentityError('identify differs from daemon origin')
     # cmux can retain the name of a recycled PTY on an unrelated surface.
-    # The unique live resumed process and its kernel-read UUID environment
+    # The unique live native process and its kernel-read UUID environment
     # select the caller; a global TTY-name search must not select or veto it.
     # Still require that exact UUID row to agree with the live client's TTY.
     if (not client.get('tty') or caller['tty'] != client['tty']
