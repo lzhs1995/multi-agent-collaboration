@@ -123,6 +123,18 @@ class PanelGuardTests(unittest.TestCase):
                 with self.subTest(python=python, delimiter=delimiter):
                     self.assert_allowed(command)
 
+    def test_sqlite_disk_inventory_literals_are_not_agent_launches(self) -> None:
+        command = ("rtk proxy python3 - <<'PY'\n"
+                   "import json, sqlite3, shutil\n"
+                   "from pathlib import Path\n"
+                   "db=sqlite3.connect('file:/tmp/inventory.sqlite3?mode=ro', uri=True)\n"
+                   "rows=db.execute('select state,count(*) from requests group by state').fetchall()\n"
+                   "record={'scope':'Local inventory; Claude artifacts remain unchanged.', "
+                   "'rows':rows, 'free':shutil.disk_usage('/tmp').free}\n"
+                   "Path('/tmp/inventory.json').write_text(json.dumps(record))\nPY\n")
+        self.assert_allowed(command)
+        self.assert_blocked(command + 'claude --resume existing-id')
+
     def test_python_document_update_does_not_hide_adjacent_launch(self) -> None:
         document = "python3 - <<'PY'\ntext = '''\nCodex status\n'''\nPY\n"
         self.assert_blocked(document + "rtk claude --resume existing-id")

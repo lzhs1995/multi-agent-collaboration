@@ -145,7 +145,7 @@ def _python_document_data(command: str) -> str:
     # This is a document-update exception, not a general Python interpreter.
     # Unknown imports and executable references (including aliases) retain the
     # old scan. The original update uses only these standard-library modules.
-    document_modules = {"pathlib", "datetime", "json", "hashlib", "os"}
+    document_modules = {"pathlib", "datetime", "json", "hashlib", "os", "sqlite3", "shutil"}
 
     def replace(match: re.Match[str]) -> str:
         try:

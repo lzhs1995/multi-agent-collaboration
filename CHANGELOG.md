@@ -1,3 +1,7 @@
+# 0.4.24
+
+- Permit measured local SQLite inventory and disk-space document commands. Quoted semicolons followed by agent names remain data; real adjacent launches and executable Python still receive the original checks.
+
 # 0.4.23
 
 - Validate new task-pack wire format before creating a journal. A formal

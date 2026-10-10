@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.23 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.24 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -355,3 +355,5 @@ resend merely because an ACK or report preceded that record. Executors must wait
 for a finalized, hash-pinned task notice rather than treating a draft pack found
 on disk as authority. Continue independent authorized work in SOLO when a peer
 is unavailable; maintenance does not reopen accepted research reviews.
+
+0.4.24 also recognizes local SQLite and disk-space inventory imports in quoted Python document heredocs. Agent names after semicolons inside literal document data are not CLI launches; adjacent real shell launches remain checked. Verify the exact rejected command through the real hook before claiming recovery.

@@ -1,4 +1,4 @@
-Current release: **0.4.23**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). Native caller discovery also supports tools executed directly by the managed daemon, without requiring a surviving shell wrapper. The measured Claude footer parser accepts both combined and split cwd/elapsed rows while retaining fail-closed unknown-layout handling.
+Current release: **0.4.24**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). Native caller discovery also supports tools executed directly by the managed daemon, without requiring a surviving shell wrapper. The measured Claude footer parser accepts both combined and split cwd/elapsed rows while retaining fail-closed unknown-layout handling.
 
 # Multi-Agent Collaboration
 
