@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.24 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.25 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -13,6 +13,11 @@ review rounds and executor reasks must never prevent tools, replies or Stop. The
 installed advisory entrypoint records automatic invocation and exits zero; it does
 not run the historical blocking checker. Explicit senders still protect existing
 drafts, avoid duplicate input and verify complete native reception.
+
+Explicit insufficient-balance errors are billing failures even when the provider
+also prints a login hint or HTTP 403. Transport uncertainty and a supervisor's
+short observation budget retain priority; neither is an API failure. Classifying
+an outage does not restore the provider or prove a safe SOLO takeover boundary.
 
 `cmux-agent self` resolves the same current native caller as the bridge. Raw
 `cmux identify` can report the shared daemon's inherited surface and is not a

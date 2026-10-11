@@ -1,3 +1,9 @@
+# 0.4.25
+
+- Classify explicit insufficient account balance as BILLING even with a login hint or HTTP 403. Preserve transport/budget precedence and generic authentication classification.
+- Align supervision and configuration guidance with advisory-only workflow hooks, explicit report reconciliation and authorized 60-second reasks. No automatic callback settlement or forced turns.
+- Preserve original controllers during shared upgrades and distinguish installed configuration from active-client adoption.
+
 # 0.4.24
 
 - Permit measured local SQLite inventory and disk-space document commands. Quoted semicolons followed by agent names remain data; real adjacent launches and executable Python still receive the original checks.

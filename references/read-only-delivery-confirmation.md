@@ -8,21 +8,24 @@ establishes `NATIVE_RECEIVED`. Claude `queued_command` remains pending. Preserve
 spaces, tabs, blank lines and literal escapes; never concatenate records, search
 other sessions or treat an ACK/activity/queue entry as receipt.
 
-## The current hook reads the current original attempt
+## Installed observer and explicit original-attempt diagnostics
 
-`scripts/cmux_native_delivery_guard.py` is the read-only PostToolUse entrypoint.
-It resolves each actual invocation independently through `cmux_submission_inputs.py`;
-quoted examples, tool output and unresolved dynamic arguments do not identify a
-recipient. It checks the original controller's journal, live identity, full payload,
-native binding/fence and applicable task/report pins. Missing or changed evidence
-remains unconfirmed. Ordinary tools do not trigger scans of unrelated old attempts.
-The hook sends no keys, writes no receipts and has no disable/advisory success mode.
+`manage_install.py` registers workflow hooks through the same-release
+`cmux_workflow_advisory.py --hook <original-hook.py>` on both clients. It records
+actual invocation provenance and exits zero. It does not call the old native
+guard, scan journals, send input, publish receipts or block tools and Stop.
 
-`manage_install.py` registers the native guard for both clients; supported retirement
-of this package's old screen-only/send-proof hooks preserves foreign configuration.
-Install the sender, reader, wrappers and hooks as one complete fixed release.
-Configuration edits, actual hook execution, loaded client modules and native receipt
-are separate evidence. This is a client hook, not an operating-system sandbox.
+`scripts/cmux_native_delivery_guard.py` remains an explicit read-only diagnostic.
+It resolves an actual submission through `cmux_submission_inputs.py`; quoted
+examples, tool output and unresolved arguments do not identify a recipient. It
+checks the original controller's journal, live identity, complete payload,
+native binding/fence and task/report pins. Missing or changed evidence remains
+unconfirmed. Diagnostic results do not lock unrelated work.
+
+Install sender, reader, wrappers and observer as one complete fixed release;
+preserve foreign configuration. Configuration, automatic invocation, loaded
+client modules and native receipt are separate evidence. Updating the global
+observer does not migrate an in-flight task's original sender or journal.
 
 ## Preserve the original controller and budget
 
@@ -48,19 +51,23 @@ A historical queue-only callback API does not create another Tab allowance.
 
 ## Closeout, diagnostics and discovery
 
-A frozen bound report and returned original callback can end with an ordinary honest
-waiting statement. Stop returns `WAITING_SUPERVISOR`, `continue:false` and
-`suppressOutput:true` without inventing a receipt or disarming the task. Strict
-task-bound `scripts/cmux_callback_diagnose.py --task-pack <original absolute path>`
-and original-controller reconciliation remain available after closeout; arbitrary
-tools and report changes do not.
+A frozen report and returned original callback can end with an honest waiting
+statement. Installed Stop observes the event and exits zero; it emits no
+deny/block or `continue:false`, creates no notice and does not disarm the task.
+Ordinary tools, diagnostics, authorized successor contact and independent work
+remain available. Preserve the frozen report and attempt while reconciling them.
 
-The supervisor's PostToolUse `scripts/cmux_supervisor_report_guard.py` performs
-bounded discovery through authenticated active markers and records
-`REPORT_DISCOVERED`. Discovery is not delivery, acceptance or disarm.
-Idle Stop writes one durable notice and permits exit. Explicit `executor_ready.py
-persist` observes only the original request and bound reply for at most 300 seconds.
-CCC waits have a deadline; native Goal behavior needs separate validation.
+Use task-bound `scripts/cmux_callback_diagnose.py --task-pack <original absolute path>`
+and the original controller's zero-input reconciliation explicitly. The
+supervisor explicitly discovers frozen reports through authenticated markers
+or reads the exact source supplied by the owner. Discovery alone is not
+delivery, acceptance or disarm; installed PostToolUse does not do it automatically.
+
+Explicit `executor_ready.py persist` observes one original request and bound reply
+for at most 300 seconds. The separately authorized `executor_reask.py` loop
+issues a new marker every 60 seconds, using files only while an earlier terminal
+attempt is unconfirmed. Stop neither starts nor forces that loop. CCC and native
+Goal behavior require their own evidence; neither is certified by this observer.
 
 The historical mixed-version findings below are retained verbatim. They do not
 certify a new installation, live hook, current native receipt or research acceptance.

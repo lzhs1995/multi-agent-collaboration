@@ -1,4 +1,4 @@
-Current release: **0.4.24**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). Native caller discovery also supports tools executed directly by the managed daemon, without requiring a surviving shell wrapper. The measured Claude footer parser accepts both combined and split cwd/elapsed rows while retaining fail-closed unknown-layout handling.
+Current release: **0.4.25**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). Native caller discovery also supports tools executed directly by the managed daemon, without requiring a surviving shell wrapper. The measured Claude footer parser accepts both combined and split cwd/elapsed rows while retaining fail-closed unknown-layout handling.
 
 # Multi-Agent Collaboration
 
@@ -34,8 +34,12 @@ python3 scripts/manage_install.py doctor
 Install defaults to dry-run. It links this checkout into both clients' skill
 directories and merges only this project's hooks. Existing foreign skill
 directories are refused, never overwritten. Keep the checkout at its installed
-path. Complete active work before installation or upgrading; restart/reload client
-configuration only at a user-approved boundary, never replace an agent session.
+path. For a live shared installation, stage a complete immutable release and
+coordinate the upgrade with an installation lock, compare-and-swap checks and
+rollback snapshots. The basic installer is not a transaction spanning the whole
+installation. Preserve in-flight attempts under their original controller;
+independent authorized work need not wait. Verify active-client adoption
+separately, and never replace an agent session to upgrade its configuration.
 
 ```sh
 python3 scripts/manage_install.py uninstall --apply

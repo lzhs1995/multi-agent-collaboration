@@ -3,13 +3,14 @@
 | Failure | Maintained rule | Regression surface |
 | --- | --- | --- |
 | Context was lost by restarting a peer | Reuse exact context-bearing session; never clear | test_cmux_agent_panel_guard.py |
-| Screen DONE never reached supervisor | Report hash + nonce-bound active callback + Stop guard | test_r3_hardening.py |
+| Screen DONE never reached supervisor | Report hash + explicit nonce-bound callback + exact native receipt + original-controller settlement | test_r3_hardening.py |
 | Prompt echoed its own ACK | Parse assistant blocks, not pasted challenge | test_mac_harness_receipts.py |
 | Old surface ref addressed another panel | UUID/workspace binding, fresh identity | test_workspace_uuid_alignment.py |
 | Idle placeholder blocked real work | Exact known virtual suggestions; unknown text remains occupied | test_r3_hardening.py |
 | Callback delivered twice | Classify delivery; never blind-resend | test_r3_hardening.py |
 | Compact stalled for 15 minutes | 60-second compact samples, two unchanged checks, bounded intervention | test_cmux_executor_sentinel.py |
-| Billing errors caused endless retries | Unavailable/solo/handoff state machine | test_executor_availability.py |
+| Billing errors caused endless retries | Classify explicit insufficient balance before generic login/403; preserve transport and budget priority. Verify a safe takeover separately | test_availability_contract.py, test_executor_availability.py |
+| A stale task or unresolved caller blocked ordinary tools and Stop | Workflow hooks only record invocation; explicit senders retain endpoint and draft checks. No forced reasks or implicit callback acceptance | test_workflow_advisory.py |
 | Guard existed but did not run | Both clients wired; benign execution and negative entrypoint tests | test_install.py, test_r3_hardening.py |
 | File-edit prose was parsed as a shell launch | Check tool identity first; distinguish literal strings in a strict quoted Python stdin heredoc using AST byte offsets. Retain conservative scanning for executable references, aliases, unknown imports, expansion, pipes and adjacent shell commands; cover command/cmd inputs and UTF-8/CRLF in real hook processes | test_cmux_agent_panel_guard.py |
 | Later PASS hid earlier objections | Explicit resolution links; fresh artifact hashes | test_r3_hardening.py |

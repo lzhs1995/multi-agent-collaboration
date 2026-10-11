@@ -1,5 +1,3 @@
-> Current policy (0.4.19): [non-blocking recovery](nonblocking-recovery.md) overrides historical session-wide tool/Stop blocks and old-supervisor handshake restrictions below. Installed workflow hooks are advisory; explicit transport evidence and draft protection remain.
-
 # Global hooks, provider changes and executor follow-ups
 
 The shared collaboration release owns transport and communication hooks. Other
@@ -18,11 +16,16 @@ in the task marker. Scope is checked before caller authentication or task gates.
 A shared workspace, inherited daemon environment, reused surface or unrelated
 active marker cannot impose another task's rules on a new conversation.
 
-The Stop, executor-closeout and lease hooks require that enrollment before they
-enforce task evidence. A genuinely enrolled caller still authenticates; failed
-authentication never creates an acceptance or callback. Explicit artifact-root
-lease operations still check their declared resource. Native delivery and formal
-task commands retain their original operation-specific identity checks.
+All installed workflow PreToolUse, PostToolUse and Stop registrations use the
+same-release `cmux_workflow_advisory.py --hook <original-hook.py>`. They record
+invocation provenance and exit zero, including for enrolled callers. They do not
+invoke the old checker, enforce closeout gates, discover reports, send notices,
+force turns or publish receipts. Task markers describe responsibility and
+evidence; they cannot seal an entire conversation.
+
+Explicit native-delivery, task and resource operations retain their own identity,
+draft and evidence checks. A failed operation does not authorize a callback,
+acceptance or resource release, and does not block unrelated ordinary work.
 
 Legacy markers without native session pins are retained as evidence, but cannot
 bind a newly started native conversation. Never fill their identity fields using
@@ -72,15 +75,15 @@ uninspected roots or a client started with settings sources disabled.
 The default `executor_ready.py persist` observes one request for a finite budget.
 Only an explicitly authorized `executor_reask.py` episode keeps asking every
 60 seconds until its supervisor replies, an authenticated new task is bound, or
-the operator stops it. Install its optional Stop guard with `--executor-reask`.
-An API outage, killed process or paused client can prevent execution; expose that
-state instead of promising that software can never stop.
+the operator stops it. `--executor-reask` registers its advisory observer only;
+Stop never enrolls an episode or launches the loop. An API outage, killed process
+or paused client can prevent execution; expose that state instead of promising
+that software can never stop.
 
-The Stop hook and CLI use one nonblocking caller lock. The hook enrolls only an
-authenticated existing idle binding and performs no terminal input. It must not
-reopen an explicit operator stop or steal another supervisor's executor. A new
-task transition must match caller, workspace and supervisor and be newer than the
-episode. Ordinary completion must not replay a previously accepted callback.
+The explicit CLI uses the nonblocking caller lock and an authenticated existing
+idle binding. Do not reopen an operator stop or take another supervisor's
+executor. A new task transition must match caller, workspace and supervisor and
+be newer than the episode. Ordinary completion never replays an accepted callback.
 
 Each inquiry gets a new issued marker, preserving the same task/episode binding.
 The original unconfirmed terminal attempt remains durable even after the bounded
@@ -91,10 +94,11 @@ over it, change its nonce, or treat queue status as native receipt.
 Each round updates configured file channels plus one durable supervisor inbox
 entry. Track checks, attempts, successful file writes, actual pastes and exact
 native receipts separately. Empty/failed channels are visible. A file write does
-not prove the supervisor read it. The authenticated supervisor PostToolUse hook
-discovers a bounded number of current entries and supplies their exact request
-paths, hashes, reply mailboxes and templates in the official additionalContext
-envelope; no terminal input or active task marker is required for discovery.
+not prove the supervisor read it. The supervisor explicitly consumes the bounded
+inbox at task/tool boundaries, verifying request paths, body hashes, reply
+mailboxes and issued templates. Installed PostToolUse only observes its own
+invocation; it does not perform this discovery or reply on the supervisor's behalf.
+Legacy discovery helpers remain explicit diagnostics, not global hook gates.
 
 Reply in the request's mailbox with the complete issued template, or through the
 original guarded route as a complete JSON object / `EXECUTOR_REPLY|<JSON>`. The
@@ -128,18 +132,18 @@ or repeat a completed callback merely to increase a test count.
 
 ## Discovery failure must not lock a conversation
 
-Explicit enrollment grants task scope only when the current caller identity is
-resolved. If discovery fails, task hooks select no task and permit ordinary
-work and Stop, preserving all existing evidence. Do not repeatedly block the
-same session or demand a specific resume command. This is not task acceptance,
-disarm, callback confirmation or permission to send to an unverified endpoint.
+Workflow observers permit ordinary tools and Stop regardless of enrollment,
+caller resolution or outstanding work, preserving all existing evidence. Do not
+reinstate an old task gate, repeatedly block the same session or demand a
+specific resume command. Observer success is not task acceptance, disarm,
+callback confirmation or permission to send to an unverified endpoint.
 New/successor supervisors establish their own current native binding. Continue
 already-authorized solo work while restoring the original executor at a safe
 boundary; never make executor availability a prerequisite for local recovery.
 
 ## Active-session adoption receipts
 
-Task hook entrypoints write a bounded private latest receipt under
+The installed advisory hook entrypoint writes a bounded private latest receipt under
 `~/.local/state/multi-agent-collaboration/runtime-adoption-v1/` for each native
 session, event and hook. Receipts include source/version, event, scope result,
 time and kernel parent process identifiers; they exclude tool text and secrets.
@@ -176,11 +180,16 @@ preserve evidence while this transport boundary is unresolved.
 ## Successor supervisor rebind
 
 The fixed historical `codex resume` identity is not a transport requirement.
-After a proven supervisor failure, a user-authorized successor can establish a
-fresh binding through `successor-rebind-v1`, including an explicitly pinned
-cross-workspace caller/target pair. This route is separate from ordinary
-same-workspace transport and preserves the old controller, task pack, nonce,
-callback and native evidence as immutable records. Configuration reloads,
+A successor authorized by the user can establish current contact through
+`successor-rebind-v2`, including an explicitly pinned cross-workspace
+caller/target pair. Pin the authorization body and both endpoints' current
+workspace, surface and pane UUIDs. Do not demand a failed supervisor's approval,
+proof of its failure or prior settlement of an old task when existing user
+authorization already covers this contact.
+
+This maintenance route preserves the old controller, task pack, nonce, callback
+and native evidence. Communication authority does not transfer old callback
+identity, shared-file ownership or business scope. Configuration reloads,
 process/MCP liveness and ConfigChange diagnostics do not establish a handshake
-or adoption; live UUID, process, session and transcript checks plus native
-reception are still required.
+or adoption; current process/session/transcript checks and native reception
+remain separate required evidence for the communication claim.
