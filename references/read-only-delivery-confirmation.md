@@ -2,7 +2,7 @@
 
 The detailed current contract is [verified native delivery](verified-compose-delivery.md).
 Screen inspection protects the draft. Only one new native user record after the
-fresh EOF fence saved by the original PASTE_INTENT, from the same authenticated
+fresh EOF fence saved by the original input intent, from the same authenticated
 workspace/surface/process/session/transcript, with the complete payload unchanged,
 establishes `NATIVE_RECEIVED`. Claude `queued_command` remains pending. Preserve
 spaces, tabs, blank lines and literal escapes; never concatenate records, search
@@ -37,10 +37,16 @@ transcript, incompatible legacy journal or active sender lock is not permission 
 fabricate a baseline, migrate the attempt or resend. There is no standalone
 `cmux_native_delivery.py` CLI; use only the original controller's supported entrypoint.
 
-First input pastes once, waits for the full stable draft and submits once: busy Codex
-with the verified `tab to queue message` hint uses Tab directly; other clear supported
-states use Enter. Both automatic and explicit recovery share at most one additional
-key, consumed when its intent is persisted. Unknown state/history, queue, compaction,
+New Codex input records NATIVE_INPUT_INTENT, the exact request and fresh EOF fence,
+then issues one native turn/steer or turn/start to the bound original thread.
+It never reads or operates on the composer and has no resend/key-recovery budget.
+RPC acceptance requires exact native receipt verification; uncertainty never
+authorizes a terminal fallback. Do not replay historical queued messages this way.
+
+Claude terminal input pastes once, waits for the full stable draft and submits once
+with the supported Enter. Historical terminal automatic and explicit recovery
+share at most one additional key, consumed when its intent is persisted.
+Unknown state/history, queue, compaction,
 reconnection, changed structure or an altered draft bars that key. Display equivalence
 can protect visible draft ownership; it cannot normalize native receipt text.
 

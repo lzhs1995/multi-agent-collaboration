@@ -12,6 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 import mac_harness as HARNESS
 
 class HeartbeatConcurrencyTests(unittest.TestCase):
+    def setUp(self):
+        # These tests exercise standalone marker storage, not the live daemon.
+        # Restore both globals even if an assertion fails mid-test.
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        self.enterContext(mock.patch.object(HARNESS, "_ACTIVE_DIR", HARNESS._ACTIVE_DIR))
+        self.enterContext(mock.patch("cmux_daemon_identity.collect", return_value=None))
+
     """_touch_active_marker must handle concurrent beats without data loss."""
     
     def test_interleaved_beats_from_different_pids_preserve_marker_integrity(self):

@@ -324,8 +324,8 @@ def _timestamp(value):
     except ValueError:
         return None
 
-def capture_paste_fence(binding):
-    """在原 PASTE_INTENT 落盘前取新鲜 EOF；绝不为旧 attempt 追补。"""
+def _capture_fence(binding, schema):
+    """取原始输入前的新鲜 EOF；绝不为旧 attempt 追补。"""
     with _open(binding["transcript"]["path"]) as f:
         _check_file(f, binding)
         captured = time.time()
@@ -333,14 +333,38 @@ def capture_paste_fence(binding):
         _check_file(f, binding)
     if any(pin[k] != binding["transcript"][k] for k in ("path", "device", "inode")):
         raise NativeDeliveryError("NATIVE_PASTE_FILE_CHANGED")
-    return dict(schema="native-paste-fence-v1", transcript=pin,
+    return dict(schema=schema, transcript=pin,
                 binding_sha256=_hash(json.dumps(binding, sort_keys=True).encode()),
                 captured_at_epoch=captured)
 
 
+def capture_paste_fence(binding):
+    return _capture_fence(binding, "native-paste-fence-v1")
+
+
+def input_event_fields(binding, text, phase, evidence=None):
+    """Native RPC intent/result fields; callers fsync the complete event."""
+    if phase not in ("NATIVE_INPUT_INTENT", "NATIVE_INPUT_RESULT"):
+        if evidence is not None:
+            raise NativeDeliveryError("UNEXPECTED_NATIVE_INPUT_EVIDENCE")
+        return {}
+    if not isinstance(evidence, dict):
+        raise NativeDeliveryError("NATIVE_INPUT_EVIDENCE_REQUIRED")
+    if phase == "NATIVE_INPUT_RESULT":
+        # Result metadata is diagnostic only. It never proves reception.
+        return dict(native_result=json.loads(json.dumps(evidence)))
+    from cmux_codex_input import validate_request
+    request = evidence.get("native_request")
+    request_hash = validate_request(request, binding, text)
+    fence = _capture_fence(binding, "native-input-fence-v1")
+    fence["native_request_sha256"] = request_hash
+    return dict(native_request=json.loads(json.dumps(request)), native_input_fence=fence)
+
+
 def _fenced_binding(binding, text, fence, not_before):
     _validate_binding(binding, text)
-    if (not isinstance(fence, dict) or fence.get("schema") != "native-paste-fence-v1"
+    if (not isinstance(fence, dict) or fence.get("schema") not in
+            ("native-paste-fence-v1", "native-input-fence-v1")
             or fence.get("binding_sha256") != _hash(json.dumps(binding, sort_keys=True).encode())
             or type(fence.get("captured_at_epoch")) not in (int, float)
             or not math.isfinite(fence["captured_at_epoch"])
@@ -485,25 +509,46 @@ def confirmed(bridge, surface, binding, text, *, proof=None, paste_fence=None, n
     return result
 
 
+def original_input_event(events, binding, text, *, screen_hash_length=16):
+    """Validate one original transport, never reinterpret a queued attempt."""
+    _validate_binding(binding, text)
+    if not isinstance(events, list) or any(not isinstance(e, dict) for e in events):
+        raise NativeDeliveryError("NATIVE_JOURNAL_EVENTS_INVALID")
+    intents = [e for e in events if e.get("phase") in ("PASTE_INTENT", "NATIVE_INPUT_INTENT")]
+    if (len(intents) != 1 or type(intents[0].get("at_epoch")) not in (int, float)
+            or not math.isfinite(intents[0]["at_epoch"])
+            or intents[0]["at_epoch"] < binding["bound_at_epoch"]):
+        raise NativeDeliveryError("NATIVE_ORIGINAL_PASTE_INTENT_REQUIRED")
+    event = intents[0]
+    if event["phase"] == "NATIVE_INPUT_INTENT":
+        from cmux_codex_input import validate_request
+        request_hash = validate_request(event.get("native_request"), binding, text)
+        fence = event.get("native_input_fence")
+        terminal_phases = {"PASTE_INTENT", "PASTED", "ENTER_INTENT", "ENTER_SENT",
+                           "QUEUE_TAB_INTENT", "EXTRA_ENTER_INTENT", "KEY_INTENT", "KEY_SENT"}
+        if (any(e.get("phase") in terminal_phases for e in events)
+                or not isinstance(fence, dict) or fence.get("schema") != "native-input-fence-v1"
+                or fence.get("native_request_sha256") != request_hash):
+            raise NativeDeliveryError("NATIVE_INPUT_TRANSPORT_OR_REQUEST_CHANGED")
+    else:
+        if (not isinstance(event.get("screen"), str)
+                or event.get("screen_sha256") != _hash(event["screen"].encode())[:screen_hash_length]):
+            raise NativeDeliveryError("NATIVE_ORIGINAL_PASTE_INTENT_REQUIRED")
+        fence = event.get("native_paste_fence")
+        if not isinstance(fence, dict) or fence.get("schema") != "native-paste-fence-v1":
+            raise NativeDeliveryError("ORIGINAL_NATIVE_PASTE_FENCE_REQUIRED")
+    _fenced_binding(binding, text, fence, event["at_epoch"])
+    return event, fence
+
+
 def _original_intent(attempt, binding, text):
     _validate_binding(binding, text)
     if (not isinstance(attempt, dict) or attempt.get("native_binding") != binding
             or not isinstance(attempt.get("binding"), dict)
             or attempt["binding"].get("identity") != binding["identity"]):
         raise NativeDeliveryError("NATIVE_JOURNAL_IDENTITY_MISMATCH")
-    events = attempt.get("events")
-    if not isinstance(events, list) or any(not isinstance(e, dict) for e in events):
-        raise NativeDeliveryError("NATIVE_JOURNAL_EVENTS_INVALID")
-    pastes = [e for e in events if e.get("phase") == "PASTE_INTENT"]
-    if (len(pastes) != 1 or type(pastes[0].get("at_epoch")) not in (int, float)
-            or not math.isfinite(pastes[0]["at_epoch"])
-            or pastes[0]["at_epoch"] < binding["bound_at_epoch"]
-            or not isinstance(pastes[0].get("screen"), str)
-            or pastes[0].get("screen_sha256") != _hash(pastes[0]["screen"].encode())[:16]):
-        raise NativeDeliveryError("NATIVE_ORIGINAL_PASTE_INTENT_REQUIRED")
-    fence = pastes[0].get("native_paste_fence")
-    _fenced_binding(binding, text, fence, pastes[0]["at_epoch"])
-    return pastes[0]["at_epoch"], fence
+    event, fence = original_input_event(attempt.get("events"), binding, text)
+    return event["at_epoch"], fence
 
 
 def scan_original(bridge, surface, text, attempt_path, binding, *, read_only=False):

@@ -69,11 +69,18 @@ task or reopen accepted research solely to test maintenance.
 
 ## Prove reception before attributing failure
 
-Follow [verified native delivery](verified-compose-delivery.md). The original
-PASTE_INTENT fixes the complete payload and a fresh EOF fence in the bound
-receiver's transcript. Paste once; wait for the entire unchanged stable draft;
-submit once using the supported UI action. Busy Codex with the verified
-tab-to-queue hint uses Tab directly; other clear supported states use Enter.
+Follow [verified native delivery](verified-compose-delivery.md). For new Codex
+input, persist NATIVE_INPUT_INTENT with the complete payload, exact native
+request and a fresh EOF fence. Use one turn/steer for the freshly observed
+active turn or one turn/start for the idle original thread. Do not inspect or
+operate on its composer, press keys or enqueue a follow-up. An ambiguous RPC
+return permits only original-transcript observation, never another input.
+
+For Claude terminal input, the original PASTE_INTENT fixes the complete payload
+and a fresh EOF fence. Paste once, wait for the entire unchanged stable draft,
+then submit once using the supported Enter action. Historical Codex terminal
+attempts remain under their original controller and are never replayed through
+the native route.
 
 Only a newly appended complete native user record after that fence, exactly
 equal to the payload, proves `NATIVE_RECEIVED`. Preserve every character.
@@ -84,7 +91,7 @@ notice; body reading, execution and business acceptance remain separate.
 | Observation | Action |
 | --- | --- |
 | Affirmative zero-input evidence | Repair the failing preparation/classifier; retain the original attempt |
-| Occupied or unknown composer | Preserve the draft; continue independent work |
+| Occupied or unknown Claude composer | Preserve the draft; continue independent work |
 | Queue/client acceptance without exact native user | Keep pending; reconcile the original attempt without input |
 | Exact original native user, receipt missing | Use the original controller's supported settlement; never resend |
 | Genuine ACK with an expired observation window | Reconcile the original task/provider/nonce and regenerate derived validation |
@@ -92,8 +99,8 @@ notice; body reading, execution and business acceptance remain separate.
 
 A null submission timestamp alone is not proof of zero input. Do not retry with
 a fresh nonce, force-clear a draft or switch controllers. Supported original
-recovery has one shared additional-key budget; task packs and callbacks use
-zero-input reconciliation. The narrow original zero-input wire repair described
+terminal recovery has one shared additional-key budget; native input has none.
+Task packs and callbacks use zero-input reconciliation. The narrow original zero-input wire repair described
 in SKILL.md is not a general resend route.
 
 The helper is for inventory, inspection and guarded ordinary messages only.
@@ -111,7 +118,7 @@ callback. Wrong imports, controller mismatch and pre-input refusal are local
 invocation failures, not Enter-delivery failures.
 
 Read the supplied frozen report or explicitly inspect authenticated active
-markers; installed PostToolUse does not discover reports for you. Independently
+markers; installed PostToolUse discovers bound file requests, not old reports. Independently
 verify the original artifacts, incomplete items, negative controls and final
 state. Preserve prior failures; publish corrections separately. Native receipt,
 official callback receipt, business acceptance, task disarm and shared-resource
@@ -127,17 +134,26 @@ route. A TASK reply does not itself dispatch a task pack.
 
 All installed workflow hooks are advisory observers. They record provenance and
 exit zero, without invoking old gates, emitting turn-control results, sending
-notices or forcing reasks. Ordinary tools and honest turn completion remain
-available to enrolled and ordinary sessions.
+notices or forcing reasks. Supervisor PostToolUse may expose authenticated,
+deduplicated file requests through supported additionalContext; telemetry failure
+does not suppress that separate attempt. No tool event means no hook discovery,
+so this cannot wake an idle supervisor. Ordinary tools and honest turn completion
+remain available to enrolled and ordinary sessions.
 
 At meaningful tool/task boundaries, explicitly consume the supervisor inbox:
 verify pinned bodies and issue a reply bound to caller, supervisor, task,
 episode and issued marker. Follow
 [configuration and reasks](configuration-and-reasks.md). Default
 `executor_ready.py persist` observes one episode for at most 300 seconds.
-Only the separately user-authorized `executor_reask.py` loop asks every
-60 seconds until reply, new task or operator stop. While an original terminal
-attempt is unconfirmed, subsequent inquiries use files only.
+Only the separately user-authorized `executor_reask.py` runner asks every
+60 seconds during its explicit invocation, with a polling budget of at most
+540 seconds; synchronous I/O may extend wall time. A waiting episode after the
+command returns does not prove a live runner. Current advisory hooks do not
+refresh the legacy idle binding needed by the authenticated-new-dispatch exit.
+Write the bound issued mailbox reply first, let the explicit wait return, then
+perform a fresh preflight and formal dispatch; a TASK reply alone is not dispatch.
+While an original terminal attempt is unconfirmed, subsequent inquiries use files
+only. Preserve old pending attempts even if the original receiver process exits.
 
 After dispatch, continue independent work. Use one task-bound sentinel where
 needed: 7200 seconds for stable long work, 1800 for medium risk, and 300–600 only

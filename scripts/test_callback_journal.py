@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 import cmux_bridge as b
 from cmux_native_delivery import NativeDeliveryError
-from native_test_support import NativeFixture, ScreenSequence
+from native_test_support import LegacyTerminalFixture, ScreenSequence
 
 IDLE = '› Ask Codex to do anything\nGPT-6-Astra high\n? for shortcuts  ⚠ 5 warnings · f2 to view'
 
@@ -36,7 +36,7 @@ class JournalTests(unittest.TestCase):
                   patch.object(b.time, 'sleep')):
             p.start()
             self.addCleanup(p.stop)
-        self.native = NativeFixture.attach(self, home=root, identity=self.proof)
+        self.native = LegacyTerminalFixture.attach(self, home=root, identity=self.proof)
         self.journal = self.receipt.with_name(self.receipt.stem + '-attempts')
 
     def confirmed_screen(self):

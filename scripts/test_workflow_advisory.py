@@ -1,4 +1,5 @@
 """The installed workflow entrypoints observe every failure without blocking."""
+import contextlib
 import io
 import json
 from pathlib import Path
@@ -12,6 +13,9 @@ from unittest.mock import patch
 import cmux_hook_runtime_audit as audit
 import cmux_workflow_advisory as advisory
 import manage_install as manager
+import executor_ready as ready
+import executor_reask as reask
+import supervisor_inbox as inbox
 
 
 class WorkflowAdvisoryTests(unittest.TestCase):
@@ -88,6 +92,85 @@ class WorkflowAdvisoryTests(unittest.TestCase):
             self.assertFalse(receipt['native_receipt'])
             self.assertNotIn('automatic_client_adoption', receipt)
             self.assertNotIn('private-command-data', receipts[0].read_text())
+
+
+class SupervisorInboxAdvisoryTests(unittest.TestCase):
+    """Exercise the installed entry with the real file writer/reader protocol."""
+    CALLER = '11111111-1111-4111-8111-111111111111'
+    SUPERVISOR = '22222222-2222-4222-8222-222222222222'
+    WORKSPACE = '33333333-3333-4333-8333-333333333333'
+
+    def setUp(self):
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.home = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve()
+        self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
+        self.stack.enter_context(patch.object(inbox.identity, 'evaluation',
+                                              return_value=contextlib.nullcontext()))
+        self.identity = self.stack.enter_context(patch.object(
+            inbox.identity, 'identity', return_value=(self.WORKSPACE, self.SUPERVISOR)))
+        self.record = self.stack.enter_context(patch.object(audit, 'record'))
+        self.state = reask.start(self.CALLER, self.SUPERVISOR, 'completed-task',
+                                 now=1.0, workspace=self.WORKSPACE)
+        self.marker = 'EXECUTOR_READY_advisory'
+        result = reask.write_channels(self.state, self.marker, 'request next fixed pack', 2.0)
+        self.assertEqual(result['errors'], [])
+
+    def invoke(self, hook='cmux_supervisor_report_guard.py', event='PostToolUse'):
+        payload = dict(hook_event_name=event, tool_name='exec_command')
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'argv', ['advisory', '--hook', hook]), \
+                patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(advisory.main(), 0)
+        self.assertEqual(err.getvalue(), '')
+        return out.getvalue()
+
+    def test_real_file_request_reaches_supported_context_and_is_deduplicated(self):
+        raw = self.invoke()
+        result = json.loads(raw)
+        self.assertEqual(set(result), {'hookSpecificOutput'})
+        context = result['hookSpecificOutput']
+        self.assertEqual(set(context), {'hookEventName', 'additionalContext'})
+        self.assertEqual(context['hookEventName'], 'PostToolUse')
+        self.assertIn(self.marker, context['additionalContext'])
+        self.assertIn(str(reask.inbox_path(self.state)), context['additionalContext'])
+        self.assertIn('File discovery is not native transport', context['additionalContext'])
+        self.assertEqual(self.invoke(), '')
+        self.assertFalse((ready.state_root() / 'message-dispatch-v1').exists())
+
+    def test_telemetry_failure_does_not_suppress_file_request(self):
+        self.record.side_effect = OSError('audit storage unavailable')
+        self.assertIn(self.marker, self.invoke())
+
+    def test_discovery_error_never_blocks_or_emits_a_control_response(self):
+        with patch.object(inbox, 'discover', side_effect=OSError('inbox unavailable')):
+            self.assertEqual(self.invoke(), '')
+        self.record.assert_called_once()
+
+    def test_unresolved_or_foreign_identity_emits_no_request(self):
+        for binding in [(None, None), ('unresolved', self.SUPERVISOR),
+                        (self.WORKSPACE, self.CALLER)]:
+            with self.subTest(binding=binding):
+                self.identity.return_value = binding
+                self.assertEqual(self.invoke(), '')
+        self.identity.side_effect = RuntimeError('HOOK_CALLER_UNRESOLVED')
+        self.assertEqual(self.invoke(), '')
+
+    def test_other_hooks_and_stop_do_not_discover_or_force_a_reask(self):
+        with patch.object(inbox, 'discover') as discover:
+            for hook in advisory.WORKFLOW_HOOKS:
+                if hook != 'cmux_supervisor_report_guard.py':
+                    self.assertEqual(self.invoke(hook=hook), '')
+            for event in ('PreToolUse', 'Stop', 'SubagentStop'):
+                self.assertEqual(self.invoke(event=event), '')
+            discover.assert_not_called()
+
+    def test_an_exact_reply_suppresses_discovery(self):
+        body = ready.read_json(reask.inbox_path(self.state))
+        ready.write_json(Path(body['reply_mailbox']), dict(
+            body['reply_template'], trigger='Current chapter review must finish.'))
+        self.assertEqual(self.invoke(), '')
 
 
 if __name__ == '__main__':

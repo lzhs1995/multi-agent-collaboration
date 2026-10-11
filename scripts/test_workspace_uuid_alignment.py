@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -12,6 +13,12 @@ import mac_harness as HARNESS
 
 class WorkspaceUuidAlignmentTests(unittest.TestCase):
     """arm_task must write to the directory named by workspace_uuid."""
+
+    def setUp(self):
+        # Fixture workspace values are intentionally not real cmux identities.
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        self.enterContext(mock.patch.object(HARNESS, "_ACTIVE_DIR", HARNESS._ACTIVE_DIR))
+        self.enterContext(mock.patch("cmux_daemon_identity.collect", return_value=None))
     
     def test_arm_task_uses_passed_workspace_uuid_for_directory(self):
         """POISON: arm_task(..., workspace_uuid='X') must write under _active/X/."""

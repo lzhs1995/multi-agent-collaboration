@@ -2,8 +2,9 @@
 """Observe workflow hook payloads without making ordinary turns fail.
 
 The workspace and panel guards remain the transport boundary.  This entrypoint
-is deliberately a one-way observability adapter for the workflow checks whose
-old task gates could trap an otherwise repairable Codex/Claude session.
+never calls the historical workflow gates. At the supervisor PostToolUse entry,
+it also exposes authenticated file requests as context, without sending input,
+settling tasks, or preventing ordinary work and turn-end.
 """
 import json
 import sys
@@ -38,21 +39,44 @@ def main() -> int:
         if len(raw) > MAX_INPUT_CHARS:
             return 0
         payload = json.loads(raw) if raw.strip() else {}
-        if isinstance(payload, dict):
-            hook = hook_from_argv()
-            if hook:
-                import cmux_hook_runtime_audit as runtime_audit
-                runtime_audit.record(
-                    payload,
-                    'ADVISORY_OBSERVED',
-                    original_hook=hook,
-                    mode='advisory',
-                )
+        if not isinstance(payload, dict):
+            return 0
+        hook = hook_from_argv()
+        if not hook:
+            return 0
+    except BaseException:
+        return 0
+
+    try:
+        import cmux_hook_runtime_audit as runtime_audit
+        runtime_audit.record(
+            payload,
+            'ADVISORY_OBSERVED',
+            original_hook=hook,
+            mode='advisory',
+        )
     except BaseException:
         # Advisory telemetry is never allowed to recreate the outage it
         # diagnoses.  Native delivery and explicit harness paths retain their
         # own strict checks and receipts.
         pass
+
+    # File fallback must have a reader. Keep discovery independent of telemetry
+    # so a failed audit write cannot hide a valid request. Only this registered
+    # event authenticates the current supervisor and offers bounded, deduplicated
+    # context. No legacy checker, terminal sender, reask loop or task gate runs.
+    if (hook == 'cmux_supervisor_report_guard.py'
+            and payload.get('hook_event_name') == 'PostToolUse'):
+        try:
+            import supervisor_inbox
+            notices = supervisor_inbox.discover(payload)
+            if notices:
+                print(json.dumps({'hookSpecificOutput': {
+                    'hookEventName': 'PostToolUse',
+                    'additionalContext': supervisor_inbox.context(notices),
+                }}, ensure_ascii=False))
+        except BaseException:
+            pass
     return 0
 
 

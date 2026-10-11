@@ -788,6 +788,11 @@ def _claude_bordered_compose(screen):
     inline_elapsed = (elapsed + r"(?: +new task\? /clear to save "
                       r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens)?")
     cwd_field = r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?"
+    # Measured on Claude48 at 55 columns: the git branch ends in an ellipsis
+    # before its closing parenthesis. Accept only at the physical row end,
+    # below matching complete composer borders and above the remaining footer.
+    cwd_at_line_end = rf"(?:{cwd_field}|[\w./~+\-]+\s+git:\([^()\n│…]+…)"
+    cwd_ends_row = len(fields) == 2
     footer_start = 1
     # Measured 2026-10-10 (surface:4546): model-only row, then either one
     # complete cwd/time row or two separate cwd and elapsed rows. Consume only
@@ -802,11 +807,13 @@ def _claude_bordered_compose(screen):
         elif (len(footer) > 2
               and footer_rows[1].startswith("  ")
               and footer_rows[2].startswith("  ")
-              and re.fullmatch(cwd_field, footer[1])
+              and re.fullmatch(cwd_at_line_end, footer[1])
               and re.fullmatch(inline_elapsed, footer[2])):
             fields.extend((footer[1], footer[2]))
             footer_start = 3
-    if len(fields) >= 2 and not re.fullmatch(cwd_field, fields[1]):
+            cwd_ends_row = True
+    if len(fields) >= 2 and not re.fullmatch(
+            cwd_at_line_end if cwd_ends_row else cwd_field, fields[1]):
         return None
     if len(fields) == 3 and not re.fullmatch(inline_elapsed, fields[2]):
         return None
@@ -1645,7 +1652,24 @@ def _unconfirmed_native(screen, marker, result):
 def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
                       force_compose=False, delivery_observer=None, *,
                       native_binding=None, native_attempt=None):
-    """一次粘贴、有限按键；只有原生目标 user 记录能产生 confirmed=True。"""
+    """Codex 原生直投；Claude 保留一次粘贴。唯有原生 user 记录证明接收。"""
+    from cmux_native_delivery import require_bound
+    _validate_submission(surface, text, task_pack_path, force_compose,
+                         delivery_observer, native_binding, native_attempt)
+    if native_binding["provider"] == "codex":
+        from cmux_codex_input import send_once
+        return send_once(native_binding, text,
+            recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
+            emit=delivery_observer,
+            observe=lambda: _observe_native(surface, text, native_binding, native_attempt))
+    return _submit_terminal_once(surface, text, marker, confirm_lines, task_pack_path,
+        force_compose, delivery_observer, native_binding=native_binding,
+        native_attempt=native_attempt)
+
+
+def _validate_submission(surface, text, task_pack_path, force_compose,
+                         delivery_observer, native_binding, native_attempt):
+    """Shared contract for current input and offline historical fixtures."""
     from cmux_native_delivery import require_bound
     if native_attempt is None or delivery_observer is None:
         raise TaskPackContractError("ORIGINAL_NATIVE_JOURNAL_REQUIRED")
@@ -1662,6 +1686,13 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
     from cmux_prompt_reference import require_inline
     require_inline(text)
     require_bound(sys.modules[__name__], surface, native_binding, text)
+
+
+def _submit_terminal_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
+                          force_compose=False, delivery_observer=None, *,
+                          native_binding=None, native_attempt=None):
+    """Claude terminal path; old Codex attempts are exercised only by fixtures."""
+    from cmux_native_delivery import require_bound
     before = read_screen(surface, lines=confirm_lines)
     require_agent_input(before, surface)
     if not compose_block_is_empty(before):

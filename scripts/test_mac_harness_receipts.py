@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from native_test_support import NativeFixture, ScreenSequence
+from native_test_support import LegacyTerminalFixture, ScreenSequence
 import cmux_prompt_reference as reference
 
 
@@ -267,7 +267,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         idle = "❯ Ask Claude to do anything\n[Opus 5]"
         done = "❯ delivery:x\n⏺ response\n" + idle
         with (
-            NativeFixture(provider="claude") as native,
+            LegacyTerminalFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key", side_effect=native.receipt_on_key(text)) as send_key,
             mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
@@ -282,7 +282,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
     def test_legacy_multiline_pending_recovery_budget_and_exact_native_receipt(self):
         text = "delivery:x\nstatus: work"
         idle = "❯ Ask Claude to do anything\n[Opus 5]"
-        with NativeFixture(provider="claude") as native:
+        with LegacyTerminalFixture(provider="claude") as native:
             draft = native.draft(text, "claude")
             screens = native.ready_screens(idle, draft, draft)
             with (
@@ -329,7 +329,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
         idle = "❯ Ask Claude to do anything\n[Opus 5]"
         queued = "❯ delivery:x\nPress up to edit queued messages"
         with (
-            NativeFixture(provider="claude") as native,
+            LegacyTerminalFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key", side_effect=lambda *_: native.append_queued(text)) as send_key,
             mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
@@ -343,7 +343,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
     def test_submit_text_fails_closed_when_marker_disappears(self):
         screen = "⏺ unrelated response"
         with (
-            NativeFixture(provider="claude") as native,
+            LegacyTerminalFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as key,
             mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
@@ -361,7 +361,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             "⏺ previous response\n⏺ new tool running",
         ]
         with (
-            NativeFixture(provider="claude") as native,
+            LegacyTerminalFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as send_key,
             mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
@@ -378,7 +378,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             "• previous tool\n• Edited file",
         ]
         with (
-            NativeFixture() as native,
+            LegacyTerminalFixture() as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as send_key,
             mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
@@ -396,7 +396,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
             "⏺ previous response\nstatus changed",
         ]
         with (
-            NativeFixture(provider="claude") as native,
+            LegacyTerminalFixture(provider="claude") as native,
             mock.patch.object(BRIDGE, "send_text"),
             mock.patch.object(BRIDGE, "send_key") as key,
             mock.patch.object(BRIDGE, "read_screen", side_effect=native.ready_screens(
@@ -410,7 +410,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
     def test_late_confirmation_observes_without_resubmitting(self):
         idle = "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]"
         done = "❯ delivery:x\n⏺ new tool running\n❯ Ask Claude to do anything\n[Opus 5]"
-        with NativeFixture(provider="claude") as native:
+        with LegacyTerminalFixture(provider="claude") as native:
             def delayed_user():
                 native.append_user("delivery:x")
                 return done
@@ -429,7 +429,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
     def test_late_queued_message_is_not_reported_as_confirmed(self):
         idle = "⏺ previous response\n❯ Ask Claude to do anything\n[Opus 5]"
         queued = "Messages to be submitted after the tool completes:\ndelivery:x"
-        with NativeFixture(provider="claude") as native:
+        with LegacyTerminalFixture(provider="claude") as native:
             def delayed_queue():
                 native.append_queued("delivery:x")
                 return queued
@@ -445,7 +445,7 @@ class SubmissionConfirmationTests(unittest.TestCase):
 
     def test_submit_text_fails_closed_on_historical_echo_without_new_activity(self):
         with (
-            NativeFixture(provider="claude"),
+            LegacyTerminalFixture(provider="claude"),
             mock.patch.object(BRIDGE, "send_text") as paste,
             mock.patch.object(BRIDGE, "send_key") as key,
             mock.patch.object(BRIDGE, "read_screen", return_value="❯ delivery:x\nold prose\n❯ Ask Claude to do anything\n[Opus 5]"),

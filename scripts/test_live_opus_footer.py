@@ -12,6 +12,18 @@ def captured(surface):
     return (FIXTURES / f"claude-opus-c{surface}-20261010.txt").read_text()
 
 
+def clipped_git_footer(width=55, draft="", split_model=False):
+    """Measured footer/border geometry; no captured conversation content."""
+    border = "─" * width
+    first = ("  [Opus 5]\n  " if split_model else "  [Opus 5] │ ")
+    return (f"{border}\n❯ {draft}\n{border}\n"
+            f"{first}tasks/07_Paper-workbench git:(ops/local-…\n"
+            "  ⏱️  2092h 57m\n  上下文 █░░░░░ 17%\n"
+            "  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×20\n"
+            "  ▸ Relaunch and complete standard stability suite (108/131)\n"
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n")
+
+
 class LiveOpusFooterTests(unittest.TestCase):
     def assert_zero_input(self, screen):
         with NativeFixture(provider="claude"), \
@@ -21,6 +33,42 @@ class LiveOpusFooterTests(unittest.TestCase):
                 b.submit_text("offline-peer", "STATUS: new-token", marker="new-token")
         paste.assert_not_called()
         key.assert_not_called()
+
+    def test_ellipsis_clipped_git_footer_permits_one_verified_send(self):
+        for width, split_model in ((55, False), (90, False), (55, True), (90, True)):
+            with self.subTest(width=width, split_model=split_model), NativeFixture(provider="claude") as native:
+                screen = clipped_git_footer(width, split_model=split_model)
+                self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")
+                self.assertTrue(b.compose_block_is_empty(screen))
+                payload = "STATUS: clipped-footer-token"
+                native.key.side_effect = native.receipt_on_key(payload)
+                with patch.object(b, "read_screen", side_effect=native.ready_screens(
+                        screen, clipped_git_footer(width, payload, split_model=split_model))):
+                    result = b.submit_text("offline-peer", payload, marker="clipped-footer-token")
+                self.assertTrue(result["confirmed"])
+                native.send.assert_called_once()
+                native.key.assert_called_once()
+
+    def test_clipped_footer_never_erases_drafts_or_unknown_layouts(self):
+        screen = clipped_git_footer()
+        drafts = ("actual draft", "tasks/07_Paper-workbench git:(ops/local-…",
+                  "[Opus 5] │ tasks/07_Paper-workbench git:(ops/local-…")
+        for draft in drafts:
+            with self.subTest(draft=draft):
+                changed = clipped_git_footer(draft=draft)
+                self.assertEqual(b.compose_block_text(changed), draft)
+                self.assertFalse(b.compose_block_is_empty(changed))
+                self.assert_zero_input(changed)
+        for changed in (
+                screen.replace("ops/local-…", "ops/local-"),
+                screen.replace("ops/local-…", "ops/local-… extra"),
+                screen.replace("ops/local-…", "ops/local-… │ ⏱️  1h"),
+                screen.replace("上下文 █░░░░░ 17%", "unknown footer"),
+                screen.replace("─" * 55, "─" * 54, 1),
+                screen + "user@mac ~ % "):
+            with self.subTest(screen=changed):
+                self.assertFalse(b.compose_block_is_empty(changed))
+                self.assert_zero_input(changed)
 
     def test_both_real_layouts_are_idle_empty_agent_composers(self):
         self.assertIn("| +1 more", captured(2599))

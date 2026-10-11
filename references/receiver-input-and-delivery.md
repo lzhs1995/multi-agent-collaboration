@@ -4,7 +4,14 @@ Current delivery and recovery rules are defined in
 [verified native delivery](verified-compose-delivery.md). Screen inspection protects
 input ownership; only the original bound native record proves reception.
 
-Before every agent message, read the bound UUID's current screen. `submit_text`
+New Codex-bound messages use the existing receiver thread's authenticated native
+control socket: one turn/steer for its fresh active turn, or one turn/start for
+the idle original thread. Persist NATIVE_INPUT_INTENT, the exact request and a
+fresh EOF fence first. No composer read, paste, key or follow-up queue is involved.
+An uncertain result permits original-record observation only, never a retry.
+Historical queued attempts stay under their original controller without replay.
+
+Before Claude terminal input, read the bound UUID's current screen. `submit_text`
 requires a current agent composer/provider footer or its observed empty prompt.
 A bare zsh/bash/PowerShell prompt after agent exit overrides historical agent
 output. A fancy shell prompt sharing an agent glyph remains UNKNOWN without
@@ -26,21 +33,21 @@ the receiver is verified. Running a shell command does not restore a model TUI.
 | Recorded zero-input refusal | Not submitted | Resolve the original receiver/input issue |
 | Paste or key with no native proof | Unconfirmed | Preserve the original attempt; do not resend |
 | UI queue or Claude `queued_command` | Pending, not received | Bounded read-only observation of the same attempt |
-| New exact native user after original PASTE_INTENT EOF fence | `NATIVE_RECEIVED` | Record reception; execution/acceptance remain separate |
+| New exact native user after original input-intent EOF fence | `NATIVE_RECEIVED` | Record reception; execution/acceptance remain separate |
 | Reply/ACK | Response or channel possession | Read the actual verdict; not delivery or agreement proof |
 | Frozen report | Report available | Supervisor independently verifies scope and artifacts |
 
 `DISPATCH_UNCONFIRMED` or helper exit 75 is not evidence of non-delivery.
 Preserve the original observation even if a later exact native record permits
-reconciliation. Unknown/queued attempts are not repasted. A complete stable
-original draft may use only the original controller's one shared additional-key
+reconciliation. Unknown/queued attempts are not repasted. For historical terminal
+attempts, a complete stable original draft may use only the original controller's one shared additional-key
 budget; recovery intentions consume it before input. There is no separate Tab
 allowance. Missing original binding/fence cannot be added retrospectively.
 
-The first submission uses Tab directly only when busy Codex explicitly displays
-the supported `tab to queue message` action and the full draft matches; other
-clear supported states use Enter. A queue entry remains pending. Screen activity,
-prompt echo, empty compose, ACK or a marker alone cannot confirm reception.
+New Claude terminal input uses one supported Enter after the entire original
+draft and structure are stable. New Codex native input has no key or resend budget.
+A historical queue entry remains pending. Screen activity, RPC acceptance, prompt
+echo, empty compose, ACK or a marker alone cannot confirm reception.
 
 An occupied composer is preserved by default; explicitly authorized force-compose
 still cannot clear active/queued work. Future UI shapes need a measured fixture

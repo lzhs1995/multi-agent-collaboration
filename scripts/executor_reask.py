@@ -6,8 +6,9 @@
 - 终端通道：仅当主管 composer 为空、且本段没有仍排队/卡在 compose 的旧请求时，
   才经 executor_ready 的 journaled bridge 发送一次；否则只走文件通道，绝不堵 composer。
 答复必须精确匹配 caller/supervisor/task/episode/marker；无关 user turn 不算。
-只有绑定答复、已认证的新派发或 operator stop 结束一段；配套 Stop hook
-（cmux_executor_reask_stop_guard.py）在段内拦住结束，要求继续 run。
+只有绑定答复、已认证的新派发或 operator stop 结束一段；单次 run 的轮询预算最多
+540 秒，同步 I/O 可延长实际耗时。退出时段仍可等待。全局 Stop 仅观察，不启动或强迫循环；新派发出口依赖旧 idle
+binding，而现役观察器不更新它。主管先写原 mailbox 答复，让显式等待返回，再做新鲜派发。
 """
 import argparse
 from contextlib import contextmanager
@@ -61,7 +62,7 @@ def save(state):
 
 @contextmanager
 def episode_lock(caller):
-    """Serialize CLI and automatic Stop; a busy hook never waits on UI I/O."""
+    """Serialize explicit episode operations without waiting on another holder."""
     root().mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(root() / (ready.digest(caller) + '.lock'),
                  os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -298,8 +299,39 @@ def _unreceived_on_screen(bridge, supervisor, caller, ask, flat_screen):
     return True
 
 
-def _held(bridge, supervisor, asks, caller=''):
-    """旧请求仍排队或停在 composer：不再粘贴，避免堵住主管和其他 agent。"""
+def _original_no_input(bridge, supervisor, caller, ask):
+    """Release only positively verified zero-input holds, never queued attempts."""
+    try:
+        from cmux_message_journal import verified_no_input
+        marker = ask['marker']
+        original = ready._original_request(caller, supervisor, marker)
+        proof = verified_no_input(bridge, supervisor, original['text'], marker)
+        if (proof is None
+                or proof['binding']['identity']['caller_surface_uuid'] != caller
+                or ready._original_request(caller, supervisor, marker) != original):
+            return False
+        ask.update(outcome='NO_INPUT', zero_input_verified=True, no_input_proof=proof,
+                   terminal=False, native_input_intent=False, paste_intent=False)
+        return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        return False
+
+
+def _advance_original(bridge, supervisor, caller, ask):
+    if _original_no_input(bridge, supervisor, caller, ask):
+        return True
+    ready.advance_ask(bridge, supervisor, caller, ask)
+    return ask.get('outcome') == 'CONFIRMED'
+
+
+def _held(bridge, supervisor, asks, caller='', *, provider=None):
+    """旧请求只读核收；新 Codex 原生输入不受 composer 或忙碌横幅限制。"""
+    if provider == 'codex':
+        for ask in asks:
+            if (ask.get('terminal') or ask.get('native_input_intent')) and ask.get('outcome') != 'CONFIRMED':
+                if not _advance_original(bridge, supervisor, caller, ask):
+                    return 'UNVERIFIED', None
+        return None, None
     screen = bridge.read_screen(supervisor, lines=120)
     flat = ''.join(screen.split())   # 长行折行会拆开 marker
     for ask in asks:
@@ -324,13 +356,15 @@ def default_send(state, marker, text):
     if pending.get('marker') and pending['marker'] != marker:
         # An uncertain original attempt stays pinned even when the short history
         # rolls over. Reconciliation is read-only; no repaste or recovery key.
-        ready.advance_ask(bridge, state['supervisor'], state['caller_surface_uuid'], pending)
-        if pending.get('outcome') != 'CONFIRMED':
+        if not _advance_original(bridge, state['supervisor'], state['caller_surface_uuid'], pending):
             return dict(outcome='SKIPPED_UNVERIFIED', terminal=False)
         state['terminal_pending'] = None
-        state['native_receipts'] = state.get('native_receipts', 0) + 1
+        if pending.get('outcome') == 'CONFIRMED':
+            state['native_receipts'] = state.get('native_receipts', 0) + 1
+    from cmux_native_delivery import bind_target
+    provider = bind_target(bridge, state['supervisor'], text)['provider']
     held, _screen = _held(bridge, state['supervisor'], state.get('asks', []),
-                          state['caller_surface_uuid'])
+                          state['caller_surface_uuid'], provider=provider)
     if held:
         return dict(outcome='SKIPPED_' + held, terminal=False)
     state['terminal_pending'] = dict(marker=marker, terminal=True, outcome='INTENT_UNRESOLVED')
@@ -339,7 +373,9 @@ def default_send(state, marker, text):
                        state.get('task_id', ''), state['episode_id'])
     ask = dict(marker=marker)
     ready.advance_ask(bridge, state['supervisor'], state['caller_surface_uuid'], ask,
-                      allow_send=True)
+                       allow_send=True)
+    if ask.get('outcome') != 'CONFIRMED':
+        _original_no_input(bridge, state['supervisor'], state['caller_surface_uuid'], ask)
     journal = ready.state_root() / 'message-dispatch-v1' / ready.request_key(state['caller_surface_uuid'], marker)
     from cmux_evidence_io import attempt_paths
     phases = []
@@ -348,12 +384,16 @@ def default_send(state, marker, text):
             record = ready.read_json(path) or {}
             phases.extend(e.get('phase') for e in record.get('events', []) if isinstance(e, dict))
     result = dict(outcome=ask.get('outcome'), detail=ask.get('detail', ''),
-                  terminal='PASTED' in phases, terminal_attempted=True,
+                  terminal='PASTED' in phases, terminal_attempted=provider != 'codex',
+                  native_input_intent='NATIVE_INPUT_INTENT' in phases,
+                  transport='codex-native-input-v1' if provider == 'codex' else 'terminal',
                   paste_intent='PASTE_INTENT' in phases,
                   native_received=ask.get('outcome') == 'CONFIRMED')
     for key in ('confirmation_scope', 'body_read_confirmed'):
         if key in ask:
             result[key] = ask[key]
+    if ask.get('zero_input_verified') is True:
+        result.update(zero_input_verified=True, no_input_proof=ask['no_input_proof'])
     return result
 
 
@@ -434,7 +474,10 @@ def tick_locked(caller, now=None, send=default_send):
     state['ask_count'] += int(posted or bool(ask.get('terminal')) or bool(ask.get('native_received')))
     pending = state.get('terminal_pending') or {}
     if pending.get('marker') == marker:
-        if ask.get('native_received') or str(ask.get('outcome', '')).startswith('SKIPPED_'):
+        zero_input = (ask.get('zero_input_verified') is True and _original_no_input(
+            ready._bridge(), state['supervisor'], caller, ask))
+        if (ask.get('native_received') or str(ask.get('outcome', '')).startswith('SKIPPED_')
+                or zero_input):
             state['terminal_pending'] = None
         else:
             state['terminal_pending'] = dict(ask, terminal=True)

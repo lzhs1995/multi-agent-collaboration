@@ -22,7 +22,7 @@ from unittest.mock import patch
 import cmux_bridge as bridge
 import cmux_native_delivery as native
 import cmux_native_delivery_guard as guard
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 def sha256(value):
@@ -66,7 +66,7 @@ class NativeDeliveryGuardTests(unittest.TestCase):
             fixture.key.assert_not_called()
 
     def _use_provider(self, provider):
-        self.native = NativeFixture.attach(
+        self.native = LegacyTerminalFixture.attach(
             self, identity=self.identity, provider=provider)
         self.fixtures.append(self.native)
         self.root = self.native.home / ".local/state/multi-agent-collaboration"

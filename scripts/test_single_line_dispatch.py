@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import cmux_bridge as b
 import cmux_prompt_reference as ref
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 class SingleLineDispatchTests(unittest.TestCase):
@@ -67,7 +67,7 @@ class SingleLineDispatchTests(unittest.TestCase):
 
     def test_dedicated_notice_cannot_use_ordinary_message_or_reference(self):
         notice = b.task_pack_notice(self.path)
-        with NativeFixture(home=self.home) as native:
+        with LegacyTerminalFixture(home=self.home) as native:
             with self.assertRaises(b.TaskPackContractError):
                 b.submit_text('peer', notice, marker=self.pack['task_id'])
             native.send.assert_not_called()
@@ -77,7 +77,7 @@ class SingleLineDispatchTests(unittest.TestCase):
 
     def test_formal_notice_requires_new_exact_native_record_and_cannot_repeat(self):
         notice = b.task_pack_notice(self.path)
-        with NativeFixture(home=self.home, provider='claude') as native, \
+        with LegacyTerminalFixture(home=self.home, provider='claude') as native, \
                 patch.object(b, 'read_screen', side_effect=native.ready_screens(
                     '❯ \n[claude-opus-5]', native.draft(notice, 'claude'))):
             native.key.side_effect = native.receipt_on_key(notice)
@@ -91,8 +91,8 @@ class SingleLineDispatchTests(unittest.TestCase):
 
     def test_enter_and_notice_echo_without_native_record_do_not_confirm(self):
         notice = b.task_pack_notice(self.path)
-        draft = NativeFixture.draft(notice, 'claude')
-        with NativeFixture(home=self.home, provider='claude') as native, \
+        draft = LegacyTerminalFixture.draft(notice, 'claude')
+        with LegacyTerminalFixture(home=self.home, provider='claude') as native, \
                 patch.object(b, 'read_screen', side_effect=native.ready_screens(
                     '❯ \n[claude-opus-5]', draft, '⏺ ' + notice + '\n❯ \n[claude-opus-5]')):
             with self.assertRaises(b.DispatchUnconfirmed):
@@ -120,7 +120,7 @@ class SingleLineDispatchTests(unittest.TestCase):
                 self.pack['completion_callback'] = (
                     'DONE|' + self.pack['task_id'] + '|nonce-12345|REPORT=' + str(self.report))
                 self.save()
-                with NativeFixture(home=self.home) as native:
+                with LegacyTerminalFixture(home=self.home) as native:
                     with self.assertRaisesRegex(ValueError, 'REFERENCE_REQUIRED'):
                         b.submit_completion_callback(str(self.path))
                     native.send.assert_not_called()
@@ -130,7 +130,7 @@ class SingleLineDispatchTests(unittest.TestCase):
         self.pack['executor_uuid'] = 'caller'
         self.save()
         text = self.pack['completion_callback']
-        with NativeFixture(home=self.home) as native, patch.object(
+        with LegacyTerminalFixture(home=self.home) as native, patch.object(
                 b, 'read_screen', side_effect=native.ready_screens(
                     '› \nGPT-6 high', native.draft(text))):
             native.key.side_effect = native.receipt_on_key(text)
@@ -148,7 +148,7 @@ class SingleLineDispatchTests(unittest.TestCase):
         self.pack['completion_callback'] = 'DONE|single-line-task|nonce-12345|REPORT=' + str(self.report)
         self.save()
         text = self.pack['completion_callback']
-        with NativeFixture(home=self.home) as native:
+        with LegacyTerminalFixture(home=self.home) as native:
             # Build the original event under the historical permissive wire rule.
             with patch.object(ref, 'require_inline'), patch.object(
                     b, 'read_screen', side_effect=native.ready_screens(

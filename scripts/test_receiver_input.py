@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import cmux_bridge as bridge
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 class ReceiverInputTests(unittest.TestCase):
     @contextlib.contextmanager
     def isolated_message_identity(self):
-        with NativeFixture() as native:
+        with LegacyTerminalFixture() as native:
             yield native
 
     def test_shell_or_unknown_does_not_receive_any_bytes_or_keys(self):
@@ -21,7 +21,7 @@ class ReceiverInputTests(unittest.TestCase):
                    "❯ ", "", "ordinary text"]
         for screen in screens:
             for force in (False, True):
-                with self.subTest(screen=screen, force=force), NativeFixture(), \
+                with self.subTest(screen=screen, force=force), LegacyTerminalFixture(), \
                      patch.object(bridge, "read_screen", return_value=screen), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
                     with self.assertRaises(bridge.TaskPackContractError if force else bridge.DispatchUnconfirmed) as error:
@@ -41,7 +41,7 @@ class ReceiverInputTests(unittest.TestCase):
         key.assert_not_called()
 
     def test_user_draft_is_not_appended_or_cleared(self):
-        with NativeFixture(), patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
+        with LegacyTerminalFixture(), patch.object(bridge, "read_screen", return_value="› my unsent question\nGPT-6 high"), \
              patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
             with self.assertRaises(bridge.DispatchUnconfirmed) as error:
                 bridge.submit_text("peer", "STATUS: continuation", marker="continuation")
@@ -83,7 +83,7 @@ class ReceiverInputTests(unittest.TestCase):
     def test_queued_message_is_one_send_not_a_failed_delivery_retry(self):
         screens = ["› Ask Codex to do anything\nGPT-6 high",
                    "Messages to be submitted after current tool\nmarker\n› Ask Codex to do anything\nGPT-6 high"]
-        with NativeFixture() as native, patch.object(bridge, "read_screen", side_effect=native.ready_screens(
+        with LegacyTerminalFixture() as native, patch.object(bridge, "read_screen", side_effect=native.ready_screens(
                 screens[0], native.draft('STATUS: marker'), screens[1])), patch.object(bridge, "send_text") as send, \
              patch.object(bridge, "send_key") as key, patch.object(bridge.time, "sleep"):
             with self.assertRaises(bridge.DispatchUnconfirmed) as error:
@@ -100,7 +100,7 @@ class ReceiverInputTests(unittest.TestCase):
         historical = "› Ask Codex to do anything\nGPT-6 high"
         for tail in ("➜  project git:(main)", "custom-host [main] >>", "interpreter waiting"):
             for force in (False, True):
-                with self.subTest(tail=tail, force=force), NativeFixture(), \
+                with self.subTest(tail=tail, force=force), LegacyTerminalFixture(), \
                      patch.object(bridge, "read_screen", return_value=historical + "\n" + tail), \
                      patch.object(bridge, "send_text") as send, patch.object(bridge, "send_key") as key:
                     with self.assertRaises(bridge.TaskPackContractError if force else bridge.DispatchUnconfirmed):
@@ -223,7 +223,7 @@ class PendingQueueRegionTests(unittest.TestCase):
             provider = 'codex' if layout == 'codex' else 'claude'
             draft = drafts[layout]
             after = self.BANNER + '\nunrelated queued message\n' + draft
-            with self.subTest(layout=layout), NativeFixture(provider=provider) as native, \
+            with self.subTest(layout=layout), LegacyTerminalFixture(provider=provider) as native, \
                     patch.object(bridge, 'read_screen', side_effect=native.ready_screens(idle, draft, after)), \
                     patch.object(bridge, 'send_text') as send, patch.object(bridge, 'send_key') as key:
                 with self.assertRaises(bridge.DispatchUnconfirmed) as error:

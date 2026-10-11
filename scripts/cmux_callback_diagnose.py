@@ -63,6 +63,8 @@ def diagnose(pack_path, payload=None):
         attempt = json.loads(raw)
         pastes = [event for event in attempt.get('events', [])
                   if event.get('phase') == 'PASTE_INTENT']
+        inputs = [event for event in attempt.get('events', [])
+                  if event.get('phase') == 'NATIVE_INPUT_INTENT']
         if terminal_report(marker, workspace, executor) != evidence:
             raise ValueError('frozen report evidence changed during diagnosis')
         return dict(state='WAITING_SUPERVISOR', input_operations=0,
@@ -71,6 +73,9 @@ def diagnose(pack_path, payload=None):
                     original_native_binding_present=isinstance(attempt.get('native_binding'), dict),
                     original_paste_fence_present=(len(pastes) == 1 and
                         isinstance(pastes[0].get('native_paste_fence'), dict)),
+                    original_native_input_fence_present=(len(inputs) == 1 and
+                        isinstance(inputs[0].get('native_input_fence'), dict)),
+                    transport='codex-native-input-v1' if inputs else 'terminal',
                     **evidence)
 
 

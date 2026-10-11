@@ -19,8 +19,9 @@ active marker cannot impose another task's rules on a new conversation.
 All installed workflow PreToolUse, PostToolUse and Stop registrations use the
 same-release `cmux_workflow_advisory.py --hook <original-hook.py>`. They record
 invocation provenance and exit zero, including for enrolled callers. They do not
-invoke the old checker, enforce closeout gates, discover reports, send notices,
-force turns or publish receipts. Task markers describe responsibility and
+invoke the old checker, enforce closeout gates, discover old reports, send notices,
+force turns or publish receipts. The supervisor PostToolUse observer may expose
+authenticated file requests through supported additionalContext. Task markers describe responsibility and
 evidence; they cannot seal an entire conversation.
 
 Explicit native-delivery, task and resource operations retain their own identity,
@@ -73,17 +74,23 @@ uninspected roots or a client started with settings sources disabled.
 ## Explicitly authorized 60-second inquiries
 
 The default `executor_ready.py persist` observes one request for a finite budget.
-Only an explicitly authorized `executor_reask.py` episode keeps asking every
-60 seconds until its supervisor replies, an authenticated new task is bound, or
-the operator stops it. `--executor-reask` registers its advisory observer only;
+Only an explicitly authorized `executor_reask.py` episode issues a new inquiry
+every 60 seconds while its explicit runner is executing. A call polls every five
+seconds with a polling budget of at most 540 seconds; synchronous I/O can extend
+wall time. The durable episode may still be waiting after the command returns.
+Resume that same episode explicitly when needed, never reset its
+pending send or claim an exited runner is active. A bound supervisor reply or
+operator stop ends the wait. `--executor-reask` registers its advisory observer only;
 Stop never enrolls an episode or launches the loop. An API outage, killed process
 or paused client can prevent execution; expose that state instead of promising
 that software can never stop.
 
 The explicit CLI uses the nonblocking caller lock and an authenticated existing
-idle binding. Do not reopen an operator stop or take another supervisor's
-executor. A new task transition must match caller, workspace and supervisor and
-be newer than the episode. Ordinary completion never replays an accepted callback.
+idle binding where needed. Do not reopen an operator stop or take another supervisor's
+executor. The legacy AUTHENTICATED_NEW_DISPATCH exit requires a newer idle binding
+matching caller, workspace and supervisor; current advisory hooks do not write
+that binding. Do not promise this exit merely because a new task pack exists.
+Ordinary completion never replays an accepted callback.
 
 Each inquiry gets a new issued marker, preserving the same task/episode binding.
 The original unconfirmed terminal attempt remains durable even after the bounded
@@ -96,9 +103,13 @@ entry. Track checks, attempts, successful file writes, actual pastes and exact
 native receipts separately. Empty/failed channels are visible. A file write does
 not prove the supervisor read it. The supervisor explicitly consumes the bounded
 inbox at task/tool boundaries, verifying request paths, body hashes, reply
-mailboxes and issued templates. Installed PostToolUse only observes its own
-invocation; it does not perform this discovery or reply on the supervisor's behalf.
-Legacy discovery helpers remain explicit diagnostics, not global hook gates.
+mailboxes and issued templates. From 0.4.26, the registered supervisor PostToolUse
+observer authenticates the current supervisor and offers bounded, deduplicated
+file-request context. It uses the supported hookSpecificOutput/additionalContext
+envelope, does not invoke the old checker and exits zero on all failures. It
+does not reply, send terminal input, reconcile old attempts or accept work.
+Telemetry failure cannot suppress this separate discovery attempt. A supervisor
+with no tool event receives no hook context: this is not an idle-client wakeup.
 
 Reply in the request's mailbox with the complete issued template, or through the
 original guarded route as a complete JSON object / `EXECUTOR_REPLY|<JSON>`. The
@@ -109,14 +120,26 @@ WAITING_DEPENDENCY, SOLO and BLOCKED require a concrete `trigger`; replace the
 template placeholder. `queued:true` or `received:false` never ends the episode.
 Late replies to issued markers remain valid after history rollover.
 
+Before fresh dispatch to a reasking executor, the bound supervisor first writes
+the exact issued mailbox reply. The explicit runner then observes it and returns;
+perform a fresh live preflight before the formal pack. A TASK reply does not
+dispatch anything. This sequence avoids waiting for an idle window that the
+runner itself prevents. An exited original receiver process does not authorize
+forging a new original binding or deleting terminal_pending. Independently
+validated historical native reception remains separate from official live
+reconciliation; answer the original episode by its mailbox without replaying it.
+
 ## Queues and per-session acceptance
 
-Codex can accept a follow-up into a queue while its current turn continues. A
-verified Tab-to-queue route is normal pending behavior, not proof of a stalled
-composer or permission to force another key. Hand-typed input may take a different
-steering path. Confirm reception only from the exact complete message in the
-bound native user journal after the original EOF fence. Queue dwell time, native
-reception, execution and callback settlement are different measurements.
+From 0.4.26, new Codex-bound requests use its original loaded thread through the
+authenticated native control socket. Active turns use one `turn/steer` with the
+fresh expected turn id; idle threads use one `turn/start` without setting overrides.
+Persist `NATIVE_INPUT_INTENT` and the fresh EOF fence first. No composer inspection,
+paste, Enter or Tab is involved. A failed or uncertain request permits only
+original-record observation, never a queue fallback or another submission.
+Historical queued messages remain pending under their original controller and
+must not be native-replayed. Exact native reception, consumption, execution and
+callback settlement are separate measurements. See the [delivery contract](verified-compose-delivery.md).
 
 Record adoption per designated session: resolved release/helper/hook paths;
 automatic hook invocation in the current native client; exact native inbound

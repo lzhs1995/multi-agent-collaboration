@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.25 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.26 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -13,6 +13,21 @@ review rounds and executor reasks must never prevent tools, replies or Stop. The
 installed advisory entrypoint records automatic invocation and exits zero; it does
 not run the historical blocking checker. Explicit senders still protect existing
 drafts, avoid duplicate input and verify complete native reception.
+
+New Codex-bound messages, task packs and callbacks use the authenticated native
+control socket of the already-loaded receiver thread. Active turns receive one
+`turn/steer` with the fresh expected turn id; idle threads receive one `turn/start`
+without settings overrides. Persist `NATIVE_INPUT_INTENT` and a fresh EOF fence
+first. No composer read, paste, Enter or Tab is involved. RPC acceptance alone
+does not prove reception. An uncertain result permits only original-record
+observation, never a retry or queue fallback. Historical attempts stay with their
+original controller and must not be replayed through this new transport.
+
+The supervisor PostToolUse observer exposes authenticated, deduplicated file
+requests as supported client context. It never sends, accepts work or forces a
+turn. It runs only at tool boundaries and cannot wake a truly idle supervisor.
+A measured ellipsis-clipped git branch is accepted only at the physical end of
+a footer row below matching complete composer borders; real drafts stay protected.
 
 Explicit insufficient-balance errors are billing failures even when the provider
 also prints a login hint or HTTP 403. Transport uncertainty and a supervisor's
@@ -71,7 +86,8 @@ coordinator may use `successor-rebind-v2` for the exact designated cross-workspa
 peer. Do not infer a new task, shared writer or replacement session from permission
 to communicate. Raw terminal writes remain outside the supported sender.
 
-Only the current input operation waits when a receiver is busy or has a user draft.
+Claude terminal input preserves occupied or unknown drafts. New Codex native
+input does not inspect or modify the composer and can steer its active turn.
 The conversation and unrelated authorized work continue. Identity, send, native
 receipt, executor ACK, callback and acceptance are separate observations.
 
@@ -157,13 +173,14 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   observation is a supervisor budget limitation, not executor silence. Recover a
   late genuine ACK against the original task/provider/nonce without resending.
 - **Keys and queue entries do not prove reception.** Bind the exact receiver
-  process/session/transcript and a fresh EOF fence at the original PASTE_INTENT.
+  process/session/transcript and a fresh EOF fence at the original input intent.
   Only a new whole native user record after that fence, exactly equal to the
   payload including whitespace, yields NATIVE_RECEIVED. Claude queued_command
-  remains pending. Paste once, wait for the full stable draft, then submit once:
-  use Tab directly for busy Codex displaying the verified tab-to-queue hint,
-  otherwise Enter in a clear supported state. All recovery paths share at most
-  one additional key under the original controller; no separate Enter/Tab budget.
+  remains pending. New Codex input uses `NATIVE_INPUT_INTENT` and native
+  steer/start, never the follow-up queue. Claude-bound terminal input retains
+  `PASTE_INTENT`, one paste and one key after the complete draft is stable.
+  Historical terminal recovery shares at most one additional key under its
+  original controller; a native input has no key or resend recovery budget.
 - `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
   A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
@@ -183,11 +200,21 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   Supervisors continue independent work while callbacks are pending. Persistent
   executor failures use the authorized solo takeover boundary below.
 
-Supervisors explicitly inspect authenticated active markers and frozen reports;
-the installed PostToolUse observer does not discover or settle old reports.
+Supervisors explicitly inspect authenticated active markers and frozen reports.
+The installed supervisor PostToolUse observer discovers bound file requests,
+not old reports; it neither replies nor settles them. Read the exact request and
+write its issued mailbox reply before attempting fresh dispatch to a reasking
+executor. This lets its explicit wait return and a fresh live preflight run.
 Discovery is not delivery, acceptance or disarm. Idle Stop only observes its
 invocation and allows termination; it neither creates notices nor starts reasks.
 Explicit `executor_ready.py persist` is read-only and bounded to 300 seconds.
+An explicitly authorized `executor_reask.py run` checks every five seconds,
+issues a new marker no more often than every 60 seconds, with a polling budget
+of at most 540 seconds per invocation. Synchronous I/O can extend wall time.
+After the command returns, its durable episode may remain WAITING_REPLY;
+that state does not prove a runner is active. Current advisory hooks do not refresh the
+legacy idle binding needed by AUTHENTICATED_NEW_DISPATCH. Use a bound supervisor
+reply to end the wait; never restart the episode to evade an old pending send.
 CCC waits have a deadline; native Goal behavior requires separate evidence.
 
 Follow [bounded handshakes, delivery and closeout](references/bounded-collaboration.md)
@@ -244,7 +271,7 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 Installed workflow observers emit no tool denial or turn-control output. They
 record entrypoint, original hook, advisory mode and actual process provenance.
-An explicit legacy diagnostic that emits PostToolUse context must use the
+The supervisor file-request observer and any explicit diagnostic use the
 client-supported `hookSpecificOutput` envelope; internal `action/results` objects
 are not valid top-level hook output. Actual automatic invocation in an active
 client is separate from a manual script test and from native delivery evidence.
@@ -277,7 +304,7 @@ client is separate from a manual script test and from native delivery evidence.
 
 ## 双向投递与高效协作维护
 
-执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，保留 task-bound 诊断与零输入核收。idle Stop 仅观察，不发起或强迫求派；用户明确授权后可显式启动每60秒新 marker 主动求派，直到主管答复、新派发或 operator stop。
+执行[原生投递与有界等待](references/verified-compose-delivery.md)：新 Codex 输入经原会话的 native steer/start，先落 NATIVE_INPUT_INTENT 及新鲜 EOF fence，不操作 composer、不入 Tab 队列。原 fence 后完整 native user 才确认收到；RPC 接受与业务接受分列。未知结果只读核原次，历史排队 callback 不转发重放。Claude 终端与旧次保留原控制器。idle Stop 仅观察；主动求派依原授权显式运行。
 
 ### Stop hook reentry
 

@@ -14,7 +14,7 @@ from callback_native_evidence import validate, reconcile_received
 from cmux_callback_journal import verified_receipt
 from cmux_native_delivery import NativeDeliveryError
 from delivery_receipts import ReceiptError
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 IDLE = '› Ask Codex to do anything\nGPT-6-Astra high\n? for shortcuts'
@@ -48,7 +48,7 @@ class _NativeCallbackCase(unittest.TestCase):
         self.original_identity = dict(
             caller_surface_uuid='EXEC', target_surface_uuid='SUP',
             workspace_uuid='WS', target_pane_uuid='PANE')
-        self.native = NativeFixture.attach(self, home=self.root,
+        self.native = LegacyTerminalFixture.attach(self, home=self.root,
                                            identity=copy.deepcopy(self.original_identity))
         # 在原绑定产生之前选定 receiver 的真实原生目录；之后不改 binding/fence。
         self.native.native_root = self.root / '.codex/sessions'

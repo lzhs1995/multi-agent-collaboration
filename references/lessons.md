@@ -10,7 +10,9 @@
 | Callback delivered twice | Classify delivery; never blind-resend | test_r3_hardening.py |
 | Compact stalled for 15 minutes | 60-second compact samples, two unchanged checks, bounded intervention | test_cmux_executor_sentinel.py |
 | Billing errors caused endless retries | Classify explicit insufficient balance before generic login/403; preserve transport and budget priority. Verify a safe takeover separately | test_availability_contract.py, test_executor_availability.py |
-| A stale task or unresolved caller blocked ordinary tools and Stop | Workflow hooks only record invocation; explicit senders retain endpoint and draft checks. No forced reasks or implicit callback acceptance | test_workflow_advisory.py |
+| A stale task or unresolved caller blocked ordinary tools and Stop | Workflow hooks never run old gates; explicit senders retain endpoint and draft checks. Bound file-request context cannot force reasks or imply callback acceptance | test_workflow_advisory.py |
+| A clipped git branch made an empty Claude composer look occupied | Accept the measured ellipsis only at a physical footer row end under matching full borders; preserve real drafts and unknown layouts | test_live_opus_footer.py |
+| File-only inquiries had a writer but no automatic reader | Supervisor PostToolUse authenticates and deduplicates requests independently of telemetry; exact mailbox reply precedes fresh dispatch. No idle-supervisor wakeup or automatic settlement claim | test_workflow_advisory.py, test_supervisor_inbox.py |
 | Guard existed but did not run | Both clients wired; benign execution and negative entrypoint tests | test_install.py, test_r3_hardening.py |
 | File-edit prose was parsed as a shell launch | Check tool identity first; distinguish literal strings in a strict quoted Python stdin heredoc using AST byte offsets. Retain conservative scanning for executable references, aliases, unknown imports, expansion, pipes and adjacent shell commands; cover command/cmd inputs and UTF-8/CRLF in real hook processes | test_cmux_agent_panel_guard.py |
 | Later PASS hid earlier objections | Explicit resolution links; fresh artifact hashes | test_r3_hardening.py |

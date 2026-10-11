@@ -129,6 +129,7 @@ class ReaskTest(Base):
                        body_read_confirmed=False)
 
         with mock.patch.object(ready, '_bridge', return_value=bridge), \
+                mock.patch('cmux_native_delivery.bind_target', return_value={'provider': 'codex'}), \
                 mock.patch.object(reask, '_held', return_value=(None, '')), \
                 mock.patch.object(ready, 'advance_ask', side_effect=receive):
             result = reask.default_send(state, marker, body)
@@ -247,6 +248,7 @@ class ReaskTest(Base):
                      asks=[dict(marker=marker, terminal=True)])
         bridge = self._real_bridge(self.LIVE_QUEUE)
         with mock.patch.object(ready, '_bridge', return_value=bridge), \
+                mock.patch('cmux_native_delivery.bind_target', return_value={'provider': 'claude'}), \
                 mock.patch.object(ready, '_receipt', return_value=None), \
                 mock.patch.object(ready, 'advance_ask') as advance:
             result = reask.default_send(state, 'EXECUTOR_READY_new', 'new ask')

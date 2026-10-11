@@ -3,7 +3,8 @@
 0.4.19 supersedes historical instructions that freeze every tool, require an old
 supervisor for handshakes, or block Stop while awaiting a reply. Installed workflow
 hooks use cmux_workflow_advisory.py; historical checker modules are diagnostic only.
-The sender still refuses duplicate input, an occupied draft or an unverified target.
+The sender still refuses duplicate input or an unverified target; Claude terminal
+input also protects occupied drafts. Native Codex input leaves its composer intact.
 That refusal applies to one delivery and must not end authorized work.
 
 The raw cmux identify caller may belong to the shared daemon. Use cmux-agent self,
@@ -16,7 +17,10 @@ not require prior task settlement, prove old supervisor failure, replay old pack
 or authorize shared writes. Keep old task evidence and create distinct new scope.
 
 Before input, journal the complete payload, live process/session/transcript and
-fresh EOF fence. One paste and one submit maximum; retries reconcile read-only.
+fresh EOF fence. New Codex input uses one native steer/start, without composer or
+queue operations. Claude terminal input uses one paste and one submit maximum.
+Uncertain results reconcile read-only; never replay a historical queued callback
+through the native route. See the [delivery contract](verified-compose-delivery.md).
 A new exact native user record after the fence proves reception. ACK, body reading,
 callback and acceptance remain separate. Never present installation, manual hook
 execution, a queue item or a saved report as proof of all live clients adopting it.
@@ -33,6 +37,14 @@ pinned UTF-8 body and SHA, read it, and reply to its exact mailbox. Record consu
 and pending items; duplicate notice markers do not need duplicate replies. A UI
 queue, body reading, native receipt, ACK and business acceptance are separate.
 Do not leave maintenance requests unread while repeating status probes.
+
+Since 0.4.26, supervisor PostToolUse offers authenticated file requests as bounded,
+deduplicated additionalContext without invoking the old gate. It neither replies
+nor accepts reports and cannot wake a supervisor with no tool event. A reasking
+executor should receive its bound mailbox reply first, then finish its explicit
+wait before fresh preflight/dispatch. Each runner call lasts at most 540 seconds;
+a persisted WAITING_REPLY is not a running process. Keep old pending attempts
+when their original receiver process has exited; do not rebind or replay them.
 
 For new formal tasks, generate `TASK_PACK_V2` with `cmux_bridge.task_pack_notice`
 (or `task-notice --task-pack /absolute/task-pack.json`) from the finalized pack.

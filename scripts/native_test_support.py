@@ -79,6 +79,11 @@ class NativeFixture(contextlib.AbstractContextManager):
         # 夹具永远不触达 live surface；测试可替换 side_effect，并检查完整调用次数。
         self.send = self.stack.enter_context(patch.object(bridge, "send_text"))
         self.key = self.stack.enter_context(patch.object(bridge, "send_key"))
+        # A new Codex send must explicitly supply a fake RPC client in its
+        # test. No historical fixture may reach the user's live daemon.
+        self.rpc = self.stack.enter_context(patch(
+            "cmux_codex_input.DaemonRPC",
+            side_effect=AssertionError("offline fixture forbids live Codex RPC")))
         return self
 
     def __exit__(self, *args):
@@ -180,6 +185,34 @@ class NativeFixture(contextlib.AbstractContextManager):
     @staticmethod
     def ready_screens(before, draft, *after):
         return ScreenSequence([before, draft, draft, *(after or (before,))])
+
+
+def historical_terminal_dispatch(surface, text, marker=None, confirm_lines=200,
+                                 task_pack_path=None, force_compose=False,
+                                 delivery_observer=None, *, native_binding=None,
+                                 native_attempt=None):
+    """Test-only route for immutable historical paste/key regression fixtures."""
+    bridge._validate_submission(surface, text, task_pack_path, force_compose,
+                                delivery_observer, native_binding, native_attempt)
+    return bridge._submit_terminal_once(surface, text, marker, confirm_lines,
+        task_pack_path, force_compose, delivery_observer,
+        native_binding=native_binding, native_attempt=native_attempt)
+
+
+class LegacyTerminalFixture(NativeFixture):
+    """Build historical paste/key attempts for reconciliation regression tests.
+
+    This fixture changes only dispatch selection. Contract validation, journals,
+    bindings, native files and recovery checks remain production code. There is
+    no production environment flag or sender option to select this route.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        self.stack.enter_context(patch.object(bridge, "_submit_text_once",
+                                             side_effect=historical_terminal_dispatch))
+        return self
 
 
 def native_hook_command(script, active_dir, state_path, *args):

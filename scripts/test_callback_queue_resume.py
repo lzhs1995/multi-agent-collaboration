@@ -18,7 +18,7 @@ import executor_closeout
 import offline_test_hook
 import cmux_bridge as bridge
 import cmux_native_delivery as native
-from native_test_support import NativeFixture, native_hook_command
+from native_test_support import LegacyTerminalFixture, native_hook_command
 
 
 class QueueResumeTests(unittest.TestCase):
@@ -63,7 +63,7 @@ class QueueResumeTests(unittest.TestCase):
                                 "identity":dict(workspace_uuid=self.workspace,
                                     caller_surface_uuid=self.executor,
                                     target_surface_uuid=self.supervisor, target_pane_uuid="PANE")})
-        self.native = NativeFixture.attach(self, home=self.root,
+        self.native = LegacyTerminalFixture.attach(self, home=self.root,
             identity=self.attempt['binding']['identity'])
         # CLI 子进程使用真实 provider 目录结构，不导入夹具以免提前加载 bridge。
         native_root = self.root / '.codex/sessions'

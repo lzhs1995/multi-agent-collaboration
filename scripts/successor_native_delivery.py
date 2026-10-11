@@ -222,29 +222,23 @@ def _original(journal, artifact, text, marker):
     elif wire != text or attempt.get("body_pin") is not None:
         raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
     events = [json.loads(read_bytes(p)) for p in sorted(journal.glob("event-*.json"))]
-    pastes = [event for event in events if event.get("phase") == "PASTE_INTENT"]
-    if len(pastes) > 1:
-        raise native.NativeDeliveryError("SUCCESSOR_DUPLICATE_PASTE_INTENT")
-    if not pastes:
-        return attempt, None
-    paste = pastes[0]
-    if paste.get("screen_sha256") != _hash(paste.get("screen", "").encode()):
-        raise native.NativeDeliveryError("SUCCESSOR_PASTE_SCREEN_CHANGED")
-    native._fenced_binding(_legacy_binding(attempt["native_binding"]), wire,
-                           paste.get("native_paste_fence"), paste.get("at_epoch"))
-    return attempt, paste
+    if not any(event.get("phase") in ("PASTE_INTENT", "NATIVE_INPUT_INTENT") for event in events):
+        return attempt, None, None
+    intent, fence = native.original_input_event(events,
+        _legacy_binding(attempt["native_binding"]), wire, screen_hash_length=64)
+    return attempt, intent, fence
 
 
 def _observe(bridge, journal, artifact, text, marker):
-    attempt, paste = _original(journal, artifact, text, marker)
-    if paste is None:
+    attempt, intent, fence = _original(journal, artifact, text, marker)
+    if intent is None:
         result = dict(confirmed=False, state="NO_INPUT", input_operations=0)
     else:
         result = scan_received(bridge, artifact, attempt["native_binding"], attempt["wire"],
-                               paste_fence=paste["native_paste_fence"], not_before=paste["at_epoch"])
+                               paste_fence=fence, not_before=intent["at_epoch"])
         if result.get("confirmed") is True and not native.validate_proof(
                 _legacy_binding(attempt["native_binding"]), attempt["wire"], result.get("native_proof"),
-                paste_fence=paste["native_paste_fence"], not_before=paste["at_epoch"]):
+                paste_fence=fence, not_before=intent["at_epoch"]):
             raise native.NativeDeliveryError("SUCCESSOR_NATIVE_PROOF_CHANGED")
     result.update(journal=str(journal), attempt=str(journal / "attempt.json"),
                   confirmation_scope="reference_notice" if attempt.get("body_reference") else "native_user_message",
@@ -264,7 +258,7 @@ def _observe(bridge, journal, artifact, text, marker):
                     or saved.get("confirmation_scope") != result["confirmation_scope"]
                     or not native.validate_proof(_legacy_binding(attempt["native_binding"]),
                         attempt["wire"], saved.get("native_proof"),
-                        paste_fence=paste["native_paste_fence"], not_before=paste["at_epoch"])):
+                        paste_fence=fence, not_before=intent["at_epoch"])):
                 raise native.NativeDeliveryError("SUCCESSOR_SAVED_RECEIPT_CHANGED")
         else:
             _exclusive_json(receipt, result)
@@ -281,7 +275,7 @@ def reconcile(bridge, artifact, text, *, marker, state_root=None):
 
 
 def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wait_seconds=3):
-    """Persist once, paste once, submit once; all later calls only reconcile.
+    """Persist one native input (Codex) or paste (Claude); later calls reconcile.
 
     Old tasks, callbacks and attempts are never read or rewritten. A reference
     notice proves only receipt of that exact notice, not reading/acceptance of
@@ -304,14 +298,15 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
         wire, reference = planned["text"], planned["reference"]
         body_pin = prompt_reference.persist(reference, text)
         binding = bind_target(bridge, artifact, wire)
-        before = bridge.read_screen_successor(artifact)
-        bridge.require_agent_input(before, binding["identity"]["target_surface_uuid"])
-        if not bridge.compose_block_is_empty(before):
-            raise native.NativeDeliveryError("SUCCESSOR_COMPOSE_OCCUPIED: zero input; preserve existing draft")
-        if bridge.receiver_cannot_submit_now(before):
-            raise native.NativeDeliveryError("SUCCESSOR_RECEIVER_NOT_READY: zero input")
-        if "".join(marker.split()) in "".join(before.split()):
-            raise native.NativeDeliveryError("SUCCESSOR_MARKER_ALREADY_VISIBLE: zero input")
+        if binding["provider"] != "codex":
+            before = bridge.read_screen_successor(artifact)
+            bridge.require_agent_input(before, binding["identity"]["target_surface_uuid"])
+            if not bridge.compose_block_is_empty(before):
+                raise native.NativeDeliveryError("SUCCESSOR_COMPOSE_OCCUPIED: zero input; preserve existing draft")
+            if bridge.receiver_cannot_submit_now(before):
+                raise native.NativeDeliveryError("SUCCESSOR_RECEIVER_NOT_READY: zero input")
+            if "".join(marker.split()) in "".join(before.split()):
+                raise native.NativeDeliveryError("SUCCESSOR_MARKER_ALREADY_VISIBLE: zero input")
         attempt = dict(schema="successor-attempt-v2", artifact=artifact,
                        artifact_sha256=_hash(_canonical(artifact)), marker=marker,
                        body=text, body_sha256=_hash(text.encode()), wire=wire,
@@ -320,6 +315,24 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
         _exclusive_json(journal / "attempt.json", attempt)
         operations = 0
         try:
+            if binding["provider"] == "codex":
+                from cmux_codex_input import send_once
+                def recheck_native():
+                    require_bound(bridge, artifact, binding, wire)
+                    if reference is not None and prompt_reference.verify(reference, text) != body_pin:
+                        raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
+                def emit_native(phase, *, evidence):
+                    nonlocal operations
+                    recheck_native()
+                    fields = native.input_event_fields(_legacy_binding(binding), wire, phase, evidence)
+                    _event(journal, phase, **fields)
+                    if phase == "NATIVE_INPUT_INTENT":
+                        operations = 1
+                result = send_once(_legacy_binding(binding), wire,
+                    recheck=recheck_native, emit=emit_native,
+                    observe=lambda: _observe(bridge, journal, artifact, text, marker),
+                    wait_seconds=wait_seconds)
+                return dict(result, reconciled_read_only=False)
             require_bound(bridge, artifact, binding, wire)
             fence = native.capture_paste_fence(_legacy_binding(binding))
             _event(journal, "PASTE_INTENT", screen=before, screen_sha256=_hash(before.encode()),

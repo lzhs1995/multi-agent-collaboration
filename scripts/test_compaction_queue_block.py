@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 FIXTURES = Path(__file__).resolve().parents[1] / "verification" / "fixtures"
 BEFORE = (FIXTURES / "codex-compacting-behind-queued-followups-20261009.txt").read_text()
@@ -46,7 +46,7 @@ class CompactionBehindQueueTests(unittest.TestCase):
         self.assertTrue(b.receiver_cannot_submit_now(BEFORE))
 
     def test_no_paste_or_key_while_compaction_hides_behind_queue(self):
-        with NativeFixture(), patch.object(b, "read_screen", return_value=BEFORE), \
+        with LegacyTerminalFixture(), patch.object(b, "read_screen", return_value=BEFORE), \
                 patch.object(b, "send_text") as send, patch.object(b, "send_key") as key, \
                 patch.object(b.time, "sleep"):
             with self.assertRaises(b.DispatchUnconfirmed) as caught:
@@ -57,7 +57,7 @@ class CompactionBehindQueueTests(unittest.TestCase):
 
     def test_working_receiver_behind_same_queue_block_is_not_refused(self):
         # 负对照：同一布局但当前是 Working，必须照常粘贴（随后因无草稿而保留原次）。
-        with NativeFixture(), patch.object(b, "read_screen", return_value=working(BEFORE)), \
+        with LegacyTerminalFixture(), patch.object(b, "read_screen", return_value=working(BEFORE)), \
                 patch.object(b, "send_text") as send, patch.object(b, "send_key") as key, \
                 patch.object(b.time, "sleep"):
             with self.assertRaises(b.DispatchUnconfirmed) as caught:

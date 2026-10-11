@@ -1,4 +1,4 @@
-Current release: **0.4.25**. Workflow hooks are non-blocking. Successor communication follows current user authorization; see [recovery](references/nonblocking-recovery.md). Native caller discovery also supports tools executed directly by the managed daemon, without requiring a surviving shell wrapper. The measured Claude footer parser accepts both combined and split cwd/elapsed rows while retaining fail-closed unknown-layout handling.
+Current release: **0.4.26**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
 
 # Multi-Agent Collaboration
 
@@ -13,9 +13,15 @@ Evidence-bound collaboration for Codex and Claude Code in macOS cmux.
 
 New messages use bounded single-line notices for pinned
 bodies; formal packs and callbacks retain their dedicated task-bound routes.
-Enter or Tab only requests submission. Reception requires the complete exact
+Native RPC acceptance, Enter or Tab only requests submission. Reception requires the complete exact
 payload in a new record of the bound receiver's native journal. See the
 [delivery contract](references/verified-compose-delivery.md).
+
+The existing Codex control socket must authenticate as the current user and expose
+the exact loaded receiver thread. Persist one native input intent before the only
+steer/start request. Never fall back to paste/Tab after failure or uncertainty.
+Claude-bound input retains the protected terminal route; old queued callbacks
+remain under their original controller for read-only reconciliation.
 
 ## Install
 

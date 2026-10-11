@@ -1,3 +1,10 @@
+# 0.4.26
+
+- Send new Codex-bound messages, packs and callbacks directly to the original loaded thread through an authenticated control socket: active-turn steer or idle-turn start. Persist one native intent and fresh EOF fence; require exact new native user evidence. Never operate the composer, use the Tab queue, retry an uncertain request or replay historical callbacks.
+- Recognize a measured ellipsis-clipped git branch at the physical end of a Claude footer row below matching composer borders. Preserve drafts, incomplete borders and unknown layouts.
+- Restore authenticated, bounded file-request discovery through the nonblocking supervisor PostToolUse observer. Emit supported client context even if telemetry fails; never send input, settle tasks or block tools/Stop.
+- Document mailbox-first reask handoff, the 540-second per-call limit and the absence of idle-supervisor wakeup. Keep historical pending attempts and receiver bindings unchanged.
+
 # 0.4.25
 
 - Classify explicit insufficient account balance as BILLING even with a login hint or HTTP 403. Preserve transport/budget precedence and generic authentication classification.
