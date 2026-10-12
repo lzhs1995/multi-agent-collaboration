@@ -250,6 +250,12 @@ def manage(home, mode, apply=False, executor_reask=False):
                                  capture_output=True, timeout=15)
             checks[name] = {"benignExitZero": run.returncode == 0}
         ok = all(v.get("benignExitZero", v.get("linked") and v.get("configured")) for v in checks.values())
+        # CURRENT-based releases have two independent launchd jobs. Checking
+        # hooks alone missed a scheduler still pinned to the previous release.
+        from release_jobs import check as check_jobs
+        jobs = check_jobs(home)
+        checks['release_jobs'] = jobs
+        ok = ok and jobs['ok']
     else:
         ok = True
     return {"ok": bool(ok), "mode": mode, "applied": apply and mode != "doctor",

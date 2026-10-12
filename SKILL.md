@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-Version 0.4.28 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.29 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -65,6 +65,10 @@ response proves acknowledgement. Neither alone accepts the work. See
 The user chooses zero, one or two executors. When the original Claude cannot
 continue after bounded retries, continue authorized work as Codex SOLO and preserve
 its context. Resume collaboration at a safe boundary when it responds.
+
+0.4.29 also holds the existing pane/target delivery mutex throughout a non-submitting
+handshake probe. Automatic terminal writers must use the same lock and recheck the
+whole composer before every submit. See [input collisions](references/input-collisions.md).
 
 ## Core Contract
 

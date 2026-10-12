@@ -1090,6 +1090,15 @@ def _write_bridge_evidence(root, per_executor):
 
 
 def _bridge_test_one(args, executor_ref, token, ordinal):
+    # A probe types and deletes too. Share the formal sender's exact pane and
+    # target locks so an automatic continuation cannot race the cleanup.
+    import cmux_input_mutex as mutex
+    identity = cmux.pin_workspace(executor_ref)
+    with mutex.hold(identity) as check:
+        return _bridge_test_one_locked(args, executor_ref, token, ordinal, check)
+
+
+def _bridge_test_one_locked(args, executor_ref, token, ordinal, check):
     """One full type-observe-clear cycle against one executor.
 
     Returns ``(evidence, ok)`` and writes nothing — the caller publishes, so a
@@ -1183,6 +1192,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         override["clear_confirmed"] = False
         override["clear_verified_at"] = None
         override["delete_count"] = 0
+        check()
         cmux.send_key(executor_ref, "escape")
         time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
         pre_screen = cmux.read_screen(executor_ref, lines=args.lines)
@@ -1194,6 +1204,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
             # buffer, focus its pane and try the terminal line-clear key once.
             cmux.focus_surface(executor_ref)
             override["clear_actions"].append("focused_ctrl+u")
+            check()
             cmux.send_key(executor_ref, "ctrl+u")
             time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
             pre_screen = cmux.read_screen(executor_ref, lines=args.lines)
@@ -1203,6 +1214,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
                 # ownership, even under an explicit force override.
                 if not cmux._queued_or_active_input(pre_screen):
                     override["clear_actions"].append("ctrl+c")
+                    check()
                     cmux.send_key(executor_ref, "ctrl+c")
                     time.sleep(BRIDGE_TEST_CLEAR_DELAY_SECONDS)
                     pre_screen = cmux.read_screen(executor_ref, lines=args.lines)
@@ -1216,6 +1228,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
                     # explicitly authorized for replacement, so use the same
                     # length-derived, capped deletion fallback as submit_text.
                     override["clear_actions"].append("end+bounded_backspace")
+                    check()
                     override["delete_count"] = cmux.clear_known_compose_by_delete(
                         executor_ref, preexisting_compose
                     )
@@ -1280,6 +1293,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         if override.get("direct_replace_after_clear_attempts") else None
     )
     _info(f"Sending non-submitting bridge token to {executor_ref}: {token!r}")
+    check()
     cmux.send_text(executor_ref, token)  # no newline
     time.sleep(1)
     screen = cmux.read_screen(executor_ref, lines=args.lines)
@@ -1319,8 +1333,10 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
         if not cleared(post_clear_screen) and owned:
             limit = min(BRIDGE_TEST_CLEAR_DELETE_COUNT, len(body))
             if boundary is None:
+                check()
                 cmux.send_key(executor_ref, "end")
                 for _ in range(limit):
+                    check()
                     cmux.send_key(executor_ref, "backspace")
                     time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)
                 delete_count = limit
@@ -1329,6 +1345,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
                 # 自有 token 前缀，不用刚才的屏幕为后续按键继续授权。
                 fresh = cmux.read_screen(executor_ref, lines=args.lines)
                 if not input_busy(fresh) and cmux.compose_rendered_text(fresh) == body:
+                    check()
                     cmux.send_key(executor_ref, "end")
                     for _ in range(limit):
                         fresh = cmux.read_screen(executor_ref, lines=args.lines)
@@ -1336,6 +1353,7 @@ def _bridge_test_one(args, executor_ref, token, ordinal):
                         if (input_busy(fresh) or not current_body
                                 or not token.startswith(current_body)):
                             break
+                        check()
                         cmux.send_key(executor_ref, "backspace")
                         delete_count += 1
                         time.sleep(BRIDGE_TEST_CLEAR_KEY_DELAY_SECONDS)

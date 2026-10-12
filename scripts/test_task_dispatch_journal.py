@@ -243,3 +243,40 @@ class TaskDispatchJournalTests(unittest.TestCase):
                     self.call()
                 send.assert_not_called()
                 key.assert_not_called()
+
+    def test_external_sender_holding_shared_pane_or_target_defers_without_input(self):
+        root = self.home / '.local/state/multi-agent-collaboration/deliveries-v1'
+        root.mkdir(parents=True)
+        for name in ('pane-' + j.digest('WS:PANE'), 'target-' + j.digest('EXECUTOR')):
+            with self.subTest(lock=name), (root / (name + '.lock')).open('a+b') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+                    with self.assertRaisesRegex(b.TaskPackContractError, 'DISPATCH_IN_PROGRESS'):
+                        self.call()
+                    send.assert_not_called()
+                    key.assert_not_called()
+                    self.assertEqual(list(self.home.rglob('attempt-*.json')), [])
+
+    def test_foreign_continuation_after_paste_never_authorizes_enter_or_replay(self):
+        foreign = '任务中断了么？如果是就请继续。'
+        mixed = self.native.draft(TEXT + foreign, 'claude')
+        screens = iter([IDLE])
+        with patch.object(b, 'read_screen', side_effect=lambda *a, **k: next(screens, mixed)), \
+                patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.assertRaisesRegex(b.DispatchUnconfirmed, 'DRAFT_NOT_READY'):
+                self.call()
+            send.assert_called_once()
+            key.assert_not_called()
+            attempt = next(self.home.rglob('attempt-*.json'))
+            original = attempt.read_bytes()
+            # An external sender may later submit the mixed draft. It is real
+            # native input, but never an exact receipt for the original notice.
+            self.native.append_user(TEXT + foreign)
+            with self.assertRaisesRegex(b.DispatchUnconfirmed, 'DISPATCH_NOT_YET_CONFIRMED'):
+                self.call(reconcile_only=True)
+            with self.assertRaisesRegex(b.TaskPackContractError, 'DISPATCH_ATTEMPT_EXISTS'):
+                self.call()
+            self.assertEqual(attempt.read_bytes(), original)
+            self.assertFalse((attempt.parent / 'receipt.json').exists())
+            send.assert_called_once()
+            key.assert_not_called()

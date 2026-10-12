@@ -1,3 +1,11 @@
+## 0.4.29
+
+- Doctor checks both CURRENT-pinned launchd jobs, detecting a scheduler left on an older release. Installation and actual scheduled execution remain separate evidence.
+
+- Serialize non-submitting handshake probes under the existing formal-delivery pane and target locks. Contention sends no input; replacement lock inodes stop further probe keys.
+- Add regression coverage for foreign continuation text after a task paste: no Enter, no replay, no exact native receipt for mixed input.
+- Document coordination with automatic continuation writers and evidence-preserving recovery when another sender has already submitted the mixed draft.
+
 ## 0.4.28 — Explicit continuing file inquiries
 
 - Fix ASCII-clipped Claude cwd/summary false occupancy and preserve unrelated inherited inquiry attempts without blocking new authorized contact. Normal successor handshakes need no old-task settlement.
