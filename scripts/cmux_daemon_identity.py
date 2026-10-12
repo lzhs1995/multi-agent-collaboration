@@ -346,6 +346,16 @@ def _collect_client(session, chain, daemon):
     candidates = client_candidates()
     clients = []
     selections = []
+    unavailable = object()
+    selection_errors = []
+
+    def matches(p, selected):
+        if selected is unavailable:
+            return False
+        argv = p['argv']
+        return (selected['thread_id'] == session if selected is not None
+                else len(argv) >= 3 and argv[1:3] == ['resume', session])
+
     for candidate in candidates:
         try:
             # A discovery row is not yet this session's caller. Read its kernel
@@ -355,15 +365,17 @@ def _collect_client(session, chain, daemon):
             # Only an initial ESRCH/zombie is harmless. Unknown identity and
             # a disappearance after a partial read must not hide a second match.
             continue
-        argv = p['argv']
         try:
             selected = foreground.read(p)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise IdentityError('native foreground selection unavailable: ' + str(exc)) from exc
+            # 候选清单不是当前 caller。坏记录只能使该候选不具备认证
+            # 资格，不能否决另一位证据完整的主管，也不能降级为 argv。
+            selected = unavailable
+            selection_errors.append((p['pid'], str(exc)))
         selections.append((p, selected))
-        matches = (selected['thread_id'] == session if selected is not None
-                   else len(argv) >= 3 and argv[1:3] == ['resume', session])
-        if matches:
+        if selected is unavailable:
+            continue
+        if matches(p, selected):
             if process(p['pid']) != p:
                 raise IdentityError('selected client identity drift')
             if Path(p['executable']).name != 'codex':
@@ -380,17 +392,32 @@ def _collect_client(session, chain, daemon):
             # argv[0]. Never exclude an unreadable or changing session selector.
             raise IdentityError('unrelated candidate identity drift')
     if len(clients) != 1:
-        raise IdentityError('native caller discovery did not resolve a unique active client')
+        detail = ''
+        if not clients and selection_errors:
+            # Keep useful diagnostics when the actual caller cannot be found.
+            # Unrelated failures never enter the selected proof: fluctuating
+            # foreign records must not make caller_snapshot report caller drift.
+            detail = '; native foreground selection unavailable for ' + str(len(selection_errors)) + ' candidate(s): '
+            detail += '; '.join(str(pid) + ': ' + error for pid, error in selection_errors[:4])
+        raise IdentityError('native caller discovery did not resolve a unique active client' + detail)
     # Verify every ancestor as well as the selected client after the inventory.
     for item in chain + clients:
         if process(item['pid']) != {k: v for k, v in item.items() if k != 'tty'}:
             raise IdentityError('process identity drift')
     for original, selected in selections:
+        is_caller = original['pid'] == clients[0]['pid']
         try:
-            if foreground.read(original) != selected:
-                raise IdentityError('native foreground selection changed during inventory')
+            current = foreground.read(original)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise IdentityError('native foreground selection recheck failed: ' + str(exc)) from exc
+            if is_caller:
+                raise IdentityError('native foreground selection recheck failed: ' + str(exc)) from exc
+            continue
+        if is_caller and current != selected:
+            raise IdentityError('native foreground selection changed during inventory')
+        if not is_caller and matches(original, current):
+            # A second authenticated match, including one recovered during the
+            # scan, is real ambiguity. Unrelated thread changes are not.
+            raise IdentityError('native foreground selection changed during inventory: second active client')
     proof = {'session': session, 'daemon': daemon, 'client': clients[0], 'chain': chain}
     selected = next(s for p, s in selections if p['pid'] == clients[0]['pid'])
     if selected is not None:

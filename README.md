@@ -1,4 +1,9 @@
-Current release: **0.4.28**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+Current release: **0.4.30**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+
+Caller discovery now distinguishes a validated optional foreground file from an
+earlier use of the same PID. It preserves current-process, required-observer and
+unique-client checks; it does not rewrite old records or select their threads.
+See [PID reuse](references/shared-daemon-caller.md#reused-pids-and-optional-foreground-files).
 
 # Multi-Agent Collaboration
 

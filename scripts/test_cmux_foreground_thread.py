@@ -137,11 +137,68 @@ class ForegroundEvidenceTests(EvidenceFixture, unittest.TestCase):
                     self.write(**{key: value})
                     self.reject('invalid foreground')
 
-    def test_stale_future_or_boolean_timestamp_denied(self):
-        for stamp in (100099, 201001, True, 100100.0, '100100', None):
+    def test_future_or_invalid_timestamp_denied(self):
+        for stamp in (201001, True, 100100.0, '100100', None):
             with self.subTest(stamp=stamp):
                 self.write(published_at_ms=stamp)
                 self.reject('predates process or is in the future')
+
+    def test_reused_pid_optional_old_record_is_legacy_absence(self):
+        self.write(published_at_ms=100099)
+        original = self.path.read_bytes()
+        for _ in range(2):
+            self.assertIsNone(foreground.read(self.client))
+        self.assertEqual(foreground._seen, set())
+        self.assertEqual(self.path.read_bytes(), original)
+        self.path.unlink()
+        self.assertIsNone(foreground.read(self.client))
+
+    def test_reused_pid_does_not_inherit_previous_process_seen_state(self):
+        foreground.read(self.client)
+        self.client['birth'] = [101, 0]
+        self.assertIsNone(foreground.read(self.client))
+        self.assertEqual(foreground._seen, {(30, (100, 100000))})
+
+    def test_required_old_record_cannot_be_legacy_absence(self):
+        self.client['env']['CODEX_CLIENT_THREAD_OBSERVER'] = '1'
+        self.write(published_at_ms=100099)
+        self.reject('predates process')
+
+    def test_current_selection_cannot_downgrade_to_old_record(self):
+        foreground.read(self.client)
+        self.write(published_at_ms=100099)
+        self.reject('predates process')
+
+    def test_old_record_does_not_hide_invalid_thread_or_permissions(self):
+        self.write(published_at_ms=100099, thread_id='invalid')
+        self.reject()
+        self.write(published_at_ms=100099)
+        self.path.chmod(0o644)
+        self.reject('untrusted')
+
+    def test_old_record_must_survive_atomic_reread(self):
+        self.write(published_at_ms=100099)
+        original = foreground._read
+        calls = 0
+        def read(path, limit):
+            nonlocal calls
+            if path == self.path:
+                calls += 1
+                if calls == 2:
+                    temporary = self.directory / 'replacement'
+                    self.write(temporary)
+                    temporary.replace(self.path)
+            return original(path, limit)
+        with patch.object(foreground, '_read', side_effect=read):
+            self.reject('source changed')
+        self.assertEqual(calls, 2)
+        self.assertEqual(foreground._seen, set())
+
+    def test_optional_old_record_does_not_use_seen_capacity(self):
+        foreground._seen.update((pid, (100, 0)) for pid in range(100, 4196))
+        self.write(published_at_ms=100099)
+        self.assertIsNone(foreground.read(self.client))
+        self.assertEqual(len(foreground._seen), 4096)
 
     def test_missing_thread_is_rejected(self):
         del self.data['thread_id']
@@ -320,11 +377,160 @@ class ForegroundIdentityTests(EvidenceFixture, unittest.TestCase):
             with self.assertRaisesRegex(identity.IdentityError, 'changed during inventory'):
                 self.collect()
 
-    def test_invalid_unrelated_selection_is_not_silently_ignored(self):
+    def test_invalid_unrelated_selection_is_excluded_without_editing_evidence(self):
         self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
-        self.write(self.directory / 'client-31-thread.json', pid=31, thread_id='invalid')
-        with self.assertRaisesRegex(identity.IdentityError, 'selection unavailable'):
+        path = self.directory / 'client-31-thread.json'
+        self.write(path, pid=31, thread_id='invalid')
+        before = (path.read_bytes(), path.stat().st_ino)
+        proof = self.collect(['30', '31'])
+        self.assertEqual(proof['client']['pid'], 30)
+        self.assertEqual(proof['foreground']['thread_id'], S)
+        self.assertEqual((path.read_bytes(), path.stat().st_ino), before)
+
+    def test_nineteen_foreign_future_timestamps_do_not_veto_valid_caller(self):
+        pids = ['30']
+        for pid in range(31, 50):
+            self.processes[pid] = dict(copy.deepcopy(self.processes[30]), pid=pid)
+            self.write(self.directory / f'client-{pid}-thread.json', pid=pid,
+                       published_at_ms=999999)
+            pids.append(str(pid))
+        proof = self.collect(pids)
+        self.assertEqual(proof['client']['pid'], 30)
+        self.assertEqual(proof['foreground']['thread_id'], S)
+
+    def test_invalid_own_timestamp_cannot_fall_back_to_resume(self):
+        self.processes[30]['argv'] = ['/bin/codex', 'resume', S]
+        self.write(published_at_ms=999999)
+        with self.assertRaisesRegex(identity.IdentityError, 'selection unavailable.*future'):
+            self.collect()
+
+    def test_invalid_foreign_record_does_not_hide_valid_duplicate(self):
+        for pid in (31, 32):
+            self.processes[pid] = dict(copy.deepcopy(self.processes[30]), pid=pid)
+            self.write(self.directory / f'client-{pid}-thread.json', pid=pid,
+                       thread_id=S if pid == 31 else 'invalid')
+        with self.assertRaisesRegex(identity.IdentityError, 'unique'):
+            self.collect(['32', '30', '31'])
+
+    def test_unrelated_required_missing_selection_does_not_veto(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        self.processes[31]['env']['CODEX_CLIENT_THREAD_OBSERVER'] = '1'
+        self.assertEqual(self.collect(['31', '30'])['client']['pid'], 30)
+
+    def test_foreign_failures_do_not_change_selected_proof(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        path = self.directory / 'client-31-thread.json'
+        expected = self.collect(['30', '31'])
+        for raw in ('{', '[]', json.dumps(dict(self.data, pid=31, published_at_ms=999999))):
+            with self.subTest(raw=raw):
+                path.write_text(raw)
+                path.chmod(0o600)
+                self.assertEqual(self.collect(['30', '31']), expected)
+
+    def test_foreign_recheck_error_does_not_veto_selected_caller(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        self.write(self.directory / 'client-31-thread.json', pid=31, thread_id=C)
+        original = foreground.read
+        for error in (OSError('unreadable'), ValueError('bad timestamp'),
+                      KeyError('thread_id'), TypeError('malformed')):
+            with self.subTest(error=error):
+                calls = 0
+                def read(client):
+                    nonlocal calls
+                    if client['pid'] == 31:
+                        calls += 1
+                        if calls == 2:
+                            raise error
+                    return original(client)
+                with patch.object(foreground, 'read', side_effect=read):
+                    self.assertEqual(self.collect(['30', '31'])['client']['pid'], 30)
+
+    def test_selected_recheck_error_remains_fatal(self):
+        original = foreground.read
+        calls = 0
+        def read(client):
+            nonlocal calls
+            if client['pid'] == 30:
+                calls += 1
+                if calls == 2:
+                    raise ValueError('bad selected timestamp')
+            return original(client)
+        with patch.object(foreground, 'read', side_effect=read):
+            with self.assertRaisesRegex(identity.IdentityError, 'recheck failed'):
+                self.collect()
+
+    def test_invalid_foreign_record_recovering_to_duplicate_is_denied(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        path = self.directory / 'client-31-thread.json'
+        self.write(path, pid=31, thread_id='invalid')
+        original = foreground.read
+        calls = 0
+        def read(client):
+            nonlocal calls
+            if client['pid'] == 31:
+                calls += 1
+                if calls == 2:
+                    self.write(path, pid=31)
+            return original(client)
+        with patch.object(foreground, 'read', side_effect=read):
+            with self.assertRaisesRegex(identity.IdentityError, 'second active client'):
+                self.collect(['30', '31'])
+
+    def test_unrelated_switch_between_other_threads_does_not_veto(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        path = self.directory / 'client-31-thread.json'
+        self.write(path, pid=31, thread_id=None)
+        original = foreground.read
+        calls = 0
+        def read(client):
+            nonlocal calls
+            if client['pid'] == 31:
+                calls += 1
+                if calls == 2:
+                    self.write(path, pid=31, thread_id=C)
+            return original(client)
+        with patch.object(foreground, 'read', side_effect=read):
+            self.assertEqual(self.collect(['30', '31'])['client']['pid'], 30)
+
+    def test_unrelated_reused_pid_does_not_block_current_caller(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        self.write(self.directory / 'client-31-thread.json', pid=31,
+                   published_at_ms=100099)
+        proof = self.collect(['30', '31'])
+        self.assertEqual(proof['client']['pid'], 30)
+        self.assertEqual(proof['foreground']['thread_id'], S)
+        resolved, env = identity.resolve(self.fixture.identity, self.fixture.tree,
+                                         self.fixture.env, proof)
+        self.assertEqual(resolved['caller']['surface_id'], C)
+        self.assertEqual(env['CMUX_SURFACE_ID'], C)
+        self.assertNotIn((31, (100, 100000)), foreground._seen)
+
+    def test_old_record_cannot_select_its_previous_thread(self):
+        self.write(published_at_ms=100099)
+        with self.assertRaisesRegex(identity.IdentityError, 'unique'):
+            self.collect()
+
+    def test_optional_old_record_keeps_exact_legacy_resume(self):
+        self.write(published_at_ms=100099, thread_id=C)
+        self.processes[30]['argv'] += ['resume', S]
+        proof = self.collect()
+        self.assertEqual(proof['client']['pid'], 30)
+        self.assertNotIn('foreground', proof)
+
+    def test_old_record_cannot_hide_duplicate_live_resume_client(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31,
+                                  argv=['/bin/codex', 'resume', S])
+        self.write(self.directory / 'client-31-thread.json', pid=31,
+                   published_at_ms=100099, thread_id=C)
+        with self.assertRaisesRegex(identity.IdentityError, 'unique'):
             self.collect(['30', '31'])
+
+    def test_required_unrelated_old_record_is_excluded(self):
+        self.processes[31] = dict(copy.deepcopy(self.processes[30]), pid=31)
+        self.processes[31]['env']['CODEX_CLIENT_THREAD_OBSERVER'] = '1'
+        self.write(self.directory / 'client-31-thread.json', pid=31,
+                   published_at_ms=100099)
+        self.assertEqual(self.collect(['30', '31'])['client']['pid'], 30)
 
     def test_foreground_proof_drift_fails_final_snapshot(self):
         proof = self.collect()

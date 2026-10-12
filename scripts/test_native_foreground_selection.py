@@ -20,6 +20,8 @@ class NativeForegroundTests(TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.case = self.stack.enter_context(independent.NativeCase(provider='codex'))
+        seconds, microseconds = self.case.process['birth']
+        self.previous_process_stamp_ms = seconds * 1000 + microseconds // 1000 - 1
         self.stack.enter_context(patch.object(foreground, '_seen', set()))
         self.case.process['argv'] = [self.case.process['executable']]
         home = self.case.home / '.codex'
@@ -97,6 +99,37 @@ class NativeForegroundTests(TestCase):
         binding = self.case.bind()
         self.assertEqual(binding['session_id'], independent.SESSION)
         self.check_bound(binding)
+
+    def test_reused_pid_old_record_binds_only_current_legacy_session(self):
+        self.write(published_at_ms=self.previous_process_stamp_ms,
+                   thread_id=independent.OTHER_SESSION)
+        self.case.process['argv'] += ['resume', independent.SESSION]
+        before = self.case.snapshot()
+        binding = self.case.bind()
+        self.assertEqual(binding['session_id'], independent.SESSION)
+        self.assertEqual(binding['transcript']['path'], str(self.case.transcript))
+        self.check_bound(binding)
+        self.check_bound(binding, read_only=True)
+        self.assertEqual(self.case.snapshot(), before)
+
+    def test_reused_pid_without_current_session_stays_unresolved(self):
+        self.write(published_at_ms=self.previous_process_stamp_ms)
+        with self.assertRaisesRegex(native.NativeDeliveryError, 'SESSION_UNRESOLVED'):
+            self.select()
+
+    def test_required_old_record_remains_invalid_with_resume(self):
+        self.write(published_at_ms=self.previous_process_stamp_ms)
+        self.case.process['env']['CODEX_CLIENT_THREAD_OBSERVER'] = '1'
+        self.case.process['argv'] += ['resume', independent.SESSION]
+        with self.assertRaisesRegex(native.NativeDeliveryError, 'FOREGROUND_INVALID'):
+            self.select()
+
+    def test_bound_current_selection_cannot_be_replaced_by_old_record(self):
+        self.case.process['argv'] += ['resume', independent.SESSION]
+        binding = self.case.bind()
+        self.write(published_at_ms=self.previous_process_stamp_ms)
+        with self.assertRaisesRegex(native.NativeDeliveryError, 'FOREGROUND_INVALID'):
+            self.check_bound(binding)
 
     def test_no_observation_or_legacy_argument_is_unresolved(self):
         self.path.unlink()

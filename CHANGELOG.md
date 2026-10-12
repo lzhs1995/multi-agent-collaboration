@@ -1,3 +1,10 @@
+## 0.4.30
+
+- Prevent an unrelated legacy client with a reused PID from invalidating caller discovery because of a foreground record from the previous process. Accept legacy absence only for a fully validated, stable, optional record predating the current process and never observed for that process.
+- Remove the global foreground-error veto: invalid or unavailable candidate records are excluded without granting argv fallback. Only the selected caller's recheck and actual duplicate matches can reject an otherwise valid selection; unrelated failures or thread switches do not contaminate its proof.
+- Preserve required-observer, current-selection, exact-resume, unique-client, kernel/TTY/UUID and native-receipt checks. Do not change or delete foreground records, adopt the old thread or block ordinary tools and Stop.
+- Cover current caller discovery, stale-thread rejection, legacy native binding, duplicate clients, required observers, record drift and the seen-process capacity boundary.
+
 ## 0.4.29
 
 - Doctor checks both CURRENT-pinned launchd jobs, detecting a scheduler left on an older release. Installation and actual scheduled execution remain separate evidence.

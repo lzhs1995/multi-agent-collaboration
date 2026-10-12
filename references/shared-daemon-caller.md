@@ -82,6 +82,34 @@ leaves without requesting reload and observing a new fixture is distinct from
 proving adoption by existing threads. Per-slot generated hook commands need their
 own freshly computed identities; a copied trust hash is not sufficient.
 
+## Reused PIDs and optional foreground files
+
+The foreground filename contains the PID, while the authenticated process
+identity includes its kernel birth time. A legacy client can reuse a terminated
+client's PID without publishing a foreground record. Its predecessor's optional
+record must not invalidate a different live caller during the client inventory.
+
+From 0.4.30, first validate the original record's directory and file ownership,
+permissions, schema, PID, epoch and thread UUIDs, marker, and unchanged second
+read. Only an optional record published before this process's birth, with no
+previously verified selection for this exact PID/birth, returns legacy absence.
+It does not add that process to the seen set or alter the original record.
+Native selection can then use only an exact current resume argument under the
+existing unique-client and kernel/TTY/UUID checks; it never uses the old thread.
+
+Required-but-missing observers, invalid or future timestamps, malformed content
+and unreadable records make that candidate ineligible; they never authorize an
+argv fallback or invalidate a different fully authenticated caller. Keep these
+exclusions out of the selected proof so a foreign error cannot become caller
+drift. If no candidate qualifies, report the unavailable selections diagnostically.
+Recheck the actual selected caller strictly. A changed or missing selected record,
+multiple authenticated matches, or a second candidate becoming a match during
+the scan still rejects input. Unrelated selection switches and errors do not.
+The native receiver reader keeps its endpoint validation. No invalid record
+becomes valid and no record is rewritten or deleted. Publish it in the complete
+shared release so tools, hooks and native binding use the same resolver. Record
+source tests, installed caller proof and actual client hook execution separately.
+
 ## Recycled TTY names are not caller identity
 
 Resolve the active native client first, then join its kernel-read
