@@ -72,6 +72,13 @@ def main() -> int:
             supervisor_inbox.discover(payload, emit=supervisor_inbox.emit_context)
         except BaseException:
             pass
+    if (hook == 'cmux_native_delivery_guard.py'
+            and payload.get('hook_event_name') == 'PostToolUse'):
+        try:
+            import claude_maintenance_context
+            claude_maintenance_context.discover(payload)
+        except BaseException:
+            pass
     return 0
 
 

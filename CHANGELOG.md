@@ -1,3 +1,16 @@
+## 0.4.31
+
+- Add opt-in file context for a Claude executor that keeps waiting for a failed
+  supervisor while an authorized successor notice is already queued. Verify the
+  original attempt, authorization, complete body, queue record, transcript and
+  live Claude process. The existing PostToolUse advisory exposes the body without
+  sending input, interrupting tools, changing controllers or accepting tasks.
+- Deduplicate successful exposure for 60 seconds and retain it after output
+  failure. An exact executor read reply stops reminders; exposure and a file
+  reply never manufacture native reception or business acceptance.
+- Add isolated regression tests for the actual wrapper, foreign sessions,
+  process reuse, changed evidence, concurrent-safe cursors and failed output.
+
 ## 0.4.30
 
 - Prevent an unrelated legacy client with a reused PID from invalidating caller discovery because of a foreground record from the previous process. Accept legacy absence only for a fully validated, stable, optional record predating the current process and never observed for that process.
