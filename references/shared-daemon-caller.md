@@ -97,10 +97,16 @@ It does not add that process to the seen set or alter the original record.
 Native selection can then use only an exact current resume argument under the
 existing unique-client and kernel/TTY/UUID checks; it never uses the old thread.
 
-A required observer, a previously verified current process losing its selection,
-an invalid or future timestamp, malformed content, changed file, or ambiguous
-live client remains an error. This exception does not make arbitrary unresolvable
-clients valid and does not authorize terminal input. Publish it in the complete
+Required-but-missing observers, invalid or future timestamps, malformed content
+and unreadable records make that candidate ineligible; they never authorize an
+argv fallback or invalidate a different fully authenticated caller. Keep these
+exclusions out of the selected proof so a foreign error cannot become caller
+drift. If no candidate qualifies, report the unavailable selections diagnostically.
+Recheck the actual selected caller strictly. A changed or missing selected record,
+multiple authenticated matches, or a second candidate becoming a match during
+the scan still rejects input. Unrelated selection switches and errors do not.
+The native receiver reader keeps its endpoint validation. No invalid record
+becomes valid and no record is rewritten or deleted. Publish it in the complete
 shared release so tools, hooks and native binding use the same resolver. Record
 source tests, installed caller proof and actual client hook execution separately.
 

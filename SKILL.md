@@ -53,9 +53,12 @@ An unrelated legacy client can reuse a PID that still has an older optional
 foreground file. Version 0.4.30 treats that file as absent only after validating
 its ownership, schema and stable reread, when it predates this process's birth
 and this process has never had a verified selection. It never adopts the old
-thread. Required observers, a lost current selection, malformed records and
-ambiguous live clients still fail authentication. Preserve the file and process
-identity; do not rewrite them to make discovery pass. See
+thread. Unreadable, malformed, future-dated or required-but-missing selections
+exclude only that candidate; they cannot veto a different authenticated caller
+or fall back to resume arguments. Recheck the selected caller strictly and reject
+multiple authenticated matches, including a new match during the scan. Unrelated
+selection failures and switches never enter the caller proof. Preserve the file
+and process identity; do not rewrite them to make discovery pass. See
 [caller identity](references/shared-daemon-caller.md#reused-pids-and-optional-foreground-files).
 
 Any successor supervisor authorized by the user may contact the specified existing
