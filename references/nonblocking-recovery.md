@@ -73,3 +73,20 @@ on disk as authority. Continue independent authorized work in SOLO when a peer
 is unavailable; maintenance does not reopen accepted research reviews.
 
 0.4.24 also recognizes local SQLite and disk-space inventory imports in quoted Python document heredocs. Agent names after semicolons inside literal document data are not CLI launches; adjacent real shell launches remain checked. Verify the exact rejected command through the real hook before claiming recovery.
+
+## 正常握手默认允许（2026-10-12）
+
+用户授权协作或接棒后，主管可直接向指定原会话发起新握手、维护联络、进度询问和
+独立新任务的准备，不再等待旧主管批准、旧 callback 结算或无关 pending 清空。
+不因继任、旧报告未读或旧轮次未完成而要求用户重复授权。健康的当前握手直接复用；
+迟到 ACK 沿原 nonce 核收；已证明零输入的拒绝修复后可重新做当前预检。
+握手仅确认身份和通信，不附加科研审查、三轮共识或旧任务审计作为前置条件。
+
+0.4.28 对 reask 的独立新任务/新主管请求读取原始请求绑定，将无关 inherited
+pending 的完整内容和原请求另行持久保留，再释放新 episode 的发送位置。
+原请求、journal、未确认状态均不改写，不重放旧正文；同任务同主管的未知发送仍
+沿原次观察，单纯换 controller 或重启同一 episode 不解除它。
+
+Claude footer 的 Unicode `…` 和 ASCII `...` 行尾截断均支持，包括 git cwd
+和 `▸` 摘要；它们只在完整输入框边框外解释。正常空输入框可以握手，真实草稿
+保持原样，两标签共用同一 pane 时串行发送。收到正文、ACK、执行和业务验收分别记录。

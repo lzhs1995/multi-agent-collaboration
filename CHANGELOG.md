@@ -1,5 +1,6 @@
 ## 0.4.28 — Explicit continuing file inquiries
 
+- Fix ASCII-clipped Claude cwd/summary false occupancy and preserve unrelated inherited inquiry attempts without blocking new authorized contact. Normal successor handshakes need no old-task settlement.
 - Add explicitly authorized same-pane Codex native maintenance input with distinct pinned threads; terminal routes remain refused.
 - Correct ARMED advisory wording and document successor latency attribution, original late-ACK reconciliation, and proactive disk recovery.
 

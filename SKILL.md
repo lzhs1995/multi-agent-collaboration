@@ -5,6 +5,10 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
+用户授权的正常继任握手、新进度通知与独立新任务联络默认允许，无需旧主管批准或
+无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
+永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
+
 Version 0.4.28 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are

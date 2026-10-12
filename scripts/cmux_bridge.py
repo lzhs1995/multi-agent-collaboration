@@ -758,7 +758,7 @@ _CLAUDE_ACTIVE_TOOL_RE = re.compile(
     rf"[◐◑◒◓]\s+{_CLAUDE_TOOL}:\s+[^|\n]+(?:\s*\|\s*{_CLAUDE_COUNTS})?")
 _CLAUDE_SUMMARY_RE = re.compile(
     rf"(?:{_CLAUDE_COUNTS}|✓\s+{_CLAUDE_TOOL}(?:\s+\[[\w.-]+\])?:\s+"
-    rf"[^|\n]+\((?:<)?{_CLAUDE_DURATION}\)|▸\s+[^\n]+\(\d+/\d+\))")
+    rf"[^|\n]+\((?:<)?{_CLAUDE_DURATION}\)|▸\s+[^\n│]+(?:\(\d+/\d+\)|…|\.{{3}}))")
 
 
 def _claude_bordered_compose(screen):
@@ -794,7 +794,9 @@ def _claude_bordered_compose(screen):
     # Measured on Claude48 at 55 columns: the git branch ends in an ellipsis
     # before its closing parenthesis. Accept only at the physical row end,
     # below matching complete composer borders and above the remaining footer.
-    cwd_at_line_end = rf"(?:{cwd_field}|[\w./~+\-]+\s+git:\([^()\n│…]+…)"
+    # Claude also uses ASCII "..." for clipping (2026-10-12). The fullmatch
+    # applies to a physical footer row, never to text inside the composer.
+    cwd_at_line_end = rf"(?:{cwd_field}|[\w./~+\-]+\s+git:\([^()\n│…]+(?:…|\.{{3}}))"
     cwd_ends_row = len(fields) == 2
     footer_start = 1
     # Measured 2026-10-10 (surface:4546): model-only row, then either one

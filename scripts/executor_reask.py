@@ -491,10 +491,61 @@ def _held(bridge, supervisor, asks, caller='', *, provider=None):
     return None, screen
 
 
+def detach_unrelated_pending(state, pending):
+    """Preserve a prior task/recipient attempt without locking a new inquiry.
+
+    Read the original exclusive request, not a screen claim or an inferred ACK.
+    A controller change alone is insufficient. Same-task uncertainty remains held.
+    Nothing here reconciles, sends, or changes the original request/journal.
+    """
+    caller = state['caller_surface_uuid']
+    marker = pending.get('marker')
+    if not isinstance(marker, str) or not marker:
+        return False
+    record = ready.read_json(ready.requests_dir() / (ready.request_key(caller, marker) + '.json'))
+    if not isinstance(record, dict) or not record.get('target_surface'):
+        return False
+    try:
+        original = ready._original_request(caller, record['target_surface'], marker)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if original != record or not isinstance(original.get('task_id'), str):
+        return False
+    if (original['target_surface'] == state['supervisor']
+            and original['task_id'] == state.get('task_id', '')):
+        return False
+    evidence = dict(schema='unrelated-pending-preserved-v1',
+                    original_pending=pending, original_request=original,
+                    original_status_preserved=True, input_operations=0)
+    raw = json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode()
+    if len(raw) > ready.MAX_JSON_BYTES:
+        raise ValueError('pending archive exceeds bounded state limit')
+    path = root() / 'preserved-pending' / ready.digest(caller) / (hashlib.sha256(raw).hexdigest() + '.json')
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        if ready.read_json(path) != evidence:
+            raise ValueError('preserved pending archive changed')
+    else:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+    # Archive durable before releasing the *new episode's* transport slot.
+    state['preserved_pending'] = dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest(),
+                                      marker=marker, reason='DIFFERENT_TASK_OR_SUPERVISOR')
+    state['terminal_pending'] = None
+    save(state)
+    return True
+
+
 def default_send(state, marker, text):
     """一次 journaled 发送；结果按 executor_ready 原样保留，不重试。"""
     bridge = ready._bridge()
     pending = state.get('terminal_pending') or {}
+    if pending.get('marker') != marker and detach_unrelated_pending(state, pending):
+        pending = {}
     if pending.get('marker') and pending['marker'] != marker:
         # An uncertain original attempt stays pinned even when the short history
         # rolls over. Reconciliation is read-only; no repaste or recovery key.

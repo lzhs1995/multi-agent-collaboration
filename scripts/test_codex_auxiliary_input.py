@@ -402,6 +402,48 @@ class ExecutorReaskCodexRouteTests(OfflineRouteCase):
         self.assertEqual(len(self.rpc.mutations), 1)
         self.fixture.rpc.assert_not_called()
 
+    def test_unrelated_legacy_pending_preserved_without_blocking_new_task(self):
+        for old_supervisor, old_task in ((TARGET, 'earlier-task'), ('other-supervisor', 'offline-task')):
+            with self.subTest(supervisor=old_supervisor, task=old_task):
+                marker = 'legacy-' + old_supervisor + old_task
+                path, original = ready.write_record(CALLER, marker, 'STATUS: ' + marker,
+                                                     old_supervisor, old_task, 'old-episode')
+                original_bytes = path.read_bytes()
+                pending = dict(marker=marker, outcome='UNCONFIRMED_DO_NOT_RESEND', terminal=True)
+                state = reask.load(CALLER)
+                state['terminal_pending'] = pending.copy()
+                reask.save(state)
+                mutations_before = len(self.rpc.mutations)
+                state = self.tick(1100.0 + len(self.rpc.mutations) * reask.INTERVAL)
+                self.assertTrue(state['asks'][-1]['native_received'])
+                self.assertEqual(len(self.rpc.mutations), mutations_before + 1)
+                self.assertIsNone(state['terminal_pending'])
+                archive = read_json(Path(state['preserved_pending']['path']))
+                self.assertEqual(archive['original_pending'], pending)
+                self.assertEqual(archive['original_request'], original)
+                self.assertEqual(path.read_bytes(), original_bytes)
+
+    def test_same_task_legacy_pending_still_requires_original_controller(self):
+        marker = 'legacy-same-task'
+        ready.write_record(CALLER, marker, 'STATUS: ' + marker, TARGET, 'offline-task', 'old-episode')
+        state = reask.load(CALLER)
+        pending = dict(marker=marker, outcome='UNKNOWN', terminal=True)
+        state['terminal_pending'] = pending.copy()
+        reask.save(state)
+        state = self.tick()
+        self.assertEqual(state['asks'][-1]['outcome'], 'SKIPPED_ORIGINAL_CONTROLLER_REQUIRED')
+        self.assertEqual(state['terminal_pending'], pending)
+        self.assertEqual(self.rpc.mutations, [])
+
+    def test_missing_original_request_cannot_detach_pending(self):
+        state = reask.load(CALLER)
+        pending = dict(marker='missing-original', outcome='UNKNOWN', terminal=True)
+        state['terminal_pending'] = pending.copy()
+        reask.save(state)
+        state = self.tick()
+        self.assertEqual(state['terminal_pending'], pending)
+        self.assertEqual(self.rpc.mutations, [])
+
     def test_held_native_only_ask_reconciles_late_receipt_without_rpc(self):
         self.rpc.receive = False
         ask = self.assert_native_ask(self.tick(), confirmed=False)
