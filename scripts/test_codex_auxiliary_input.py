@@ -112,6 +112,7 @@ class SuccessorCodexRouteTests(OfflineRouteCase):
                     caller_workspace_uuid=CALLER_WORKSPACE, caller_pane_uuid=CALLER_PANE,
                     target_surface_uuid=TARGET, target_workspace_uuid=WORKSPACE,
                     target_pane_uuid=TARGET_PANE)
+        self.pair = pair
         self.fixture.stack.enter_context(patch.object(
             bridge, "pin_successor_pair", side_effect=lambda *a, **kw: copy.deepcopy(pair)))
         self.marker = "SUCCESSOR_CODEX_OFFLINE_AUX"
@@ -167,6 +168,35 @@ class SuccessorCodexRouteTests(OfflineRouteCase):
         self.rpc.active = False
         self.assert_native_result(self.submit(), confirmed=True)
         self.assert_exact_input("turn/start", self.text)
+
+    def native_only(self):
+        fields = dict(transport=rebind.CODEX_SAME_PANE, caller_thread_id=CALLER,
+                      target_thread_id=self.fixture.session_id)
+        self.artifact.update(fields)
+        path = Path(self.artifact['authorization_record']['path'])
+        auth = read_json(path)
+        auth.update(fields)
+        path.write_text(json.dumps(auth))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.artifact.update(authorization_record={'path': str(path), 'sha256': digest},
+                             authorization_record_sha256=digest)
+
+    def test_native_only_authorization_keeps_one_steer_and_original_receipt(self):
+        self.native_only()
+        self.assert_native_result(self.submit(), confirmed=True)
+        self.assert_exact_input('turn/steer', self.text)
+        self.forbid_further_rpc()
+        self.assertEqual(self.submit()['input_operations'], 0)
+
+    def test_native_only_rejects_claude_and_different_thread_before_input(self):
+        self.native_only()
+        for provider, session in [('claude', self.fixture.session_id), ('codex', CALLER)]:
+            with patch.object(successor.native, '_provider', return_value=provider), \
+                 patch.object(successor.native, '_live_session', return_value=session):
+                with self.assertRaisesRegex(Exception, 'CODEX_THREAD_REQUIRED'):
+                    self.submit()
+        self.assertEqual(self.rpc.mutations, [])
+        self.assertFalse((self.journal() / 'attempt.json').exists())
 
     def test_legacy_tab_argument_cannot_select_terminal_input(self):
         self.assert_native_result(self.submit(key="tab"), confirmed=True)

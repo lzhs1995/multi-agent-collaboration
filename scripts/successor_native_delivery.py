@@ -61,6 +61,7 @@ def bind_target(bridge, artifact, text):
     process = native._target_process(row)
     provider = native._provider(process)
     session = native._live_session(process, provider)
+    _require_native_transport(artifact, provider, session)
     path = native._transcript_path(provider, session)
     binding = {
         "schema": SCHEMA,
@@ -86,6 +87,13 @@ def bind_target(bridge, artifact, text):
     return binding
 
 
+def _require_native_transport(artifact, provider, session):
+    if artifact.get("transport") == successor_rebind.CODEX_SAME_PANE:
+        if (provider != "codex" or str(session).lower() != artifact["target_thread_id"].lower()
+                or str(session).lower() == artifact["caller_thread_id"].lower()):
+            raise native.NativeDeliveryError("NATIVE_SAME_PANE_CODEX_THREAD_REQUIRED: zero terminal input")
+
+
 def _legacy_binding(binding):
     """Use the existing strict record matcher for the target transcript only."""
     result = dict(binding, schema="native-delivery-v1")
@@ -105,6 +113,7 @@ def require_bound(bridge, artifact, binding, text):
             or binding.get("binding_mode") != artifact.get("binding_mode")):
         raise native.NativeDeliveryError("NATIVE_SUCCESSOR_AUTHORIZATION_CHANGED")
     native._validate_binding(_legacy_binding(binding), text)
+    _require_native_transport(artifact, binding.get("provider"), binding.get("session_id"))
     pair = bridge.pin_successor_pair(artifact)
     identity = binding.get("identity", {})
     expected = {

@@ -182,6 +182,9 @@ def pin_successor_pair(artifact, *, expected_caller=None, expected_target=None):
 
 def _run_successor(*args, artifact, check=True, capture=True):
     """Run only explicit target RPCs under a successor pair proof."""
+    from successor_rebind import CODEX_SAME_PANE
+    if artifact.get("transport") == CODEX_SAME_PANE:
+        raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: native-only authorization forbids terminal input")
     args = list(args)
     proof = pin_successor_pair(artifact)
     if args[:2] == ["rpc", "terminal.paste"]:

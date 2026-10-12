@@ -266,3 +266,35 @@ idle Stop 只持久化一次状态并允许结束；未求派不能拦截 Stop�
 只归档真实episode转换，保留UNKNOWN及原pending。安装、登记、实际执行、
 hook提示和主管正文读取分别验收；该调度不能唤醒空闲模型。主管按原模板回
 mailbox，再核新派单边界；不重复已接受callback，不重开科研审轮。
+
+### 同一 pane 的原生 Codex 维护通信
+
+0.4.28 的 `successor-rebind-v2` 可显式固定 `transport=codex_native_same_pane_v1`。
+授权记录与 artifact 必须同时绑定不同的 `caller_thread_id`、`target_thread_id`，
+以及双方 workspace/surface/pane UUID。只允许同工作区同 pane 的两个不同 surface。
+调用者必须通过当前原生 foreground 线程认证，接收者必须仍是指定 Codex 进程和线程。
+随后沿已认证 control socket 单次 steer/start，保留原 EOF/NATIVE_INPUT_INTENT；
+接收不确定只观察原次。此授权拒绝全部终端 paste/send/key，也不放宽普通侧窗格规则。
+旧 controller、回调与 UNKNOWN 不迁移。安装、自动 hook 与真实原生收发另行验收。
+
+### 继任握手的时间与证据
+
+- 对既有 Claude 明确指定 `--executor claude`；默认 provider 不能代替已核实的进程类型。
+- 先在原绑定 mailbox 回应继任身份、用户授权与下一步，让已授权等待正常返回；
+  到安全边界再做一次正式 preflight。不用新 nonce 重放旧通知。
+- 同工作区发送与取相同锁的 reconcile 串行；只读不代表不占发送锁。
+- 迟到 ACK 先查原 receipt。已有 receipt 时复用原 provider/task/nonce 严格解析，
+  保留旧超时证据并重算 validation；不重复 submit，也不删除 receipt 规避拒绝。
+- 分别记录原生收到、执行者真实 ACK、主管观测和解析时间。主管晚核收的时间
+  属于主管延迟，不能记成 Claude/API 故障。ACKED 与旧 timeout 字段可同时作为历史
+  证据保留；当前决策以真实 ACK 与 validation 为准。
+- ARMED 表示任务登记。当前 advisory hook 放行普通工具与 Stop，业务接受仍需
+  显式独立审阅；不能再宣称 Stop 会阻断等待共识。
+
+### 空间不足时保持推进
+
+遵守用户最新的磁盘下限；本次明确要求至少20GB时，不沿用历史10GB底线。
+安装预算须另加源码、临时文件与回滚预留。低于下限主动沿已有串行百度 consumer
+备份终态缓存，回下载核整包SHA及全部成员后才按原权限释放；核实际卷free变化。
+不因磁盘不足结束总任务，继续源码、文档和独立核验。保留原件、活动数据库、
+原会话、失败证据和系统swap，不启动第二consumer，不降低既有传输门槛。

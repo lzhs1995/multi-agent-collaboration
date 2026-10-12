@@ -7,6 +7,7 @@ from pathlib import Path
 
 import successor_rebind as s
 import cmux_bridge as bridge
+import cmux_workspace_guard as guard
 
 
 OLD_WS = "C72EE6C7-6338-4328-9EA7-6F81C3E5305D"
@@ -218,6 +219,58 @@ class MaintenanceRebindTests(unittest.TestCase):
     def test_append_preserves_v2_schema(self):
         output = Path(self.temp.name) / "record.json"
         self.assertEqual(s.append_record(output, self.artifact)["schema"], s.SCHEMA_V2)
+
+
+class NativeSamePaneTests(MaintenanceRebindTests):
+    def same_pane(self, *, native=True):
+        self.artifact = maintenance_artifact(self.temp.name, workspace=NEW_WS)
+        self.artifact['target_pane_uuid'] = CALLER_PANE
+        target = self.tree['windows'][0]['workspaces'].pop(0)['panes'][0]['surfaces'][0]
+        self.tree['windows'][0]['workspaces'][0]['panes'][0]['surfaces'].append(target)
+        path = Path(self.artifact['authorization_record']['path'])
+        auth = json.loads(path.read_text())
+        auth['target_pane_uuid'] = CALLER_PANE
+        if native:
+            fields = dict(transport=s.CODEX_SAME_PANE, caller_thread_id=OLD_SUP,
+                          target_thread_id=OLD_WS)
+            self.artifact.update(fields)
+            auth.update(fields)
+        path.write_text(json.dumps(auth))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.artifact.update(authorization_record={'path': str(path), 'sha256': digest},
+                             authorization_record_sha256=digest)
+
+    def test_same_pane_requires_explicit_native_authorization(self):
+        self.same_pane(native=False)
+        with self.assertRaisesRegex(s.SuccessorRebindError, 'distinct terminals'):
+            s.resolve_pair(self.identity, self.tree, self.artifact)
+
+    def test_same_pane_native_pair_with_original_threads(self):
+        self.same_pane()
+        self.assertEqual(s.resolve_pair(self.identity, self.tree, self.artifact)['target']['pane_uuid'], CALLER_PANE)
+        for changes in ({'transport': 'terminal'}, {'caller_thread_id': TARGET},
+                        {'target_thread_id': OLD_SUP}):
+            with self.assertRaises(s.SuccessorRebindError):
+                s.resolve_pair(self.identity, self.tree, dict(self.artifact, **changes))
+
+    def test_native_authorization_never_allows_terminal_paste_or_keys(self):
+        self.same_pane()
+        with patch.object(bridge.subprocess, 'run') as run:
+            for args in [('rpc', 'terminal.paste', '{}'), ('send', '--surface', TARGET, 'hello'),
+                         ('send-key', '--surface', TARGET, 'enter')]:
+                with self.assertRaisesRegex(Exception, 'forbids terminal input'):
+                    bridge._run_successor(*args, artifact=self.artifact)
+            run.assert_not_called()
+
+    def test_actual_caller_foreground_thread_required(self):
+        self.same_pane()
+        for proof in (None, {'session': OLD_SUP}, {'foreground': {'thread_id': TARGET}}):
+            with patch.object(guard, 'caller_snapshot', return_value=(self.identity, self.tree, {}, proof)):
+                with self.assertRaisesRegex(Exception, 'foreground thread'):
+                    guard.require_successor_pair(self.artifact)
+        with patch.object(guard, 'caller_snapshot', return_value=(self.identity, self.tree, {},
+                          {'foreground': {'thread_id': OLD_SUP}})):
+            self.assertEqual(guard.require_successor_pair(self.artifact)['target_surface_uuid'], TARGET)
 
 
 if __name__ == "__main__":

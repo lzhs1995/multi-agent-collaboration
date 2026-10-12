@@ -1,5 +1,8 @@
 ## 0.4.28 — Explicit continuing file inquiries
 
+- Add explicitly authorized same-pane Codex native maintenance input with distinct pinned threads; terminal routes remain refused.
+- Correct ARMED advisory wording and document successor latency attribution, original late-ACK reconciliation, and proactive disk recovery.
+
 - Preserve explicitly authorized overall-task inquiries across WAITING replies and child-task closeout; default one-episode behavior remains unchanged.
 - Require exact full-reply consumption with durable observed/consumed timestamps; pause on formal task reservation and resume on its release.
 - Keep UNKNOWN input attempts, controller pins and nonblocking hooks; revoke on stop, expiry or changed authorization.

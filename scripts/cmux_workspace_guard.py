@@ -187,9 +187,13 @@ def require_successor_pair(artifact, *, expected_caller=None, expected_target=No
     remains unchanged and continues to reject every ordinary cross-workspace
     operation.
     """
-    from successor_rebind import resolve_pair
+    from successor_rebind import CODEX_SAME_PANE, resolve_pair
     identity, tree, env, _proof = caller_snapshot()
     pair = resolve_pair(identity, tree, artifact, env=env)
+    if artifact.get("transport") == CODEX_SAME_PANE:
+        thread = (_proof or {}).get("foreground", {}).get("thread_id")
+        if not thread or uuid_value(thread) != uuid_value(artifact["caller_thread_id"]):
+            deny("native same-pane caller foreground thread is not authenticated")
     if expected_caller and uuid_value(expected_caller) != pair["caller"]["surface_uuid"]:
         deny("successor caller expectation changed")
     if expected_target and uuid_value(expected_target) != pair["target"]["surface_uuid"]:

@@ -962,7 +962,7 @@ def cmd_identity_gate(args):
         native_participants=native_participants,
     )
     _ok(f"identity-gate PASS  supervisor={supervisor_ref}  executor(s)={','.join(executor_refs)}")
-    _info("task ARMED — Stop guard will require consensus evidence before turn-end")
+    _info("task ARMED — advisory hooks observe progress; acceptance requires explicit evidence review")
     if args.json:
         print(json.dumps(gate, indent=2))
 

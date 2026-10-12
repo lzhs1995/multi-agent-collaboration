@@ -70,8 +70,9 @@ its context. Resume collaboration at a safe boundary when it responds.
   one-time authorization supported by the panel guard.
 - Discover the caller workspace with the installed `cmux-agent self` before selecting
   peers. Bind UUIDs and current role-map evidence, not remembered surface numbers,
-  titles, or another workspace's focused panel. Existing peers must be visible
-  terminal side splits. A new peer requires explicit authorization plus both
+  titles, or another workspace's focused panel. Claude terminal peers must be visible
+  side splits. The explicitly authorized same-pane Codex native route is separate.
+  A new peer requires explicit authorization plus both
   `--spawn --spawn-authorized`; never create an agent tab as a shortcut.
 - The supervisor owns scope, authorization, final acceptance and evidence review.
   The executor owns the scoped implementation and its truthful result. An ACK
@@ -408,3 +409,6 @@ ANSWERED remains unconsumed; only the authenticated original executor's
 `consume --reply-sha256` records consumption and rearms the same authorization.
 Formal task reservations pause requests; their release resumes authorized work.
 Stop, expiry and revocation end it. Defaults and old controllers remain unchanged.
+
+同pane原生Codex的显式线程授权、继任迟到ACK核收与20GB主动空间管理，见
+[协作效率与收尾](references/efficiency-and-closeout.md)。普通终端侧窗格门禁保持。

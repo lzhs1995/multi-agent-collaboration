@@ -21,6 +21,7 @@ SCHEMA = "successor-rebind-v1"
 MODE = "successor_cross_workspace_v1"
 SCHEMA_V2 = "successor-rebind-v2"
 MODE_V2 = "user_authorized_maintenance_v2"
+CODEX_SAME_PANE = "codex_native_same_pane_v1"
 PAIR_FIELDS = ("successor_surface_uuid", "successor_workspace_uuid", "successor_pane_uuid",
                "target_executor_uuid", "target_workspace_uuid", "target_pane_uuid")
 
@@ -179,6 +180,15 @@ def _validate_v2(artifact, *, now=None, consume=False):
     for field in PAIR_FIELDS:
         if _uuid(auth.get(field), "authorization." + field) != _uuid(artifact[field], field):
             _deny("authorization pair mismatch: " + field)
+    transport = artifact.get("transport")
+    if transport is not None or auth.get("transport") is not None:
+        if transport != CODEX_SAME_PANE or auth.get("transport") != transport:
+            _deny("unsupported or unpinned transport")
+        for field in ("caller_thread_id", "target_thread_id"):
+            if _uuid(auth.get(field), "authorization." + field) != _uuid(artifact.get(field), field):
+                _deny("authorization thread mismatch: " + field)
+        if _uuid(artifact["caller_thread_id"], "caller_thread_id") == _uuid(artifact["target_thread_id"], "target_thread_id"):
+            _deny("native caller and target threads must differ")
     if _uuid(artifact["successor_surface_uuid"], "successor_surface_uuid") == _uuid(artifact["target_executor_uuid"], "target_executor_uuid"):
         _deny("caller and target must be distinct terminals")
     result = dict(artifact, authorization_record_sha256=auth_sha)
@@ -239,7 +249,12 @@ def resolve_pair(identity, tree, artifact, *, env=None, now=None):
         _deny("target pane drift")
     if artifact["schema"] == SCHEMA and me["workspace_uuid"] == target["workspace_uuid"]:
         _deny("successor route must be explicitly cross-workspace")
-    if me["pane_uuid"] == target["pane_uuid"] or me["surface_uuid"] == target["surface_uuid"]:
+    native_same_pane = (artifact["schema"] == SCHEMA_V2
+                        and artifact.get("transport") == CODEX_SAME_PANE)
+    if native_same_pane and (me["workspace_uuid"] != target["workspace_uuid"]
+                             or me["pane_uuid"] != target["pane_uuid"]):
+        _deny("native same-pane transport requires the pinned shared pane")
+    if me["surface_uuid"] == target["surface_uuid"] or (me["pane_uuid"] == target["pane_uuid"] and not native_same_pane):
         _deny("caller and target must be distinct terminals")
     env = env or {}
     if env.get("CMUX_SURFACE_ID") and _uuid(env["CMUX_SURFACE_ID"], "CMUX_SURFACE_ID") != me["surface_uuid"]:
