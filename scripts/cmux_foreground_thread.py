@@ -35,7 +35,9 @@ def read(client):
     """None means legacy absent; an observed null thread means cleared selection.
 
     A required/missing, malformed or changing record is an error, never an argv
-    fallback. The caller authenticates process/ancestry and repeats this read.
+    fallback. A verified optional record predating this process belongs to an
+    earlier PID incarnation, unless this incarnation already had a selection.
+    The caller authenticates process/ancestry and repeats this read.
     """
     argv, env = client['argv'], client['env']
     if len(argv) > 1 and argv[1] == 'app-server':
@@ -63,9 +65,6 @@ def read(client):
         if required or key in _seen:
             raise ValueError('required foreground selection missing')
         return None
-    if len(_seen) >= 4096 and key not in _seen:
-        raise ValueError('foreground identity capacity exceeded')
-    _seen.add(key)
     hs, ds = home.lstat(), directory.lstat()
     if (not stat.S_ISDIR(hs.st_mode) or not stat.S_ISDIR(ds.st_mode)
             or hs.st_uid != os.getuid() or ds.st_uid != os.getuid()
@@ -87,7 +86,7 @@ def read(client):
         raise ValueError('invalid foreground client epoch')
     stamp = data.get('published_at_ms')
     birth_ms = client['birth'][0] * 1000 + client['birth'][1] / 1000
-    if type(stamp) is not int or stamp < birth_ms or stamp > time.time() * 1000 + 1000:
+    if type(stamp) is not int or stamp > time.time() * 1000 + 1000:
         raise ValueError('foreground selection predates process or is in the future')
     thread = data['thread_id']
     if thread is not None and (not isinstance(thread, str) or str(uuid.UUID(thread)) != thread):
@@ -97,5 +96,16 @@ def read(client):
             or _read(marker, 27) != (marker_raw, marker_signature)
             or _read(path, 4096) != (raw, signature)):
         raise ValueError('foreground source changed')
+    if stamp < birth_ms:
+        if required or key in _seen:
+            raise ValueError('foreground selection predates process or is in the future')
+        # The filename contains only the PID. A new legacy client can reuse it
+        # without publishing an observer record. Discard only this fully checked
+        # old selection, never its errors, and do not mark the new client seen.
+        # Exact resume argv and all kernel/TTY/UUID checks remain the caller's job.
+        return None
+    if len(_seen) >= 4096 and key not in _seen:
+        raise ValueError('foreground identity capacity exceeded')
+    _seen.add(key)
     return {'thread_id': thread, 'client_epoch': epoch, 'published_at_ms': stamp,
             'path': str(path), 'signature': signature, 'marker_signature': marker_signature}

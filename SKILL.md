@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-Version 0.4.29 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.30 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -48,6 +48,15 @@ current-session identity verdict. Never require an old `codex resume` command.
 The native resolver supports tools executed directly by the managed daemon after
 shell exec optimization; no incidental shell or proxy ancestor is required. It
 checks the tool's actual kernel identity and current native foreground selection.
+
+An unrelated legacy client can reuse a PID that still has an older optional
+foreground file. Version 0.4.30 treats that file as absent only after validating
+its ownership, schema and stable reread, when it predates this process's birth
+and this process has never had a verified selection. It never adopts the old
+thread. Required observers, a lost current selection, malformed records and
+ambiguous live clients still fail authentication. Preserve the file and process
+identity; do not rewrite them to make discovery pass. See
+[caller identity](references/shared-daemon-caller.md#reused-pids-and-optional-foreground-files).
 
 Any successor supervisor authorized by the user may contact the specified existing
 executor, including across workspaces. For such communication use

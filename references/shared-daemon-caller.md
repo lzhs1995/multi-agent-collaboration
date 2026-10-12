@@ -82,6 +82,28 @@ leaves without requesting reload and observing a new fixture is distinct from
 proving adoption by existing threads. Per-slot generated hook commands need their
 own freshly computed identities; a copied trust hash is not sufficient.
 
+## Reused PIDs and optional foreground files
+
+The foreground filename contains the PID, while the authenticated process
+identity includes its kernel birth time. A legacy client can reuse a terminated
+client's PID without publishing a foreground record. Its predecessor's optional
+record must not invalidate a different live caller during the client inventory.
+
+From 0.4.30, first validate the original record's directory and file ownership,
+permissions, schema, PID, epoch and thread UUIDs, marker, and unchanged second
+read. Only an optional record published before this process's birth, with no
+previously verified selection for this exact PID/birth, returns legacy absence.
+It does not add that process to the seen set or alter the original record.
+Native selection can then use only an exact current resume argument under the
+existing unique-client and kernel/TTY/UUID checks; it never uses the old thread.
+
+A required observer, a previously verified current process losing its selection,
+an invalid or future timestamp, malformed content, changed file, or ambiguous
+live client remains an error. This exception does not make arbitrary unresolvable
+clients valid and does not authorize terminal input. Publish it in the complete
+shared release so tools, hooks and native binding use the same resolver. Record
+source tests, installed caller proof and actual client hook execution separately.
+
 ## Recycled TTY names are not caller identity
 
 Resolve the active native client first, then join its kernel-read
