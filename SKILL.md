@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.26 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.27 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -23,9 +23,13 @@ does not prove reception. An uncertain result permits only original-record
 observation, never a retry or queue fallback. Historical attempts stay with their
 original controller and must not be replayed through this new transport.
 
-The supervisor PostToolUse observer exposes authenticated, deduplicated file
-requests as supported client context. It never sends, accepts work or forces a
-turn. It runs only at tool boundaries and cannot wake a truly idle supervisor.
+The supervisor PostToolUse observer exposes at most eight authenticated file
+requests per tool event, rotates fairly and reminds again after at least 60
+seconds while unanswered. It commits its cursor only after successful output
+flush. The authenticated foreground thread is preserved; actual child identity
+is not replaced by an inherited root selector. A child cannot consume its
+parent's inbox. Discovery never sends, accepts work or forces a turn, and cannot
+wake a truly idle supervisor.
 A measured ellipsis-clipped git branch is accepted only at the physical end of
 a footer row below matching complete composer borders; real drafts stay protected.
 
@@ -212,7 +216,13 @@ An explicitly authorized `executor_reask.py run` checks every five seconds,
 issues a new marker no more often than every 60 seconds, with a polling budget
 of at most 540 seconds per invocation. Synchronous I/O can extend wall time.
 After the command returns, its durable episode may remain WAITING_REPLY;
-that state does not prove a runner is active. Current advisory hooks do not refresh the
+that state does not prove a runner is active. Version 0.4.27 also provides a
+separate launchd file scheduler. Explicit authenticated `executor_reask start`
+enrolls the current task/purpose/workspace/controller; merely installing the job
+does not enroll anyone. Each 60-second sweep updates files only, with a
+256-enrollment cap and a 10-second budget. It never sends or observes transport,
+reads transcripts, wakes a model or migrates old episodes. Verify enrollment,
+actual sweep execution and supervisor exposure separately. Current advisory hooks do not refresh the
 legacy idle binding needed by AUTHENTICATED_NEW_DISPATCH. Use a bound supervisor
 reply to end the wait; never restart the episode to evade an old pending send.
 CCC waits have a deadline; native Goal behavior requires separate evidence.

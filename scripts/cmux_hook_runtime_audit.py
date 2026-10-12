@@ -53,6 +53,8 @@ def record(payload, scope_status, *, original_hook=None, mode=None):
         if mode is not None and mode != ('advisory' if advisory else 'legacy-gate'):
             return
         session = str(uuid.UUID(payload.get('session_id') or payload.get('sessionId')))
+        import cmux_hook_thread
+        thread = cmux_hook_thread.describe(payload)
         event = payload.get('hook_event_name')
         if not hook or event not in {'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop'}:
             return
@@ -69,8 +71,11 @@ def record(payload, scope_status, *, original_hook=None, mode=None):
                        mode='advisory' if advisory else 'legacy-gate',
                        native_receipt=False,
                        scope_status=scope_status, pid=os.getpid(), ppid=os.getppid(),
-                       time_ns=time.time_ns(), parents=_parent_chain())
-        target = root / (session + '.' + event + '.' + hook + '.json')
+                       time_ns=time.time_ns(), parents=_parent_chain(), **thread)
+        actual = thread.get('actual_thread_id')
+        key = actual if actual and thread['thread_scope'] != 'UNVERIFIED' else (
+            session + '.unverified-' + thread.get('unverified_key', 'no-transcript'))
+        target = root / (key + '.' + event + '.' + hook + '.json')
         fd, temporary = tempfile.mkstemp(prefix='.adoption-', dir=root)
         with os.fdopen(fd, 'w') as stream:
             json.dump(receipt, stream, sort_keys=True)

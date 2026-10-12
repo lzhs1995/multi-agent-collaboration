@@ -74,8 +74,9 @@ uninspected roots or a client started with settings sources disabled.
 ## Explicitly authorized 60-second inquiries
 
 The default `executor_ready.py persist` observes one request for a finite budget.
-Only an explicitly authorized `executor_reask.py` episode issues a new inquiry
-every 60 seconds while its explicit runner is executing. A call polls every five
+Only an explicitly authorized `executor_reask.py` episode issues new inquiries.
+Its explicit runner checks the same episode and issues at most one new marker
+every 60 seconds while executing. A call polls every five
 seconds with a polling budget of at most 540 seconds; synchronous I/O can extend
 wall time. The durable episode may still be waiting after the command returns.
 Resume that same episode explicitly when needed, never reset its
@@ -103,9 +104,13 @@ entry. Track checks, attempts, successful file writes, actual pastes and exact
 native receipts separately. Empty/failed channels are visible. A file write does
 not prove the supervisor read it. The supervisor explicitly consumes the bounded
 inbox at task/tool boundaries, verifying request paths, body hashes, reply
-mailboxes and issued templates. From 0.4.26, the registered supervisor PostToolUse
-observer authenticates the current supervisor and offers bounded, deduplicated
-file-request context. It uses the supported hookSpecificOutput/additionalContext
+mailboxes and issued templates. From 0.4.27, the registered supervisor PostToolUse
+observer authenticates the actual current hook thread and offers at most eight
+file requests per event, with fair rotation and reminders after at least 60
+seconds while unanswered. It commits discovery cursors only after a successful
+output flush. Preserve authenticated foreground.thread_id; record actual,
+inherited and parent ids separately. A child cannot use an inherited root id to
+consume its parent's inbox. It uses the supported hookSpecificOutput/additionalContext
 envelope, does not invoke the old checker and exits zero on all failures. It
 does not reply, send terminal input, reconcile old attempts or accept work.
 Telemetry failure cannot suppress this separate discovery attempt. A supervisor
@@ -216,3 +221,29 @@ identity, shared-file ownership or business scope. Configuration reloads,
 process/MCP liveness and ConfigChange diagnostics do not establish a handshake
 or adoption; current process/session/transcript checks and native reception
 remain separate required evidence for the communication claim.
+
+## Independent file scheduler (0.4.27)
+
+After installing the complete approved release, review
+`scripts/executor_reask_scheduler.py install-job`, then use `--apply` to register
+`org.multi-agent-collaboration.executor-reask-scheduler`. This is separate from
+the configuration guardian and workflow hooks. Installing it does not enroll
+old episodes or authorize communication. A new explicitly authorized
+`executor_reask.py start` authenticates the live pair and enrolls its exact task,
+purpose, workspace, supervisor, episode, file channels and immutable controller.
+Preserve the original controller of every earlier attempt; do not migrate it.
+
+The launchd job runs at 60-second intervals with a 256-enrollment cap and a
+10-second sweep budget, uses nonblocking registry/episode locks and rotates its
+scan fairly. It only updates file requests and reads their bound file replies.
+It never reads a transcript or legacy idle binding, sends native/terminal input,
+reconciles a pending send, reopens operator stop or supplies a foreground identity.
+Only genuine episode changes are archived; UNKNOWN and terminal_pending are
+preserved. A bound reply ends the episode; a TASK reply still requires a formal pack.
+
+Check `executor-reask-scheduler-v1/STATUS.json` and the exact enrollment's
+last_execution separately from job registration. A file-only inquiry does not
+wake an idle supervisor. Supported PostToolUse context exposes it at a real tool
+boundary, and the supervisor must read the body and reply. Distinguish job
+installation, enrollment, execution, file exposure, body reading, native input
+and business acceptance. Ordinary tools and Stop remain available on every error.

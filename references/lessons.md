@@ -14,7 +14,7 @@
 | A clipped git branch made an empty Claude composer look occupied | Accept the measured ellipsis only at a physical footer row end under matching full borders; preserve real drafts and unknown layouts | test_live_opus_footer.py |
 | File-only inquiries had a writer but no automatic reader | Supervisor PostToolUse authenticates and deduplicates requests independently of telemetry; exact mailbox reply precedes fresh dispatch. No idle-supervisor wakeup or automatic settlement claim | test_workflow_advisory.py, test_supervisor_inbox.py |
 | Guard existed but did not run | Both clients wired; benign execution and negative entrypoint tests | test_install.py, test_r3_hardening.py |
-| File-edit prose was parsed as a shell launch | Check tool identity first; distinguish literal strings in a strict quoted Python stdin heredoc using AST byte offsets. Retain conservative scanning for executable references, aliases, unknown imports, expansion, pipes and adjacent shell commands; cover command/cmd inputs and UTF-8/CRLF in real hook processes | test_cmux_agent_panel_guard.py |
+| File-edit prose was parsed as a shell launch | Check tool identity first; distinguish literal strings in a strict quoted Python stdin heredoc using AST byte offsets. Inspect actual executable arguments, aliases, argv expressions and shell wrappers separately; imports alone do not turn prose into commands. Retain conservative scanning for unresolved executable values, expansion, pipes and adjacent shell commands; cover command/cmd inputs and UTF-8/CRLF in real hook processes | test_cmux_agent_panel_guard.py |
 | Later PASS hid earlier objections | Explicit resolution links; fresh artifact hashes | test_r3_hardening.py |
 | Concurrent evidence heartbeat was lost | Atomic state and concurrency tests | test_heartbeat_concurrency.py |
 
@@ -51,3 +51,25 @@ workflow; do not invent peer review during a SOLO task.
 The detailed incident archive predates this public packaging and contains local
 observations. It is not normative for model choice, input ownership or present
 provider capability. SKILL.md and the tested public defaults take precedence.
+
+## Direct input and durable file reminders
+
+New Codex messages use the authenticated original thread's native steer/start
+route once, with an input intent and fresh journal fence. A queued UI banner or
+successful key is not reception. Never convert an old pending callback into a
+new native send. Reconcile its original evidence without input.
+
+Public identity proof must retain the authenticated foreground thread. Record
+actual, inherited and parent thread identifiers separately: an inherited root
+selector is not a child's identity and must not expose or consume the root inbox.
+Bound file reminders to eight per tool event, rotate fairly, and advance cursors
+only after context is flushed. A failed flush must leave a reminder discoverable.
+
+An authorized 60-second file scheduler needs explicit live-pair enrollment,
+immutable-controller verification, finite capacity and time budgets, and
+nonblocking locks. File-only ticks do not reconcile transport or read transcripts.
+Archive real episode transitions, not every minute; preserve unknown pending
+attempts. Registration, actual execution, hook context and model reading are
+distinct observations. Neither a scheduled file write nor a hook can promise
+to wake an idle model. Regression coverage belongs in test_hook_thread.py,
+test_supervisor_inbox.py, test_executor_reask.py and test_executor_reask_scheduler.py.

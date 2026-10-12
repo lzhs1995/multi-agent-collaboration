@@ -205,37 +205,49 @@ def discover_bound(workspace, caller, state_root=None, payload=None):
 def main():
     payload = {}
     notices, requests = [], []
+    emitted = False
+    def emit(items):
+        nonlocal emitted
+        lines = []
+        if notices:
+            lines.append('REPORT_DISCOVERED: frozen executor reports need supervisor review. '
+                         'This discovery is not native delivery, acceptance or disarm.')
+            for item in notices:
+                lines.append('TASK_ID=' + item['task_id'] + ' REPORT=' + item['report']
+                             + ' ATTEMPT=' + item['attempt'])
+        if items:
+            lines.append(supervisor_inbox.context(items))
+        if lines:
+            print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse',
+                              'additionalContext': '\n'.join(lines)}}, ensure_ascii=False), flush=True)
+            emitted = True
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict) or payload.get('hook_event_name') != 'PostToolUse':
+            return 0
+        facts = supervisor_inbox.thread_scope.describe(payload)
+        if facts['thread_scope'] != 'ROOT_METADATA':
             return 0
         # Resolve once under the existing identity deadline. Two independent
         # scans must not spend two 2.5-second identity budgets in a 5-second hook.
         with hook_identity.evaluation(payload):
             workspace, caller = hook_identity.identity(payload)
+            if not supervisor_inbox.thread_scope.authenticated_root(facts, hook_identity.native_proof()):
+                return 0
             try:
                 notices = discover_bound(workspace, caller, payload=payload)
             except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
                 pass
             try:
-                requests = supervisor_inbox.discover_bound(workspace, caller)
+                requests = supervisor_inbox.discover_bound(
+                    workspace, caller, thread_id=facts['actual_thread_id'], emit=emit)
             except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
                 pass
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError) + hook_identity.ERRORS:
         # 发现失败不阻止主管纠错；也不生成任何已送达或已验收信号。
         pass
-    lines = []
-    if notices:
-        lines = ['REPORT_DISCOVERED: frozen executor reports need supervisor review. '
-                 'This discovery is not native delivery, acceptance or disarm.']
-        for item in notices:
-            lines.append('TASK_ID=' + item['task_id'] + ' REPORT=' + item['report']
-                         + ' ATTEMPT=' + item['attempt'])
-    if requests:
-        lines.append(supervisor_inbox.context(requests))
-    if lines:
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse',
-                          'additionalContext': '\n'.join(lines)}}, ensure_ascii=False))
+    if not emitted and notices:
+        emit([])
     return 0
 
 

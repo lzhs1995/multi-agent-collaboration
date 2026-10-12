@@ -16,6 +16,7 @@ import manage_install as manager
 import executor_ready as ready
 import executor_reask as reask
 import supervisor_inbox as inbox
+from offline_hook_thread_fixture import native_thread
 
 
 class WorkflowAdvisoryTests(unittest.TestCase):
@@ -105,6 +106,8 @@ class SupervisorInboxAdvisoryTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.home = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve()
         self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
+        self.payload, self.proof = native_thread(self.home)
+        self.stack.enter_context(patch.object(inbox.identity, 'native_proof', return_value=self.proof))
         self.stack.enter_context(patch.object(inbox.identity, 'evaluation',
                                               return_value=contextlib.nullcontext()))
         self.identity = self.stack.enter_context(patch.object(
@@ -117,7 +120,7 @@ class SupervisorInboxAdvisoryTests(unittest.TestCase):
         self.assertEqual(result['errors'], [])
 
     def invoke(self, hook='cmux_supervisor_report_guard.py', event='PostToolUse'):
-        payload = dict(hook_event_name=event, tool_name='exec_command')
+        payload = dict(self.payload, hook_event_name=event)
         out, err = io.StringIO(), io.StringIO()
         with patch.object(sys, 'argv', ['advisory', '--hook', hook]), \
                 patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \

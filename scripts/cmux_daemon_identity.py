@@ -442,7 +442,14 @@ def public_proof(proof):
     if proof is None:
         return None
     p = proof['client']
-    return dict(session=proof['session'], pid=p['pid'], birth=p['birth'], tty=p['tty'],
-                executable=p['executable'], surface_uuid=p['env']['CMUX_SURFACE_ID'],
-                daemon_pid=proof['daemon']['pid'],
-                argv_sha256=hashlib.sha256(json.dumps(p['argv']).encode()).hexdigest())
+    public = dict(session=proof['session'], pid=p['pid'], birth=p['birth'], tty=p['tty'],
+                  executable=p['executable'], surface_uuid=p['env']['CMUX_SURFACE_ID'],
+                  daemon_pid=proof['daemon']['pid'],
+                  argv_sha256=hashlib.sha256(json.dumps(p['argv']).encode()).hexdigest())
+    # caller_snapshot has rechecked this selection against the live process.
+    # Root-only hook discovery needs it after projection; do not expose the
+    # full control-socket record, process environment or ancestor chain.
+    selected = proof.get('foreground')
+    if isinstance(selected, dict) and isinstance(selected.get('thread_id'), str):
+        public['foreground'] = {'thread_id': selected['thread_id']}
+    return public

@@ -122,15 +122,19 @@ force授权的虚拟建议场景，只能恢复到实际粘贴前的文本，不
 这不是重跑 preflight 的许可，也不能补造回执使真实 caller 认证失败通过。
 
 prompt 和 callback 均遵循[原生投递与有界等待](verified-compose-delivery.md)：
-输入前固定同一接收进程/session/transcript 和原 PASTE_INTENT 新鲜 EOF fence；
+输入前固定同一接收进程/session/transcript 和新鲜 EOF fence；新 Codex 输入
+持久化 NATIVE_INPUT_INTENT，Claude 终端输入保留 PASTE_INTENT；
 只有边界后新增、全文完全相等的 native user 才为 `NATIVE_RECEIVED`。
 空白和换行不得改写。屏幕、ACK、Enter/Tab、退出码与空 compose 不证明收到；
 Claude `queued_command` 仍 pending。执行、正式 receipt 和业务接受另列。
 
-首次粘贴一次，完整草稿稳定后提交一次。忙碌 Codex 明示
-`tab to queue message` 且原文匹配时直接 Tab；其他清晰受支持状态 Enter。
-原次恢复先核迟到原生记录；自动/显式路径共用一次补键，意图落盘即消耗。
-未知、排队、草稿改变或缺原 binding/fence 不补键，不重贴或追补旧基线。
+新 Codex 消息及 callback 通过原 thread 的认证 control socket 直接输入：
+活动轮只调用一次 turn/steer，空闲原会话只调用一次 turn/start；不读写 composer，
+不粘贴、不按 Enter/Tab、不进入 queued follow-up inputs。异常或未知只观察
+原日志，不重试或降级排队。历史 queued callback 留在原 controller，不能原生重放。
+Claude 首次粘贴一次，完整草稿及结构连续两次稳定后提交一次；历史终端恢复先核
+迟到原生记录，自动/显式路径共用一次补键，意图落盘即消耗。未知、排队、草稿
+改变或缺原 binding/fence 不补键，不重贴或追补旧基线。
 
 executor 完成报告后调用原 callback 入口，由它判断输入条件；
 不得额外等待 supervisor 的 busy=false，也不另建秒级 watcher。
@@ -169,10 +173,10 @@ executor 完成报告后调用原 callback 入口，由它判断输入条件；
 queued、消费和确认仍分别记录。通知未确认不撤销已核收的旧 callback，也不
 重发通知、补 Enter 或重开旧 callback 探针；主管继续独立工作。
 
-收口 hook 约束当前仍 armed 的任务，不是永久停用会话。核实原 marker 已解除后，
-新的用户状态查询或主管通知可按新授权读取指定核收证据、回答当前状态；旧报告
-及原回调仍保持不变。执行者无需主动循环查回执；已有主管通道时不让用户代为
-转话。状态通知的真实消费、后继任务派单与恢复业务分别验收，不能相互替代。
+收口状态只描述原任务的责任与证据，不能封锁 armed 或普通会话的工具及 Stop。
+新的用户查询和已授权主管通知可正常读取核收证据、回答当前状态；旧报告、
+marker 与原回调保持原样。已授权求派使用显式入口或独立登记的文件调度，
+不由 Stop 强迫回合，不让用户代为转话。状态消费、后继派单与恢复业务分别验收。
 
 若正式回执已确认、业务已有裁定且原 marker 已解除，执行者仍在新的回复中
 重复旧 `CALLBACK_UNCONFIRMED`，这是状态叙述未更新，不能写成静屏、当前 hook
@@ -190,11 +194,11 @@ queued、消费和确认仍分别记录。通知未确认不撤销已核收的�
 当前仍有阻塞，不自动发送，也不增加确认门槛；重复调用且 marker 已不存在时
 不生成新同步动作。通知本身不能证明工具恢复或业务验收。
 
-运行约束见[执行者交付后收口](executor-closeout-enforcement.md)。报告及原回调终态
-绑定成立后，PreToolUse 冻结报告/任务包及原记录，保留严格 task-bound
-只读诊断与原 controller reconcile。Stop 接受普通诚实等待说明，返回
-WAITING_SUPERVISOR、continue:false、suppressOutput:true；无证据的
-confirmed/共识声明仍拦。未知回调交主管核原次，不强迫无限重试。
+收尾规则见[执行者交付后收口](executor-closeout-enforcement.md)。报告、任务包和
+原记录按原证据契约保留，由显式诊断及原 controller reconcile 核收。
+全局 PreToolUse/PostToolUse/Stop 使用同版非阻断 observer；不运行旧 gate，
+不返回 deny、block 或 continue:false，不强迫重试。未证实的收到或共识不得
+宣称，但真实性要求不依赖封锁会话。未知回调交原主管核原次。
 
 定点失败、必要增量回归、真实效果、用户验收分别留证。用户已验收的
 局部故障即在账本结案，剩余主线另列；没有新变更或未决风险就不重跑旧矩阵。
@@ -207,7 +211,9 @@ confirmed/共识声明仍拦。未知回调交主管核原次，不强迫无限�
 ## 有界发现报告与等待
 
 主管用 `scripts/cmux_supervisor_report_guard.py` 经认证 active markers 有界发现
-本 workspace 的原冻结报告；发现不等于送达、业务接受或 disarm。封口
+本 workspace 的原冻结报告；该检查器不是已注册的自动 PostToolUse。
+自动 observer 只在实际线程的工具边界提供最多8条文件请求，公平轮转、成功
+flush后提交游标；child不能消费parent收件箱。发现不等于读取、送达、接受或 disarm。封口
 诊断使用 `scripts/cmux_callback_diagnose.py --task-pack <原绝对路径>`，
 不发送输入，不改原证据。正式接口须来自完整相容安装。
 
@@ -251,3 +257,12 @@ idle Stop 只持久化一次状态并允许结束；未求派不能拦截 Stop�
 更新的原生 API 成功、新回合和真人接管优先于历史错误及旧等待。发布验收分别
 记录源码测试、不可变安装、稳定性、自动 hook 和完整原生接收；通过一项不能
 代替其余项。旧 callback 预算已耗尽时保留未确认，不重放、不伪造核收。
+
+## 不让文件求派依赖持续占用回合
+
+0.4.27 的独立 launchd 文件调度按显式认证登记每60秒更新请求，最多256个登记，
+单次sweep最多10秒，忙锁跳过。登记绑定原task/purpose/workspace/controller，
+不迁移旧episode；file-only不读转录或旧idle binding、不调用发送器。
+只归档真实episode转换，保留UNKNOWN及原pending。安装、登记、实际执行、
+hook提示和主管正文读取分别验收；该调度不能唤醒空闲模型。主管按原模板回
+mailbox，再核新派单边界；不重复已接受callback，不重开科研审轮。

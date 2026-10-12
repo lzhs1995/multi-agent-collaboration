@@ -169,11 +169,13 @@ class ReaskNoInputEvidenceTests(OfflineCase):
         return state, ask, attempt
 
     def restore_unresolved_hold(self, state, ask):
-        # Model persisted provisional/older state, with no cached NO_INPUT
-        # verdict. False input flags alone are insufficient to release it.
+        # Model this controller's persisted provisional state, without a
+        # cached NO_INPUT verdict. Keep the authenticated original ownership;
+        # a legacy hold without it must remain unresolved (tested separately).
         state["terminal_pending"] = dict(
             marker=ask["marker"], terminal=True, outcome="INTENT_UNRESOLVED",
-            native_input_intent=False, paste_intent=False, terminal_attempted=False)
+            native_input_intent=False, paste_intent=False, terminal_attempted=False,
+            origin=copy.deepcopy(ask["origin"]))
         reask.save(state)
 
     def assert_fresh_only(self, old, snapshot, state):
@@ -223,6 +225,30 @@ class ReaskNoInputEvidenceTests(OfflineCase):
         snapshot = self.original_snapshot(old)
         self.restore_unresolved_hold(state, old)
         self.assert_fresh_only(old, snapshot, self.tick(1001.0 + reask.INTERVAL))
+
+    def test_legacy_hold_without_controller_cannot_borrow_zero_input_proof(self):
+        state, old, _attempt = self.first_no_input()
+        snapshot = self.original_snapshot(old)
+        self.restore_unresolved_hold(state, old)
+        restored = reask.load(CALLER)
+        restored["terminal_pending"].pop("origin")
+        reask.save(restored)
+        state = self.assert_next_tick_stays_pending(old)
+        self.assertEqual(state["asks"][-1]["outcome"],
+                         "SKIPPED_ORIGINAL_CONTROLLER_REQUIRED")
+        self.assert_original_unchanged(old, snapshot)
+
+    def test_other_controller_cannot_reconcile_or_replay_an_original_hold(self):
+        state, old, _attempt = self.first_no_input()
+        snapshot = self.original_snapshot(old)
+        self.restore_unresolved_hold(state, old)
+        other = copy.deepcopy(reask.controller())
+        other["source"] += "-successor"
+        with patch.object(reask, "controller", return_value=other):
+            state = self.assert_next_tick_stays_pending(old)
+        self.assertEqual(state["asks"][-1]["outcome"],
+                         "SKIPPED_ORIGINAL_CONTROLLER_REQUIRED")
+        self.assert_original_unchanged(old, snapshot)
 
     def test_missing_original_attempt_stays_pending_despite_false_input_flags(self):
         state, old, attempt = self.first_no_input()

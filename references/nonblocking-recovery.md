@@ -42,8 +42,13 @@ Since 0.4.26, supervisor PostToolUse offers authenticated file requests as bound
 deduplicated additionalContext without invoking the old gate. It neither replies
 nor accepts reports and cannot wake a supervisor with no tool event. A reasking
 executor should receive its bound mailbox reply first, then finish its explicit
-wait before fresh preflight/dispatch. Each runner call lasts at most 540 seconds;
-a persisted WAITING_REPLY is not a running process. Keep old pending attempts
+wait before fresh preflight/dispatch. Each runner call has a polling budget of
+at most 540 seconds; synchronous I/O may extend wall time. A persisted
+WAITING_REPLY is not a running process. Version 0.4.27 adds a separate explicitly
+enrolled 60-second file scheduler; job registration does not enroll old episodes.
+It never sends or wakes an idle model. The supervisor's actual thread receives
+at most eight file reminders per tool event, with fair rotation and cursors
+committed after output flush; a child cannot consume the parent's inbox. Keep old pending attempts
 when their original receiver process has exited; do not rebind or replay them.
 
 For new formal tasks, generate `TASK_PACK_V2` with `cmux_bridge.task_pack_notice`

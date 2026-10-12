@@ -1,3 +1,11 @@
+# 0.4.27
+
+- Preserve the authenticated foreground thread in public identity proof. Separate the actual hook thread, inherited selector and verified root/parent relationship; child hooks cannot consume the parent's inbox or acquire its ownership.
+- Bound supervisor file-request context to eight items per tool event, rotate fairly, repeat unanswered reminders after at least 60 seconds, and commit cursors only after successful output flush. Root and child discovery stay separate and all workflow hooks remain nonblocking.
+- Add an independently installed, explicitly enrolled file-only scheduler for authorized inquiries. Its 60-second job has a 256-enrollment cap, a 10-second sweep budget and nonblocking locks; it never sends, reads transcripts, migrates old controllers or wakes an idle model. Preserve pending attempts and unknown state across genuine episode transitions.
+- Fix quoted Python heredoc prose containing subprocess imports and semicolons being misclassified as a Claude launch. Inspect executable arguments separately, including aliases, concatenation and shell wrappers; keep real terminal input guards.
+- Align both skills and global guidance: new Codex input uses the original native thread once, never composer/Enter/Tab/follow-up queues. Keep installation, actual hook execution, file exposure, body reading, native reception and business acceptance separate. Use writable source for tests and support Python 3.10 test contexts.
+
 # 0.4.26
 
 - Send new Codex-bound messages, packs and callbacks directly to the original loaded thread through an authenticated control socket: active-turn steer or idle-turn start. Persist one native intent and fresh EOF fence; require exact new native user evidence. Never operate the composer, use the Tab queue, retry an uncertain request or replay historical callbacks.

@@ -69,12 +69,7 @@ def main() -> int:
             and payload.get('hook_event_name') == 'PostToolUse'):
         try:
             import supervisor_inbox
-            notices = supervisor_inbox.discover(payload)
-            if notices:
-                print(json.dumps({'hookSpecificOutput': {
-                    'hookEventName': 'PostToolUse',
-                    'additionalContext': supervisor_inbox.context(notices),
-                }}, ensure_ascii=False))
+            supervisor_inbox.discover(payload, emit=supervisor_inbox.emit_context)
         except BaseException:
             pass
     return 0

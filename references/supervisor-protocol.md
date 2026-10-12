@@ -145,9 +145,12 @@ verify pinned bodies and issue a reply bound to caller, supervisor, task,
 episode and issued marker. Follow
 [configuration and reasks](configuration-and-reasks.md). Default
 `executor_ready.py persist` observes one episode for at most 300 seconds.
-Only the separately user-authorized `executor_reask.py` runner asks every
-60 seconds during its explicit invocation, with a polling budget of at most
-540 seconds; synchronous I/O may extend wall time. A waiting episode after the
+The separately user-authorized `executor_reask.py` runner asks every 60 seconds
+during its explicit invocation, with a polling budget of at most 540 seconds;
+synchronous I/O may extend wall time. The independent 0.4.27 file scheduler can
+continue authorized, explicitly enrolled requests at 60-second intervals. It
+does not enroll legacy episodes, invoke transport or wake an idle model. Verify
+its actual sweep separately from installation and from reading the request. A waiting episode after the
 command returns does not prove a live runner. Current advisory hooks do not
 refresh the legacy idle binding needed by the authenticated-new-dispatch exit.
 Write the bound issued mailbox reply first, let the explicit wait return, then
@@ -198,3 +201,14 @@ callback and business acceptance separately for each designated pair. Manual
 hook probes and settings counts cannot certify current-client adoption. An
 unverified or API-unavailable peer need not hold every other workspace's formal
 task. Report the exact remaining boundary and resume authorized work.
+
+## Actual hook thread and bounded inbox
+
+Use authenticated foreground identity for root hooks and preserve its thread id
+in public proof. For child hooks, keep actual child, inherited root and verified
+parent identifiers separate; parent association does not grant root ownership
+or permit the child to consume root mail. Each actual supervisor tool event
+exposes at most eight bound file requests, rotates fairly and can repeat an
+unanswered reminder after 60 seconds. Cursor updates follow successful context
+flush. File exposure is not body reading, reply, native reception or acceptance.
+This observer never sends or emits a workflow block.

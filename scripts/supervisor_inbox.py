@@ -6,6 +6,7 @@ One current request and one discovery cursor per caller keep storage bounded.
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -13,11 +14,14 @@ import time
 import uuid
 
 import cmux_hook_identity as identity
+import cmux_hook_thread as thread_scope
 import executor_ready as ready
+import executor_reask as reask
 import executor_reply as replies
 
 MAX_ENTRIES = 256
 MAX_NOTICES = 8
+REMINDER_SECONDS = 60.0
 
 
 def request_bytes(path):
@@ -46,23 +50,56 @@ def _uuid(value):
         return False
 
 
-def discover(payload):
+def discover(payload, *, emit=None):
     if not isinstance(payload, dict) or payload.get('hook_event_name') != 'PostToolUse':
+        return []
+    facts = thread_scope.describe(payload)
+    if facts['thread_scope'] != 'ROOT_METADATA':
         return []
     with identity.evaluation(payload):
         workspace, supervisor = identity.identity(payload)
-        if not _uuid(workspace) or not _uuid(supervisor):
+        if (not _uuid(workspace) or not _uuid(supervisor)
+                or not thread_scope.authenticated_root(facts, identity.native_proof())):
             return []
-        return discover_bound(workspace, supervisor)
+        return discover_bound(workspace, supervisor, thread_id=facts['actual_thread_id'], emit=emit)
 
 
-def discover_bound(workspace, supervisor):
-    if not _uuid(workspace) or not _uuid(supervisor):
+def answered(body, reply_path, scan=None):
+    binding = dict(caller=body['caller_surface_uuid'], supervisor=body['supervisor'],
+                   task_id=body.get('task_id', ''), episode_id=body['episode_id'])
+    if replies.valid(ready.read_json(reply_path), [body['marker']], **binding):
+        return True
+    state = reask.load(body['caller_surface_uuid']) or {}
+    keys = ('caller_surface_uuid', 'supervisor', 'workspace_uuid', 'task_id', 'episode_id')
+    if any(state.get(key) != body.get(key) for key in keys):
+        return False
+    if scan is not None:
+        state['reply_scan_ordinal'] = scan.get('reply_scan_ordinal', 1)
+    direct = reask.mailbox_reply(state)
+    if scan is not None:
+        scan['reply_scan_ordinal'] = state.get('reply_scan_ordinal', 1)
+    if direct:
+        return True
+    # Authenticate older issued markers even after the 20-entry history rolls over.
+    for path in reask._recent_files(ready.mailbox_dir(binding['caller']),
+                                    float(state.get('started_epoch', 0))):
+        reply = ready.read_json(path)
+        if (reply and reask.issued_marker(state, reply.get('marker'))
+                and replies.valid(reply, [reply['marker']], **binding)):
+            return True
+    return False
+
+
+def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None):
+    """Read-only unless an emitter succeeds; commit after flushed context output."""
+    if not _uuid(workspace) or not _uuid(supervisor) or not _uuid(thread_id):
         return []
+    now = time.time() if now is None else now
     inbox = ready.state_root() / 'supervisor-inbox-v1' / ready.digest(supervisor)
     if not inbox.is_dir() or inbox.is_symlink():
         return []
-    cursor = ready.state_root() / 'supervisor-inbox-discovery-v1' / ready.digest(supervisor)
+    cursor = (ready.state_root() / 'supervisor-inbox-discovery-v2'
+              / ready.digest(json.dumps([workspace, supervisor, thread_id])))
     cursor.mkdir(parents=True, exist_ok=True, mode=0o700)
     if cursor.is_symlink():
         return []
@@ -79,8 +116,21 @@ def discover_bound(workspace, supervisor):
                     return []
                 if entry.is_file(follow_symlinks=False) and entry.name.endswith('.json'):
                     paths.append(Path(entry.path))
+        # Use the last successful emission, even when a new marker replaced the
+        # request. Path order starves later callers when tool events are >=60s
+        # apart; a busy caller issuing new markers must not jump the queue.
+        pending = []
+        for path in paths:
+            seen = ready.read_json(cursor / path.name) or {}
+            try:
+                last_emitted = float(seen.get('discovered_epoch', 0))
+            except (ValueError, TypeError, OverflowError):
+                last_emitted = 0.0
+            if not math.isfinite(last_emitted) or last_emitted > now:
+                last_emitted = 0.0
+            pending.append((last_emitted, str(path), path, seen))
         notices = []
-        for path in sorted(paths):
+        for last_emitted, _name, path, seen in sorted(pending, key=lambda item: item[:2]):
             raw, body = request_bytes(path)
             if (not body or body.get('supervisor') != supervisor
                     or body.get('workspace_uuid') != workspace
@@ -101,27 +151,35 @@ def discover_bound(workspace, supervisor):
             reply_path = ready.mailbox_dir(body['caller_surface_uuid']) / (marker + '.json')
             if body.get('reply_mailbox') != str(reply_path):
                 continue
-            if replies.valid(ready.read_json(reply_path), [marker], caller=body['caller_surface_uuid'],
-                             supervisor=supervisor, task_id=body.get('task_id', ''),
-                             episode_id=body['episode_id']):
+            scan = dict(reply_scan_ordinal=seen.get('reply_scan_ordinal', 1))
+            if answered(body, reply_path, scan):
                 continue
-            seen_path = cursor / path.name
-            seen = ready.read_json(seen_path) or {}
             token = ready.digest(json.dumps([marker, body['episode_id'], body.get('task_id', '')]))
-            if seen.get('token') == token:
+            if (seen.get('token') == token
+                    and now - last_emitted < REMINDER_SECONDS):
                 continue
             notice = dict(state='REQUEST_DISCOVERED', request=str(path),
                           request_sha256=hashlib.sha256(raw).hexdigest(), marker=marker,
                           caller_surface_uuid=body['caller_surface_uuid'], supervisor_uuid=supervisor,
                           workspace_uuid=workspace, task_id=body.get('task_id', ''),
                           episode_id=body['episode_id'], reply_mailbox=str(reply_path),
-                          reply_template=template, discovered_epoch=time.time(),
+                          reply_template=template, discovered_epoch=now, actual_thread_id=thread_id,
                           token=token, input_operations=0, native_delivery_confirmed=False)
-            ready.write_json(seen_path, notice)
+            notice.update(scan)
             notices.append(notice)
             if len(notices) >= MAX_NOTICES:
                 break
+        if notices and emit is not None:
+            emit(notices)  # exceptions leave all cursors unchanged; no lost notice
+            for notice in notices:
+                ready.write_json(cursor / Path(notice['request']).name, notice)
         return notices
+
+
+def emit_context(notices):
+    print(json.dumps({'hookSpecificOutput': {
+        'hookEventName': 'PostToolUse', 'additionalContext': context(notices),
+    }}, ensure_ascii=False), flush=True)
 
 
 def context(notices):

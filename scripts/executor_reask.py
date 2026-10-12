@@ -3,14 +3,15 @@
 
 每一轮都是带新 marker 的新请求，从不重贴旧消息：
 - 文件通道：每轮覆盖写 <channel>/EXECUTOR_REASK_<caller8>_CURRENT.json（主管轮内也能读）；
-- 终端通道：仅当主管 composer 为空、且本段没有仍排队/卡在 compose 的旧请求时，
-  才经 executor_ready 的 journaled bridge 发送一次；否则只走文件通道，绝不堵 composer。
+- 显式发送：Codex 经原 thread native steer/start，Claude 经既有保护桥；未知旧次只保全。
+- 持久调度：仅对显式认证登记的时段，每60秒更新文件通道，绝不调用传输或冒用前台身份。
 答复必须精确匹配 caller/supervisor/task/episode/marker；无关 user turn 不算。
 只有绑定答复、已认证的新派发或 operator stop 结束一段；单次 run 的轮询预算最多
 540 秒，同步 I/O 可延长实际耗时。退出时段仍可等待。全局 Stop 仅观察，不启动或强迫循环；新派发出口依赖旧 idle
 binding，而现役观察器不更新它。主管先写原 mailbox 答复，让显式等待返回，再做新鲜派发。
 """
 import argparse
+import copy
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -21,6 +22,7 @@ from pathlib import Path
 import secrets
 import sys
 import time
+import uuid
 
 import executor_ready as ready
 import executor_reply as replies
@@ -116,15 +118,23 @@ def start(caller, supervisor, task_id='', transcript='', channels=None, executor
 def start_locked(caller, supervisor, task_id='', transcript='', channels=None, executor_ref='',
                  now=None, reason='MANUAL', own_prefixes=(), workspace='',
                  purpose='REQUEST_NEXT_TASK', resume_stopped=False):
-    """开一段新的求派；已在等待的同一主管段原样保留（不重置计数/期限）。"""
+    """Only the same complete inquiry binding can reuse a waiting episode."""
     now = time.time() if now is None else now
+    if purpose not in ('REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'):
+        raise ValueError('unknown inquiry purpose')
     old = load(caller)
-    if old and old.get('state') == WAITING and old.get('supervisor') == supervisor:
+    binding = dict(caller_surface_uuid=caller, supervisor=supervisor, task_id=task_id,
+                   workspace_uuid=workspace, purpose=purpose)
+    if (old and old.get('state') == WAITING
+            and all(old.get(key) == value for key, value in binding.items())):
         return old
     if (stop_file(caller).exists() or old and old.get('state') == STOPPED) and not resume_stopped:
         return old or dict(caller_surface_uuid=caller, state=STOPPED, ask_count=0)
-    if purpose not in ('REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'):
-        raise ValueError('unknown inquiry purpose')
+    if old:
+        archive_episode(old)
+        last = old.get('asks', [])[-1]['marker'] if old.get('asks') else ''
+        write_channels(old, last, 'superseded inquiry; original attempts remain held',
+                       now, status='SUPERSEDED')
     try:
         os.unlink(stop_file(caller))
     except FileNotFoundError:
@@ -139,21 +149,50 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
     state = dict(version=2, caller_surface_uuid=caller, executor_ref=executor_ref or caller,
                  workspace_uuid=workspace, purpose=purpose,
                  supervisor=supervisor, task_id=task_id, state=WAITING, reason=reason,
-                 started_epoch=now, episode_id=ready.digest(json.dumps([caller, supervisor, now])),
+                 started_epoch=now, next_due_epoch=now,
+                 episode_id=ready.digest(json.dumps([binding, now, secrets.token_hex(8)])),
                  marker_secret=secrets.token_hex(16),
                  transcript=transcript, tail_position=tail, channels=chans,
                  mailbox=str(ready.mailbox_dir(caller)), ask_count=0, asks=[],
                  terminal_sends=0, terminal_attempts=0, native_receipts=0, file_posts=0,
-                 check_count=0, attempt_count=0, terminal_pending=None,
+                 check_count=0, attempt_count=0,
+                 terminal_pending=copy.deepcopy(old.get('terminal_pending')) if old else None,
                  reply=None, own_prefixes=list(own_prefixes))
     Path(state['mailbox']).mkdir(parents=True, exist_ok=True, mode=0o700)
     save(state)
     return state
 
 
+def archive_episode(state):
+    """One bounded snapshot per real transition, never an archive per poll."""
+    path = root() / 'episodes' / ready.digest(state['caller_surface_uuid']) / (
+        ready.digest(state['episode_id']) + '.json')
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.exists():
+        previous = ready.read_json(path)
+        if not previous or previous.get('episode_id') != state['episode_id']:
+            raise ValueError('episode archive identity mismatch')
+        return path
+    raw = json.dumps(state, ensure_ascii=False).encode()
+    if len(raw) > ready.MAX_JSON_BYTES:
+        raise ValueError('episode archive exceeds bounded state limit')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
+
+
 def _recent_files(directory, since, limit=CHANNEL_SCAN):
     try:
-        entries = [e for e in os.scandir(directory) if e.is_file(follow_symlinks=False)]
+        entries = []
+        with os.scandir(directory) as stream:
+            for index, entry in enumerate(stream):
+                if index >= 256:
+                    break
+                if entry.is_file(follow_symlinks=False):
+                    entries.append(entry)
     except OSError:
         return []
     fresh = []
@@ -186,7 +225,37 @@ def issued_marker(state, marker):
         return False
 
 
-def find_reply(state):
+def mailbox_reply(state):
+    """Direct canonical paths keep fresh and late replies live in large mailboxes.
+
+    Recent history is checked every poll. Older HMAC ordinals are checked in
+    rotating bounded batches; the episode persists the next position. Directory
+    scans are only a legacy compatibility fallback, not the primary reply path.
+    """
+    caller = state['caller_surface_uuid']
+    markers = [a['marker'] for a in state.get('asks', []) if isinstance(a, dict) and a.get('marker')]
+    count = max(0, int(state.get('attempt_count', 0)))
+    if count and state.get('marker_secret'):
+        start = max(1, min(int(state.get('reply_scan_ordinal', 1)), count))
+        ordinals = [1 + (start - 1 + offset) % count for offset in range(min(count, CHANNEL_SCAN))]
+        markers.extend(issue_marker(state, ordinal) for ordinal in ordinals)
+        state['reply_scan_ordinal'] = 1 + (start - 1 + len(ordinals)) % count
+    binding = dict(caller=caller, supervisor=state['supervisor'],
+                   task_id=state.get('task_id', ''), episode_id=state['episode_id'])
+    for marker in dict.fromkeys(markers):
+        # Old/custom markers still need a safe basename before a filesystem read.
+        if (not isinstance(marker, str) or not marker or len(marker) > 160
+                or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in marker)):
+            continue
+        path = ready.mailbox_dir(caller) / (marker + '.json')
+        body = ready.read_json(path)
+        if replies.valid(body, [marker], **binding):
+            return dict(source='mailbox', path=str(path), marker=marker,
+                        status=body['status'], text=json.dumps(body, ensure_ascii=False)[:800])
+    return None
+
+
+def find_reply(state, *, file_only=False):
     """主管答复的三种来源；本人写的 CURRENT 和本人文件不算。"""
     caller, since = state['caller_surface_uuid'], float(state['started_epoch'])
     markers = [a['marker'] for a in state.get('asks', []) if isinstance(a, dict) and a.get('marker')]
@@ -200,6 +269,9 @@ def find_reply(state):
         if isinstance(body, dict) and issued_marker(state, body.get('marker')):
             allowed = [body['marker']]
         return replies.valid(body, allowed, **binding)
+    direct = mailbox_reply(state)
+    if direct:
+        return direct
     for path in _recent_files(state['mailbox'], since):
         body = ready.read_json(path)
         if matched(body):
@@ -218,7 +290,7 @@ def find_reply(state):
             if matched(body):
                 return dict(source='channel', path=str(path), marker=body['marker'],
                             status=body['status'], text=text[:800])
-    if state.get('transcript') and state.get('tail_position'):
+    if not file_only and state.get('transcript') and state.get('tail_position'):
         try:
             tail = ready.Tail(state['transcript'], state['tail_position'])
         except (OSError, ValueError) as exc:
@@ -288,6 +360,8 @@ def _unreceived_on_screen(bridge, supervisor, caller, ask, flat_screen):
         return False
     if marker not in flat_screen:
         return False
+    if not origin_matches(ask, caller, supervisor):
+        return True
     try:
         original = ready._original_request(caller, supervisor, marker)
         receipt = ready._receipt(bridge, supervisor, original['text'], marker)
@@ -302,6 +376,8 @@ def _unreceived_on_screen(bridge, supervisor, caller, ask, flat_screen):
 def _original_no_input(bridge, supervisor, caller, ask):
     """Release only positively verified zero-input holds, never queued attempts."""
     try:
+        if not origin_matches(ask, caller, supervisor):
+            return False
         from cmux_message_journal import verified_no_input
         marker = ask['marker']
         original = ready._original_request(caller, supervisor, marker)
@@ -318,10 +394,40 @@ def _original_no_input(bridge, supervisor, caller, ask):
 
 
 def _advance_original(bridge, supervisor, caller, ask):
+    if not origin_matches(ask, caller, supervisor):
+        return False
     if _original_no_input(bridge, supervisor, caller, ask):
         return True
     ready.advance_ask(bridge, supervisor, caller, ask)
     return ask.get('outcome') == 'CONFIRMED'
+
+
+def controller():
+    source = Path(__file__).resolve().parents[1]
+    files = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
+             'scripts/cmux_bridge.py')
+    return dict(source=str(source), python=str(Path(sys.executable).resolve()),
+                files={name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in files})
+
+
+def origin(state):
+    return dict(caller_surface_uuid=state['caller_surface_uuid'], supervisor=state['supervisor'],
+                workspace_uuid=state.get('workspace_uuid', ''), task_id=state.get('task_id', ''),
+                episode_id=state['episode_id'], controller=controller())
+
+
+def origin_matches(ask, caller, supervisor):
+    saved = ask.get('origin')
+    if not (isinstance(saved, dict) and saved.get('caller_surface_uuid') == caller
+            and saved.get('supervisor') == supervisor and saved.get('workspace_uuid')
+            and saved.get('controller') == controller()):
+        return False
+    try:
+        original = ready._original_request(caller, supervisor, ask['marker'])
+        return all(original.get(key) == saved.get(key) for key in
+                   ('workspace_uuid', 'task_id', 'episode_id', 'controller'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def _held(bridge, supervisor, asks, caller='', *, provider=None):
@@ -356,6 +462,8 @@ def default_send(state, marker, text):
     if pending.get('marker') and pending['marker'] != marker:
         # An uncertain original attempt stays pinned even when the short history
         # rolls over. Reconciliation is read-only; no repaste or recovery key.
+        if not origin_matches(pending, state['caller_surface_uuid'], state['supervisor']):
+            return dict(outcome='SKIPPED_ORIGINAL_CONTROLLER_REQUIRED', terminal=False)
         if not _advance_original(bridge, state['supervisor'], state['caller_surface_uuid'], pending):
             return dict(outcome='SKIPPED_UNVERIFIED', terminal=False)
         state['terminal_pending'] = None
@@ -367,11 +475,13 @@ def default_send(state, marker, text):
                           state['caller_surface_uuid'], provider=provider)
     if held:
         return dict(outcome='SKIPPED_' + held, terminal=False)
-    state['terminal_pending'] = dict(marker=marker, terminal=True, outcome='INTENT_UNRESOLVED')
+    owner = origin(state)
+    state['terminal_pending'] = dict(marker=marker, terminal=True, outcome='INTENT_UNRESOLVED', origin=owner)
     save(state)
     ready.write_record(state['caller_surface_uuid'], marker, text, state['supervisor'],
-                       state.get('task_id', ''), state['episode_id'])
-    ask = dict(marker=marker)
+                       state.get('task_id', ''), state['episode_id'], controller=owner['controller'],
+                       workspace=state.get('workspace_uuid', ''))
+    ask = dict(marker=marker, origin=owner)
     ready.advance_ask(bridge, state['supervisor'], state['caller_surface_uuid'], ask,
                        allow_send=True)
     if ask.get('outcome') != 'CONFIRMED':
@@ -383,7 +493,7 @@ def default_send(state, marker, text):
         for path in attempt_paths(journal):
             record = ready.read_json(path) or {}
             phases.extend(e.get('phase') for e in record.get('events', []) if isinstance(e, dict))
-    result = dict(outcome=ask.get('outcome'), detail=ask.get('detail', ''),
+    result = dict(outcome=ask.get('outcome'), detail=ask.get('detail', ''), origin=owner,
                   terminal='PASTED' in phases, terminal_attempted=provider != 'codex',
                   native_input_intent='NATIVE_INPUT_INTENT' in phases,
                   transport='codex-native-input-v1' if provider == 'codex' else 'terminal',
@@ -397,7 +507,7 @@ def default_send(state, marker, text):
     return result
 
 
-def poll_locked(state, now):
+def poll_locked(state, now, *, file_only=False):
     """No input: operator stop, new authenticated binding, then exact reply."""
     caller = state['caller_surface_uuid']
     if stop_file(caller).exists() and state['state'] == WAITING:
@@ -406,7 +516,7 @@ def poll_locked(state, now):
         write_channels(state, last, 'episode stopped by operator', now, status=STOPPED)
     if state['state'] != WAITING:
         return state
-    binding = idle_binding(caller, state.get('workspace_uuid', '')) or {}
+    binding = {} if file_only else idle_binding(caller, state.get('workspace_uuid', '')) or {}
     if (binding.get('state') == 'BOUND' and binding.get('supervisor_uuid') == state['supervisor']
             and binding.get('task_id') and binding['task_id'] != state.get('task_id')
             and float(binding.get('last_bound_epoch', 0)) > float(state['started_epoch'])):
@@ -415,7 +525,7 @@ def poll_locked(state, now):
         last = state['asks'][-1]['marker'] if state['asks'] else ''
         write_channels(state, last, 'authenticated new dispatch', now, status=CONSUMED)
         return state
-    reply = find_reply(state)
+    reply = find_reply(state, file_only=file_only)
     if reply:
         state.update(state=ANSWERED, reply=dict(reply, at_epoch=now))
     if state['state'] != WAITING:
@@ -424,26 +534,33 @@ def poll_locked(state, now):
     return state
 
 
-def tick(caller, now=None, send=default_send):
+def tick(caller, now=None, send=default_send, *, file_only=False):
     try:
         with episode_lock(caller):
-            return tick_locked(caller, now, send)
+            return tick_locked(caller, now, send, file_only=file_only)
     except BlockingIOError:
         return dict(outcome='EPISODE_BUSY', state=WAITING)
 
 
-def tick_locked(caller, now=None, send=default_send):
-    now = time.time() if now is None else now
+def tick_locked(caller, now=None, send=default_send, *, file_only=False):
+    realtime = now is None
+    now = time.time() if realtime else now
+    tick_start = time.monotonic()
     state = load(caller)
     if not state:
         return dict(outcome='NO_EPISODE')
     state['check_count'] = state.get('check_count', 0) + 1
-    poll_locked(state, now)
+    poll_locked(state, now, file_only=file_only)
+    poll_end = time.monotonic()
+    if realtime:
+        now = time.time()
+    state['last_poll'] = dict(at_epoch=now, duration_seconds=max(0, poll_end - tick_start))
     save(state)
     if state['state'] != WAITING:
         return state
     last = state['asks'][-1] if state['asks'] else None
-    if last and now - float(last['at_epoch']) < INTERVAL:
+    due = float(state.get('next_due_epoch', float(last['at_epoch']) + INTERVAL if last else now))
+    if now < due:
         save(state)
         return state
     attempt = state.get('attempt_count', state['ask_count']) + 1
@@ -452,17 +569,28 @@ def tick_locked(caller, now=None, send=default_send):
     marker = issue_marker(state, attempt)
     text = build_text(state, marker, attempt)
     state['attempt_count'] = attempt
-    ask = dict(marker=marker, attempt=attempt, at_epoch=now, text_sha256=ready.digest(text))
+    ask = dict(marker=marker, attempt=attempt, at_epoch=now, due_epoch=due,
+               due_delay_seconds=max(0, now - due), text_sha256=ready.digest(text),
+               origin=origin(state) if not file_only else None)
     state['asks'] = (state['asks'] + [ask])[-HISTORY:]
-    if not state.get('terminal_pending'):
+    state['next_due_epoch'] = now + INTERVAL  # no catch-up burst after a stalled runner
+    if not file_only and not state.get('terminal_pending'):
         state['terminal_pending'] = dict(ask, terminal=True, outcome='INTENT_UNRESOLVED')
     save(state)                      # 任何输入之前先落盘新 marker
+    channel_start = time.monotonic()
     ask['channels'] = write_channels(state, marker, text, now)
+    channel_end = time.monotonic()
+    ask['channel_duration_seconds'] = max(0, channel_end - channel_start)
     try:
-        ask.update(send(state, marker, text))
+        if file_only:
+            ask.update(outcome='FILE_ONLY_SCHEDULED', terminal=False, input_operations=0)
+        else:
+            ask.update(send(state, marker, text))
     except Exception as exc:         # 终端失败不影响文件通道，也不重试同一轮
         ask.update(outcome='TERMINAL_ERROR', detail=f'{type(exc).__name__}: {exc}'[:400],
                    terminal=False)
+    ask['send_duration_seconds'] = max(0, time.monotonic() - channel_end)
+    ask['tick_duration_seconds'] = max(0, time.monotonic() - tick_start)
     if ask.get('terminal'):
         state['terminal_sends'] = state.get('terminal_sends', 0) + 1
     if ask.get('terminal_attempted'):
@@ -480,7 +608,7 @@ def tick_locked(caller, now=None, send=default_send):
                 or zero_input):
             state['terminal_pending'] = None
         else:
-            state['terminal_pending'] = dict(ask, terminal=True)
+            state['terminal_pending'] = dict(ask, terminal=True, origin=pending.get('origin') or ask.get('origin'))
     save(state)
     return state
 
@@ -511,7 +639,7 @@ def summary(state):
                 terminal_attempts=state.get('terminal_attempts', 0),
                 terminal_sends=state.get('terminal_sends', 0), last_ask=last,
                 reply=state.get('reply'), supervisor=state['supervisor'],
-                next_ask_epoch=(float(last['at_epoch']) + INTERVAL) if last else None,
+                next_ask_epoch=state.get('next_due_epoch'), last_poll=state.get('last_poll'),
                 state_file=str(state_path(state['caller_surface_uuid'])))
 
 
@@ -542,9 +670,17 @@ def main(argv=None):
         live = ready._bridge().pin_workspace(args.supervisor, caller_uuid=caller)
         if live.get('caller_surface_uuid', '').upper() != caller.upper():
             raise ValueError('caller identity mismatch')
-        state = start(caller, args.supervisor, args.task, args.transcript, args.channel,
-                      caller, own_prefixes=args.own_prefix, workspace=live['workspace_uuid'],
+        # Persist UUIDs from the authenticated pair, never the user's surface:N
+        # alias. Background file work has no authority to re-resolve aliases.
+        caller = str(uuid.UUID(live['caller_surface_uuid'])).upper()
+        supervisor = str(uuid.UUID(live['target_surface_uuid'])).upper()
+        workspace = str(uuid.UUID(live['workspace_uuid'])).upper()
+        state = start(caller, supervisor, args.task, args.transcript, args.channel,
+                      caller, own_prefixes=args.own_prefix, workspace=workspace,
                       purpose=args.purpose, resume_stopped=args.resume_stopped)
+        if state.get('state') == WAITING:
+            import executor_reask_scheduler
+            executor_reask_scheduler.enroll(state, live)
         state = tick(caller)
     elif args.cmd == 'run':
         state = run(caller, args.max_seconds)

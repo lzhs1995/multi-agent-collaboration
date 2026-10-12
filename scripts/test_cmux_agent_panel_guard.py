@@ -140,6 +140,49 @@ class PanelGuardTests(unittest.TestCase):
         self.assert_blocked(document + "rtk claude --resume existing-id")
         self.assert_blocked("codex\n" + document)
 
+    def test_python_helper_import_and_read_subprocess_do_not_turn_prose_into_shell(self) -> None:
+        # Reduced original panel27 failure: the semicolon inside this JSON
+        # value was treated as a shell boundary because subprocess was present.
+        command = ("rtk proxy python3 -B - <<'PY'\n"
+                   "import sys, json, subprocess\n"
+                   "from pathlib import Path\n"
+                   "import executor_ready as ready, executor_reply\n"
+                   "out = subprocess.run(['rtk', 'cmux-agent', 'read', 'surface:9', '75'], "
+                   "capture_output=True, text=True, check=True)\n"
+                   "record = {'status': 'mechanical intake accepted; Claude review pending; "
+                   "18 historical differences remain'}\n"
+                   "Path('/tmp/report.json').write_text(json.dumps(record))\nPY\n")
+        self.assert_allowed(command)
+        for tool, key in (("Bash", "command"), ("exec_command", "cmd")):
+            result = subprocess.run([sys.executable, "-B", str(MODULE_PATH)],
+                input=json.dumps({"tool_name": tool, "tool_input": {key: command}}),
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_blocked(command + "rtk proxy claude --resume existing-id")
+
+    def test_python_actual_execution_arguments_remain_protected(self) -> None:
+        programs = [
+            "import subprocess\nsubprocess.run(['claude', '--resume', 'id'])",
+            "import subprocess as sp\nsp.Popen(['rtk', 'proxy', 'codex'])",
+            "from subprocess import run as launch\ncmd=['codex']\nlaunch(cmd)",
+            "import os\nlaunch=os.system\nnext_launch=launch\ncmd='true; codex'\nnext_launch(cmd)",
+            "import os\ncommands={'resume':'claude --resume id'}\nos.system(commands['resume'])",
+            "import subprocess\nsubprocess.run(args=['codex'])",
+            "import subprocess\nsubprocess.run(['sh', '-c', 'claude --resume id'])",
+            "import subprocess\nsubprocess.run(['true; codex'], shell=True)",
+            "import os\ncmd='clau'+'de --resume id'\nos.system(cmd)",
+        ]
+        for program in programs:
+            with self.subTest(program=program):
+                self.assert_blocked("python3 - <<'PY'\n" + program + "\nPY\n")
+
+    def test_python_argv_prose_is_not_a_command(self) -> None:
+        for argv in (["echo", "Claude status"], ["echo", "ok; Claude review pending"],
+                     ["printf", "%s", "\nCodex status\n"]):
+            command = ("python3 - <<'PY'\nimport subprocess\n"
+                       f"subprocess.run({argv!r})\nPY\n")
+            self.assert_allowed(command)
+
     def test_nonliteral_or_executing_heredocs_are_not_exempted(self) -> None:
         commands = [
             "sh <<'SH'\ncodex\nSH\n",

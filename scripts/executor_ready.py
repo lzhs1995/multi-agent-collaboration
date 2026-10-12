@@ -143,11 +143,19 @@ def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name('.' + path.name + '.' + secrets.token_hex(4) + '.tmp')
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'w') as handle:
-        json.dump(value, handle, ensure_ascii=False)
-        handle.flush()
-        os.fsync(handle.fileno())
-    tmp.replace(path)
+    try:
+        with os.fdopen(fd, 'w') as handle:
+            json.dump(value, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(path)
+    finally:
+        # A deadline or write failure keeps the original state and cannot
+        # accumulate temporary files on the next scheduled sweep.
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def build_text(executor_ref, marker, task_id='', note='', attempt=1, mailbox='', caller_uuid='',
@@ -168,7 +176,8 @@ def build_text(executor_ref, marker, task_id='', note='', attempt=1, mailbox='',
     return text + (' ' + note if note else '')
 
 
-def write_record(caller_uuid, marker, text, target_surface, task_id='', episode_id=''):
+def write_record(caller_uuid, marker, text, target_surface, task_id='', episode_id='', *,
+                 controller=None, workspace=''):
     path = requests_dir() / (request_key(caller_uuid, marker) + '.json')
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     prepared = prompt_reference.plan(text, marker, state_root() / 'message-bodies-v1')
@@ -178,6 +187,9 @@ def write_record(caller_uuid, marker, text, target_surface, task_id='', episode_
                   payload_sha256=digest(prepared['text']), text=prepared['text'], created_at_epoch=time.time())
     if prepared['reference']:
         record.update(body_reference=prepared['reference'], original_payload_sha256=digest(text))
+    if controller is not None:
+        record['controller'] = controller
+        record['workspace_uuid'] = workspace
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as handle:
         json.dump(record, handle, ensure_ascii=False)

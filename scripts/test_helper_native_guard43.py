@@ -1,4 +1,5 @@
 """沿用42原 helper 端到端用例，仅改接现役 native PostToolUse API。"""
+from contextlib import ExitStack
 import importlib.util
 import io
 import json
@@ -35,9 +36,11 @@ class HookEnforcementCases(H.HelperGuardCases):
         super().setUp()
         # These inherited cases exercise old paste/key journals, never the live
         # daemon. Native routing has its own explicitly fake-RPC test suite.
-        self.enterContext(mock.patch("cmux_codex_input.DaemonRPC",
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch("cmux_codex_input.DaemonRPC",
             side_effect=AssertionError("offline fixture forbids live Codex RPC")))
-        self.enterContext(mock.patch.object(B, "_submit_text_once",
+        stack.enter_context(mock.patch.object(B, "_submit_text_once",
             side_effect=historical_terminal_dispatch))
 
     # 继承原业务反例；补验真实 main 的阻断退出码与只读恢复文案。

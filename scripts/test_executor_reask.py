@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """空闲 executor 60 秒主动求派与其 Stop hook 的离线回归（无真实 bridge 输入）。"""
 import json
+import copy
 import contextlib
 import io
 import os
@@ -48,7 +49,7 @@ class Base(unittest.TestCase):
 
     def begin(self, now=1000.0):
         return reask.start(CALLER, SUP, 'r24', str(self.transcript), [str(self.channel)],
-                           now=now)
+                           now=now, workspace=WORKSPACE)
 
     def user(self, text):
         with self.transcript.open('a') as fh:
@@ -230,7 +231,13 @@ class ReaskTest(Base):
             held = reask._held(bridge, SUP, [dict(marker=marker, terminal=True)], CALLER)[0]
         self.assertEqual(held, 'UNVERIFIED')
         # 原次完整 native receipt 成立，才结束对历史 marker 的未核实状态。
-        ask = dict(marker=marker, terminal=True)
+        state = self.begin()
+        saved_origin = reask.origin(state)
+        original = ready._original_request(CALLER, SUP, marker)
+        original.update(workspace_uuid=WORKSPACE, task_id=state['task_id'],
+                        episode_id=state['episode_id'], controller=saved_origin['controller'])
+        ready.write_json(ready.requests_dir() / (ready.request_key(CALLER, marker) + '.json'), original)
+        ask = dict(marker=marker, terminal=True, origin=saved_origin)
         with mock.patch.object(ready, '_receipt', return_value=dict(ok=1)):
             held = reask._held(bridge, SUP, [ask], CALLER)[0]
         self.assertIsNone(held)
@@ -338,7 +345,12 @@ class ReaskDurabilityTest(Base):
 
     def test_uncertain_original_survives_rollover_and_only_reconciles(self):
         self.begin()
-        first = reask.tick(CALLER, 1001.0, Sender('QUEUED', True))['asks'][0]['marker']
+        def original_send(state, marker, text):
+            owner = reask.origin(state)
+            ready.write_record(CALLER, marker, text, SUP, state['task_id'], state['episode_id'],
+                               controller=owner['controller'], workspace=WORKSPACE)
+            return dict(outcome='QUEUED', terminal=True, origin=owner)
+        first = reask.tick(CALLER, 1001.0, original_send)['asks'][0]['marker']
         bridge = mock.Mock()
         with mock.patch.object(ready, '_bridge', return_value=bridge), \
                 mock.patch.object(ready, 'advance_ask') as advance, \
@@ -353,6 +365,58 @@ class ReaskDurabilityTest(Base):
         self.assertEqual(state['terminal_pending']['marker'], first)
         self.assertEqual(state['terminal_sends'], 1)
         self.assertEqual(state['native_receipts'], 0)
+
+    def test_late_canonical_reply_rotates_past_history_and_full_directory(self):
+        self.begin(now=0.0)
+        late_reply = None
+        for index in range(90):
+            state = reask.tick(CALLER, 1.0 + index * reask.INTERVAL, file_only=True)
+            if index == 64:
+                late_reply = self.reply()
+        self.assertNotIn(late_reply['marker'], [ask['marker'] for ask in state['asks']])
+        mailbox = Path(state['mailbox'])
+        for index in range(260):
+            ready.write_json(mailbox / ('unrelated-%03d.json' % index), {'unrelated': True})
+        ready.write_json(mailbox / (late_reply['marker'] + '.json'), late_reply)
+        state['reply_scan_ordinal'] = 1
+        reask.save(state)
+        # Directory enumeration may omit this canonical file. Direct reply
+        # paths must still finish the episode within bounded rotating polls.
+        with mock.patch.object(reask, '_recent_files', return_value=[]), \
+                mock.patch.object(reask, 'default_send', side_effect=AssertionError('no input')):
+            state = reask.tick(CALLER, 5400.0, file_only=True)
+            self.assertEqual(state['state'], reask.WAITING)
+            state = reask.tick(CALLER, 5401.0, file_only=True)
+        self.assertEqual(state['state'], reask.ANSWERED)
+        self.assertEqual(state['reply']['marker'], late_reply['marker'])
+        self.assertEqual(state['native_receipts'], 0)
+
+    def test_only_binding_transition_archives_episode_and_preserves_unknown(self):
+        initial = self.begin()
+        pending = dict(marker='original-unknown', outcome='UNKNOWN',
+                       origin=dict(controller='original-controller'), terminal=True)
+        initial['terminal_pending'] = copy.deepcopy(pending)
+        reask.save(initial)
+        self.assertEqual(self.begin()['episode_id'], initial['episode_id'])
+        archives = reask.root() / 'episodes' / ready.digest(CALLER)
+        self.assertFalse(archives.exists())
+        changed = reask.start(CALLER, SUP, 'next-task', workspace=WORKSPACE, now=2000.0)
+        self.assertNotEqual(changed['episode_id'], initial['episode_id'])
+        self.assertEqual(changed['terminal_pending'], pending)
+        paths = list(archives.glob('*.json'))
+        self.assertEqual(len(paths), 1)
+        snapshot = paths[0].read_bytes()
+        again = reask.start(CALLER, SUP, 'next-task', workspace=WORKSPACE, now=2001.0)
+        self.assertEqual(again['episode_id'], changed['episode_id'])
+        reask.tick(CALLER, 2002.0, file_only=True)
+        self.assertEqual(len(list(archives.glob('*.json'))), 1)
+        self.assertEqual(paths[0].read_bytes(), snapshot)
+        purpose = reask.start(CALLER, SUP, 'next-task', workspace=WORKSPACE, now=2003.0,
+                              purpose='PENDING_TASK_REPLY')
+        self.assertNotEqual(purpose['episode_id'], changed['episode_id'])
+        self.assertEqual(purpose['terminal_pending'], pending)
+        self.assertEqual(len(list(archives.glob('*.json'))), 2)
+        self.assertEqual(paths[0].read_bytes(), snapshot)
 
 
 class StopGuardTest(Base):

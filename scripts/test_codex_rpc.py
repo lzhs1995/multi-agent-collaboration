@@ -197,8 +197,10 @@ def upgrade_reply(request, *, status="101 Switching Protocols",
 class OfflineCase(unittest.TestCase):
     def setUp(self):
         self.clock = FakeClock()
-        self.enterContext(mock.patch.object(rpc.time, "monotonic", self.clock.monotonic))
-        self.enterContext(mock.patch.object(
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(rpc.time, "monotonic", self.clock.monotonic))
+        self.stack.enter_context(mock.patch.object(
             socket, "socket", side_effect=AssertionError("real socket creation forbidden")))
 
     def bare_client(self, fake=None, *, timeout=2.0):

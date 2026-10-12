@@ -23,6 +23,7 @@ import cmux_supervisor_report_guard as guard
 import cmux_workspace_guard as workspace_guard
 import executor_closeout
 import offline_test_hook
+from offline_hook_thread_fixture import native_processes, native_thread
 import test_cmux_daemon_identity as identity_fixtures
 
 
@@ -34,7 +35,7 @@ class SupervisorReportGuardTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(
-            tempfile.TemporaryDirectory(prefix='supervisor-report-')))
+            tempfile.TemporaryDirectory(prefix='supervisor-report-'))).resolve()
         self.active = self.root / 'active'
         self.active.mkdir()
         self.home = self.root / 'home'
@@ -48,35 +49,13 @@ class SupervisorReportGuardTests(unittest.TestCase):
         self.workspace = identity_fixtures.W
         self.supervisor = identity_fixtures.C
         self.executor = identity_fixtures.T
-        self.payload = dict(hook_event_name='PostToolUse', session_id=identity_fixtures.S,
-                            tool_name='Bash', tool_input={'command': 'touch MUST_NOT_RUN'})
+        self.payload, _ = native_thread(self.home, actual=identity_fixtures.S)
+        self.payload.update(tool_name='Bash', tool_input={'command': 'touch MUST_NOT_RUN'})
         self.sequence = 0
 
     @contextmanager
     def authenticated(self, caller=None):
-        fixture = self.identity_fixture
-        processes = copy.deepcopy(fixture.processes)
-        if caller is not None:
-            processes[30]['env']['CMUX_SURFACE_ID'] = caller
-        tty = 'ttys2' if caller == self.executor else 'ttys1'
-
-        def live_json(*args):
-            if args == ('identify', '--json'):
-                return copy.deepcopy(fixture.identity)
-            if args == ('tree', '--all', '--json', '--id-format', 'both'):
-                return copy.deepcopy(fixture.tree)
-            raise AssertionError('意外的 cmux 读取: ' + repr(args))
-
-        with ExitStack() as stack:
-            stack.enter_context(patch.dict(os.environ, fixture.env, clear=True))
-            stack.enter_context(patch.object(daemon.sys, 'platform', 'darwin'))
-            stack.enter_context(patch.object(daemon.os, 'getppid', return_value=10))
-            stack.enter_context(patch.object(
-                daemon, 'process', side_effect=lambda pid, **_: copy.deepcopy(processes[pid])))
-            stack.enter_context(patch.object(daemon, 'client_candidates', return_value=['10', '30']))
-            stack.enter_context(patch.object(
-                daemon.subprocess, 'run', return_value=SimpleNamespace(stdout=tty)))
-            stack.enter_context(patch.object(workspace_guard, '_read_json_command', side_effect=live_json))
+        with native_processes(self.identity_fixture, caller):
             yield
 
     @contextmanager
@@ -164,8 +143,10 @@ class SupervisorReportGuardTests(unittest.TestCase):
     def hook(self, *, payload=None, raw=None, home=None):
         env = dict(os.environ, HOME=str(home or self.home), CMUX_WORKSPACE_ID=self.workspace,
                    CMUX_SURFACE_ID=self.supervisor)
+        if home is not None and payload is None and raw is None:
+            payload, _ = native_thread(home, actual=identity_fixtures.S)
         raw = json.dumps(self.payload if payload is None else payload) if raw is None else raw
-        return subprocess.run(offline_test_hook.command(SCRIPT, self.active), input=raw,
+        return subprocess.run(offline_test_hook.command(SCRIPT, self.active, native=True), input=raw,
                               text=True, capture_output=True, env=env, cwd=self.root, timeout=5)
 
     def notice_paths(self, state=None):
