@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test _touch_active_marker concurrency (task ccc-collab-fable-gap-20260903)."""
 import json
+from contextlib import ExitStack
 import os
 import sys
 import tempfile
@@ -15,9 +16,11 @@ class HeartbeatConcurrencyTests(unittest.TestCase):
     def setUp(self):
         # These tests exercise standalone marker storage, not the live daemon.
         # Restore both globals even if an assertion fails mid-test.
-        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
-        self.enterContext(mock.patch.object(HARNESS, "_ACTIVE_DIR", HARNESS._ACTIVE_DIR))
-        self.enterContext(mock.patch("cmux_daemon_identity.collect", return_value=None))
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
+        stack.enter_context(mock.patch.object(HARNESS, "_ACTIVE_DIR", HARNESS._ACTIVE_DIR))
+        stack.enter_context(mock.patch("cmux_daemon_identity.collect", return_value=None))
 
     """_touch_active_marker must handle concurrent beats without data loss."""
     

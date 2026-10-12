@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test arm_task workspace_uuid alignment (task ccc-collab-fable-gap-20260903)."""
 import json
+from contextlib import ExitStack
 import os
 import sys
 import tempfile
@@ -16,9 +17,11 @@ class WorkspaceUuidAlignmentTests(unittest.TestCase):
 
     def setUp(self):
         # Fixture workspace values are intentionally not real cmux identities.
-        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
-        self.enterContext(mock.patch.object(HARNESS, "_ACTIVE_DIR", HARNESS._ACTIVE_DIR))
-        self.enterContext(mock.patch("cmux_daemon_identity.collect", return_value=None))
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
+        stack.enter_context(mock.patch.object(HARNESS, "_ACTIVE_DIR", HARNESS._ACTIVE_DIR))
+        stack.enter_context(mock.patch("cmux_daemon_identity.collect", return_value=None))
     
     def test_arm_task_uses_passed_workspace_uuid_for_directory(self):
         """POISON: arm_task(..., workspace_uuid='X') must write under _active/X/."""
