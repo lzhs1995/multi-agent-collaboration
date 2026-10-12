@@ -505,6 +505,8 @@ def arm_task(task_id, root, supervisor="", executor="", *,
         "ttl_seconds": _ARM_TTL_SECONDS,
     }
     _write(_collab_dir(workspace_uuid) / f"{collaboration_id}.json", marker)
+    from executor_reask_lifecycle import task_boundary
+    task_boundary(marker, 'RESERVED')
     return marker
 
 
@@ -531,6 +533,9 @@ def disarm_task(task_id=None):
             f"{len(paths)} active markers in this workspace — pass --task-id "
             "to disarm a specific collaboration")
     for p in paths:
+        from executor_reask_lifecycle import task_boundary
+        marker = json.loads(p.read_text())
+        task_boundary(marker, 'RELEASED')
         p.unlink(missing_ok=True)
     return len(paths)
 

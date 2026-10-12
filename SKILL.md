@@ -5,7 +5,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-Version 0.4.27 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.28 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -216,7 +216,7 @@ An explicitly authorized `executor_reask.py run` checks every five seconds,
 issues a new marker no more often than every 60 seconds, with a polling budget
 of at most 540 seconds per invocation. Synchronous I/O can extend wall time.
 After the command returns, its durable episode may remain WAITING_REPLY;
-that state does not prove a runner is active. Version 0.4.27 also provides a
+that state does not prove a runner is active. Version 0.4.28 also provides a
 separate launchd file scheduler. Explicit authenticated `executor_reask start`
 enrolls the current task/purpose/workspace/controller; merely installing the job
 does not enroll anyone. Each 60-second sweep updates files only, with a
@@ -399,3 +399,12 @@ on disk as authority. Continue independent authorized work in SOLO when a peer
 is unavailable; maintenance does not reopen accepted research reviews.
 
 0.4.24 also recognizes local SQLite and disk-space inventory imports in quoted Python document heredocs. Agent names after semicolons inside literal document data are not CLI launches; adjacent real shell launches remain checked. Verify the exact rejected command through the real hook before claiming recovery.
+
+## Opt-in continuing inquiries
+
+0.4.28 adds explicit `--continuing` authorization across bound replies and child
+task boundaries. Read [the continuing contract](references/configuration-and-reasks.md#continuing-authorization-0428).
+ANSWERED remains unconsumed; only the authenticated original executor's
+`consume --reply-sha256` records consumption and rearms the same authorization.
+Formal task reservations pause requests; their release resumes authorized work.
+Stop, expiry and revocation end it. Defaults and old controllers remain unchanged.

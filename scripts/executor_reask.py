@@ -109,15 +109,17 @@ def configured_channels(supervisor):
 
 def start(caller, supervisor, task_id='', transcript='', channels=None, executor_ref='',
           now=None, reason='MANUAL', own_prefixes=(), workspace='', purpose='REQUEST_NEXT_TASK',
-          resume_stopped=False):
+          resume_stopped=False, continuing=False, continuation=None):
     with episode_lock(caller):
         return start_locked(caller, supervisor, task_id, transcript, channels, executor_ref,
-                            now, reason, own_prefixes, workspace, purpose, resume_stopped)
+                            now, reason, own_prefixes, workspace, purpose, resume_stopped,
+                            continuing, continuation)
 
 
 def start_locked(caller, supervisor, task_id='', transcript='', channels=None, executor_ref='',
                  now=None, reason='MANUAL', own_prefixes=(), workspace='',
-                 purpose='REQUEST_NEXT_TASK', resume_stopped=False):
+                 purpose='REQUEST_NEXT_TASK', resume_stopped=False, continuing=False,
+                 continuation=None):
     """Only the same complete inquiry binding can reuse a waiting episode."""
     now = time.time() if now is None else now
     if purpose not in ('REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'):
@@ -125,11 +127,16 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
     old = load(caller)
     binding = dict(caller_surface_uuid=caller, supervisor=supervisor, task_id=task_id,
                    workspace_uuid=workspace, purpose=purpose)
-    if (old and old.get('state') == WAITING
-            and all(old.get(key) == value for key, value in binding.items())):
+    if (old and all(old.get(key) == value for key, value in binding.items())
+            and (old.get('state') == WAITING or old.get('continuation') and old.get('state') != STOPPED)):
+        if continuing and not old.get('continuation'):
+            raise ValueError('existing episode must close before enabling continuation')
         return old
     if (stop_file(caller).exists() or old and old.get('state') == STOPPED) and not resume_stopped:
         return old or dict(caller_surface_uuid=caller, state=STOPPED, ask_count=0)
+    continuation = validate_continuation(continuation, now) if continuing else None
+    if continuation and continuation['owner'] != supervisor:
+        raise ValueError('continuation owner must be the authenticated supervisor')
     if old:
         archive_episode(old)
         last = old.get('asks', [])[-1]['marker'] if old.get('asks') else ''
@@ -156,11 +163,19 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
                  mailbox=str(ready.mailbox_dir(caller)), ask_count=0, asks=[],
                  terminal_sends=0, terminal_attempts=0, native_receipts=0, file_posts=0,
                  check_count=0, attempt_count=0,
+                 continuation=continuation, rearm_count=0, reply_history=[],
+                 reply_detected_epoch=None, reply_consumed_epoch=None,
                  terminal_pending=copy.deepcopy(old.get('terminal_pending')) if old else None,
                  reply=None, own_prefixes=list(own_prefixes))
     Path(state['mailbox']).mkdir(parents=True, exist_ok=True, mode=0o700)
     save(state)
     return state
+
+
+def validate_continuation(value, now=None):
+    """Pin explicit authorization independently of one inquiry or child task."""
+    from executor_reask_lifecycle import validate_authorization
+    return validate_authorization(value, controller(), time.time() if now is None else now)
 
 
 def archive_episode(state):
@@ -213,6 +228,29 @@ def issue_marker(state, ordinal):
     return f'{ready.PREFIX}_{ordinal:x}_{signature}'
 
 
+def open_marker(state, marker):
+    if not state.get('continuation'):
+        return True
+    try:
+        ordinal = int(marker.rsplit('_', 2)[1], 16)
+        return ordinal > state.get('replies_closed_through', 0) and issued_marker(state, marker)
+    except (ValueError, TypeError, IndexError):
+        return False
+
+
+def reply_record(body, source, **extra):
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return dict(source=source, body=body, body_sha256=ready.digest(raw),
+                marker=body['marker'], status=body['status'], text=raw[:800], **extra)
+
+
+def valid_reply(state, body, markers, **binding):
+    from executor_reask_lifecycle import valid_wait_contract
+    return (replies.valid(body, markers, **binding)
+            and open_marker(state, body.get('marker'))
+            and (not state.get('continuation') or valid_wait_contract(body, state)))
+
+
 def issued_marker(state, marker):
     if not isinstance(marker, str) or len(marker) > 160 or not state.get('marker_secret'):
         return False
@@ -249,9 +287,8 @@ def mailbox_reply(state):
             continue
         path = ready.mailbox_dir(caller) / (marker + '.json')
         body = ready.read_json(path)
-        if replies.valid(body, [marker], **binding):
-            return dict(source='mailbox', path=str(path), marker=marker,
-                        status=body['status'], text=json.dumps(body, ensure_ascii=False)[:800])
+        if valid_reply(state, body, [marker], **binding):
+            return reply_record(body, 'mailbox', path=str(path))
     return None
 
 
@@ -268,15 +305,14 @@ def find_reply(state, *, file_only=False):
         allowed = markers
         if isinstance(body, dict) and issued_marker(state, body.get('marker')):
             allowed = [body['marker']]
-        return replies.valid(body, allowed, **binding)
+        return valid_reply(state, body, allowed, **binding)
     direct = mailbox_reply(state)
     if direct:
         return direct
     for path in _recent_files(state['mailbox'], since):
         body = ready.read_json(path)
         if matched(body):
-            return dict(source='mailbox', path=str(path), status=body['status'],
-                        text=json.dumps(body, ensure_ascii=False)[:800])
+            return reply_record(body, 'mailbox', path=str(path))
     own = tuple([current_name(caller), 'EXECUTOR_REASK_'] + list(state.get('own_prefixes', [])))
     for channel in state.get('channels', []):
         for path in _recent_files(channel, since):
@@ -288,8 +324,7 @@ def find_reply(state, *, file_only=False):
                 continue
             body = replies.from_text(text)
             if matched(body):
-                return dict(source='channel', path=str(path), marker=body['marker'],
-                            status=body['status'], text=text[:800])
+                return reply_record(body, 'channel', path=str(path))
     if not file_only and state.get('transcript') and state.get('tail_position'):
         try:
             tail = ready.Tail(state['transcript'], state['tail_position'])
@@ -306,7 +341,7 @@ def find_reply(state, *, file_only=False):
                 body = replies.from_text(text)
                 if matched(body):
                     state['tail_position'] = tail.position()
-                    return dict(source='transcript', text=text[:800], status=body['status'])
+                    return reply_record(body, 'transcript')
         state['tail_position'] = tail.position()
     return None
 
@@ -405,7 +440,8 @@ def _advance_original(bridge, supervisor, caller, ask):
 def controller():
     source = Path(__file__).resolve().parents[1]
     files = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
-             'scripts/cmux_bridge.py')
+             'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
+             'scripts/executor_reask_lifecycle.py')
     return dict(source=str(source), python=str(Path(sys.executable).resolve()),
                 files={name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in files})
 
@@ -510,13 +546,17 @@ def default_send(state, marker, text):
 def poll_locked(state, now, *, file_only=False):
     """No input: operator stop, new authenticated binding, then exact reply."""
     caller = state['caller_surface_uuid']
-    if stop_file(caller).exists() and state['state'] == WAITING:
+    if stop_file(caller).exists() and state['state'] != STOPPED:
         state.update(state=STOPPED, stopped_epoch=now)
+        if state.get('continuation'):
+            state['continuation']['status'] = 'STOPPED'
         last = state['asks'][-1]['marker'] if state['asks'] else ''
         write_channels(state, last, 'episode stopped by operator', now, status=STOPPED)
-    if state['state'] != WAITING:
+    from executor_reask_lifecycle import poll_authorization
+    poll_authorization(state, now)
+    if state['state'] != WAITING or state.get('paused_tasks'):
         return state
-    binding = {} if file_only else idle_binding(caller, state.get('workspace_uuid', '')) or {}
+    binding = {} if file_only or state.get('continuation') else idle_binding(caller, state.get('workspace_uuid', '')) or {}
     if (binding.get('state') == 'BOUND' and binding.get('supervisor_uuid') == state['supervisor']
             and binding.get('task_id') and binding['task_id'] != state.get('task_id')
             and float(binding.get('last_bound_epoch', 0)) > float(state['started_epoch'])):
@@ -527,7 +567,7 @@ def poll_locked(state, now, *, file_only=False):
         return state
     reply = find_reply(state, file_only=file_only)
     if reply:
-        state.update(state=ANSWERED, reply=dict(reply, at_epoch=now))
+        state.update(state=ANSWERED, reply=dict(reply, at_epoch=now), reply_detected_epoch=now)
     if state['state'] != WAITING:
         last = state['asks'][-1]['marker'] if state['asks'] else ''
         write_channels(state, last, 'episode closed', now, status=state['state'])
@@ -556,7 +596,7 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False):
         now = time.time()
     state['last_poll'] = dict(at_epoch=now, duration_seconds=max(0, poll_end - tick_start))
     save(state)
-    if state['state'] != WAITING:
+    if state['state'] != WAITING or state.get('paused_tasks'):
         return state
     last = state['asks'][-1] if state['asks'] else None
     due = float(state.get('next_due_epoch', float(last['at_epoch']) + INTERVAL if last else now))
@@ -639,6 +679,10 @@ def summary(state):
                 terminal_attempts=state.get('terminal_attempts', 0),
                 terminal_sends=state.get('terminal_sends', 0), last_ask=last,
                 reply=state.get('reply'), supervisor=state['supervisor'],
+                continuation=state.get('continuation'), paused_tasks=state.get('paused_tasks', []),
+                rearm_count=state.get('rearm_count', 0),
+                reply_detected_epoch=state.get('reply_detected_epoch'),
+                reply_consumed_epoch=state.get('reply_consumed_epoch'),
                 next_ask_epoch=state.get('next_due_epoch'), last_poll=state.get('last_poll'),
                 state_file=str(state_path(state['caller_surface_uuid'])))
 
@@ -653,11 +697,17 @@ def main(argv=None):
     s.add_argument('--channel', action='append', default=[])
     s.add_argument('--own-prefix', action='append', default=[])
     s.add_argument('--purpose', choices=['REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'], default='REQUEST_NEXT_TASK')
+    s.add_argument('--continuing', action='store_true', help='explicitly authorized ongoing file inquiries')
+    s.add_argument('--overall-task', default='')
+    s.add_argument('--authorization-file', type=Path)
+    s.add_argument('--authorization-until', type=float)
     s.add_argument('--resume-stopped', action='store_true', help='explicit operator resume only')
     r = sub.add_parser('run')
     r.add_argument('--max-seconds', type=float, default=MAX_RUN_SECONDS)
-    for name in ('tick', 'status', 'consume'):
+    for name in ('tick', 'status'):
         sub.add_parser(name)
+    consume_parser = sub.add_parser('consume')
+    consume_parser.add_argument('--reply-sha256', default='')
     st = sub.add_parser('stop')
     st.add_argument('--reason', default='OPERATOR')
     for p in sub.choices.values():
@@ -675,9 +725,15 @@ def main(argv=None):
         caller = str(uuid.UUID(live['caller_surface_uuid'])).upper()
         supervisor = str(uuid.UUID(live['target_surface_uuid'])).upper()
         workspace = str(uuid.UUID(live['workspace_uuid'])).upper()
+        continuation = None
+        if args.continuing:
+            continuation = dict(enabled=True, overall_task=args.overall_task,
+                                authorization_file=str(args.authorization_file or ''),
+                                owner=supervisor, until_epoch=args.authorization_until)
         state = start(caller, supervisor, args.task, args.transcript, args.channel,
                       caller, own_prefixes=args.own_prefix, workspace=workspace,
-                      purpose=args.purpose, resume_stopped=args.resume_stopped)
+                      purpose=args.purpose, resume_stopped=args.resume_stopped,
+                      continuing=args.continuing, continuation=continuation)
         if state.get('state') == WAITING:
             import executor_reask_scheduler
             executor_reask_scheduler.enroll(state, live)
@@ -689,11 +745,14 @@ def main(argv=None):
     elif args.cmd == 'stop':
         state = stop(caller, args.reason)
     elif args.cmd == 'consume':
-        with episode_lock(caller):
-            state = load(caller) or {}
-            if state.get('state') == ANSWERED:
-                state['state'] = CONSUMED
-                save(state)
+        from executor_reask_lifecycle import consume
+        original = load(caller) or {}
+        if original.get('continuation'):
+            live = ready._bridge().pin_workspace(original['supervisor'], caller_uuid=caller)
+            if (live.get('caller_surface_uuid', '').upper() != caller.upper()
+                    or live.get('workspace_uuid') != original['workspace_uuid']):
+                raise ValueError('consume requires the original authenticated executor')
+        state = consume(caller, args.reply_sha256)
     else:
         state = load(caller) or dict(outcome='NO_EPISODE')
     print(json.dumps(summary(state), ensure_ascii=False, indent=1))

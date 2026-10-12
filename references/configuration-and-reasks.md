@@ -247,3 +247,41 @@ wake an idle supervisor. Supported PostToolUse context exposes it at a real tool
 boundary, and the supervisor must read the body and reply. Distinguish job
 installation, enrollment, execution, file exposure, body reading, native input
 and business acceptance. Ordinary tools and Stop remain available on every error.
+
+## Continuing authorization (0.4.28)
+
+Ordinary `start` still ends when the bound reply arrives. Only an explicitly
+user-authorized `start --continuing --overall-task TASK --authorization-file
+/absolute/user-authorization.txt` enables ongoing file inquiries. Optional
+`--authorization-until EPOCH` bounds that authority. The complete authorization
+file and original controller are pinned; changing/removing the file revokes it.
+Installation never enrolls or migrates existing episodes.
+
+In this mode a WAITING_DEPENDENCY/SOLO/BLOCKED reply must carry `owner` (the bound
+supervisor UUID), a concrete `trigger`, `next_due_epoch`, and `deadline_epoch`.
+The complete reply body and canonical JSON SHA are retained. ANSWERED means only
+that the reply was observed; scheduler enrollment remains active but sends no
+new inquiry while consumption is pending. The original executor reads the full
+body and calls `consume --reply-sha256 SHA`. This authenticated foreground act
+records `detected_epoch` and `consumed_epoch` in a durable receipt. A timer, file
+mtime, manual test or supervisor write is never labeled body consumption.
+
+After consumption the same authorized episode resumes, no earlier than the
+existing 60-second cadence and the reply's next due time. Each new inquiry has a
+new marker. Previously consumed rounds cannot close it again. An elapsed deadline
+allows a new inquiry; it never proves a dependency completed. No catch-up burst
+occurs after a delayed sweep. This does not promise model response within60seconds.
+
+Formal harness task reservations pause inquiries before input; reservation is
+not native dispatch evidence. Releasing that exact child reservation resumes the
+still-authorized overall lifecycle. TASK/DISPATCHED/ACK mailbox text alone does
+not dispatch or pause work. Foreign/mismatched reservations have no effect.
+For overall completion, explicit stop or authorization withdrawal, use
+`stop --reason OVERALL_TASK_COMPLETE` (or the applicable operator reason). Stop
+works even while a reply awaits consumption. An expired/revoked authorization
+never rearms. Existing UNKNOWN/controller/attempt budgets stay unchanged.
+
+The independent scheduler remains files-only: no transcript reads, native input,
+terminal paste, forced turns or blocking Stop hook. Verify the original executor's
+explicit enrollment, automatic sweeps, exact replies, actual consumption, two
+successive rounds and task/stop boundaries separately from installation.

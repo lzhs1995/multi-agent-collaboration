@@ -43,7 +43,12 @@ def from_text(text):
 
 
 def template(state, marker):
-    return dict(marker=marker, caller_surface_uuid=state['caller_surface_uuid'],
+    value = dict(marker=marker, caller_surface_uuid=state['caller_surface_uuid'],
                 supervisor_uuid=state['supervisor'], task_id=state.get('task_id', ''),
                 episode_id=state['episode_id'], status='WAITING_DEPENDENCY',
                 trigger='REPLACE_WITH_CONCRETE_TRIGGER')
+    if state.get('continuation'):
+        due = state.get('next_due_epoch', state['started_epoch'])
+        value.update(owner=state['supervisor'], next_due_epoch=due, deadline_epoch=due,
+                     overall_task=state['continuation']['overall_task'])
+    return value

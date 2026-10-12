@@ -593,10 +593,26 @@ class FiniteReadyTests(unittest.TestCase):
         passive = self.run_loop(one_shot=True, max_seconds=4)
         passive['elapsed_wait_seconds'] = 3.96
         ready.write_json(ready.loop_path(self.caller), passive)
-        with patch.object(self.bridge, 'pin_workspace', side_effect=lambda *a, **kw: time.sleep(2)):
-            start = time.monotonic()
+        budgets = []
+
+        @contextlib.contextmanager
+        def bounded(seconds):
+            budgets.append(seconds)
+            yield
+
+        def blocked(*args, **kwargs):
+            # The real signal interruption has its own test above. Here the
+            # contract is the remaining budget, independent of CI filesystem
+            # latency before the bridge is reached.
+            raise ready.WaitBudgetExpired()
+
+        with patch.object(ready, 'runtime_limit', side_effect=bounded), \
+                patch.object(ready.time, 'monotonic', return_value=100.0), \
+                patch.object(self.bridge, 'pin_workspace', side_effect=blocked) as pin:
             result = self.ask(max_seconds=4)
-        self.assertLess(time.monotonic() - start, 0.75)
+        self.assertEqual(len(budgets), 1)
+        self.assertAlmostEqual(budgets[0], 0.04)
+        pin.assert_called_once()
         self.assertEqual(result['state'], ready.TIMED_OUT)
         self.assertEqual(result['exit_reason'], 'WALL_CLOCK_BUDGET_EXHAUSTED')
         self.assertEqual(result['deadline_epoch'], passive['deadline_epoch'])

@@ -1,3 +1,10 @@
+## 0.4.28 — Explicit continuing file inquiries
+
+- Preserve explicitly authorized overall-task inquiries across WAITING replies and child-task closeout; default one-episode behavior remains unchanged.
+- Require exact full-reply consumption with durable observed/consumed timestamps; pause on formal task reservation and resume on its release.
+- Keep UNKNOWN input attempts, controller pins and nonblocking hooks; revoke on stop, expiry or changed authorization.
+- Make the remaining-budget regression deterministic while retaining real watchdog tests.
+
 # 0.4.27
 
 - Preserve the authenticated foreground thread in public identity proof. Separate the actual hook thread, inherited selector and verified root/parent relationship; child hooks cannot consume the parent's inbox or acquire its ownership.

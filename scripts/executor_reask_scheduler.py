@@ -95,6 +95,9 @@ def approved_release(manifest=None):
 
 def binding(state):
     value = {key: state.get(key) for key in BINDING_KEYS}
+    if state.get('continuation'):
+        from executor_reask_lifecycle import binding as lifecycle_binding
+        value['continuation'] = lifecycle_binding(state['continuation'])
     for key in ('caller_surface_uuid', 'supervisor', 'workspace_uuid'):
         if canonical_uuid(value[key]) != value[key]:
             raise ValueError('episode binding must use canonical UUIDs')
@@ -234,7 +237,9 @@ def sweep(*, manifest=None, now=None):
                                            file_posts=posts, next_due_epoch=state.get('next_due_epoch'))
                                 record['last_execution'] = dict(at_epoch=result['at_epoch'],
                                     state=state['state'], file_posts=posts, input_operations=0)
-                                if state['state'] != reask.WAITING:
+                                continuing = (state.get('continuation', {}) or {}).get('status') == 'ACTIVE'
+                                if state['state'] != reask.WAITING and not (
+                                        continuing and state['state'] == reask.ANSWERED):
                                     record['status'] = 'FINISHED'
                                 ready.write_json(path, record)
                             elif record.get('status') == 'FINISHED':
