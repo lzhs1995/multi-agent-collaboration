@@ -131,10 +131,19 @@ class OfflineWorkspaceFixture(unittest.TestCase):
         self.addCleanup(body_patch.stop)
         def pin(surface, **kwargs):
             return {"workspace_uuid": "ws-uuid", "caller_surface_uuid": "sup-uuid",
+                    "target_pane_uuid": "pane-executor",
                     "target_surface_uuid": "uuid-" + surface.split(":")[-1]}
         patcher = mock.patch.object(HARNESS.cmux, "pin_workspace", side_effect=pin)
         patcher.start()
         self.addCleanup(patcher.stop)
+        mutex_home = tempfile.TemporaryDirectory()
+        self.addCleanup(mutex_home.cleanup)
+        import cmux_input_mutex
+        mutex_patch = mock.patch.object(cmux_input_mutex, 'lock_paths', side_effect=lambda identity: (
+            Path(mutex_home.name) / 'pane.lock',
+            Path(mutex_home.name) / (identity['target_surface_uuid'] + '.lock')))
+        mutex_patch.start()
+        self.addCleanup(mutex_patch.stop)
         # Deterministic screen fixtures; production probes are short and random.
         token_patcher = mock.patch.object(
             HARNESS, "_bridge_test_token",
