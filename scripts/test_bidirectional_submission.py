@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 class BidirectionalSubmissionTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         _, text, draft, _ = self.states(glyph)
         if original_draft is not None:
             draft = original_draft
-        with NativeFixture(provider='codex' if glyph == '›' else 'claude') as native:
+        with LegacyTerminalFixture(provider='codex' if glyph == '›' else 'claude') as native:
             reads, sent_keys = 0, 0
             def observe(*args, **kwargs):
                 nonlocal reads
@@ -138,7 +138,7 @@ class BidirectionalSubmissionTests(unittest.TestCase):
         busy = '• Working (3s • esc to interrupt)\n' + pending + '\ntab to queue message'
         queue = 'Messages to be submitted after next tool call\n' + text + '\n' + idle
         for after, accepted in [(queue, False), (consumed, True), (busy, False)]:
-            with self.subTest(after=after), NativeFixture() as native, \
+            with self.subTest(after=after), LegacyTerminalFixture() as native, \
                     patch.object(b, 'read_screen', side_effect=native.ready_screens(idle, busy, after)), \
                     patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key, \
                     patch.object(b.time, 'sleep'):
@@ -177,7 +177,7 @@ class DraftOwnershipTests(unittest.TestCase):
     def test_model_or_path_looking_first_row_remains_occupied(self):
         for draft in ['GPT-this is my draft', 'claude/my-draft', '[Claude draft]']:
             screen='› '+draft+'\nGPT-6 high'
-            with self.subTest(draft=draft), NativeFixture(), patch.object(b, 'read_screen', return_value=screen), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
+            with self.subTest(draft=draft), LegacyTerminalFixture(), patch.object(b, 'read_screen', return_value=screen), patch.object(b, 'send_text') as send, patch.object(b, 'send_key') as key:
                 with self.assertRaises(b.DispatchUnconfirmed): b.submit_text('peer','new',marker='new')
                 send.assert_not_called(); key.assert_not_called()
 

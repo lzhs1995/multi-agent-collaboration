@@ -17,6 +17,7 @@ dry-run checker with `--check-command`.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -107,21 +108,179 @@ def _text_starts_agent_launch(text: str) -> bool:
 
     # Shell wrappers commonly used to start a long-lived CLI process.
     while tokens and tokens[0] in {"exec", "command", "nohup", "rtk"}:
-        tokens = tokens[1:]
+        wrapper, tokens = tokens[0], tokens[1:]
+        if wrapper == "rtk" and tokens[:1] == ["proxy"]:
+            tokens = tokens[1:]
     if tokens and tokens[0] == "env":
         tokens = tokens[1:]
         while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]):
             tokens = tokens[1:]
         while tokens and tokens[0] in {"exec", "command", "nohup", "rtk"}:
-            tokens = tokens[1:]
+            wrapper, tokens = tokens[0], tokens[1:]
+            if wrapper == "rtk" and tokens[:1] == ["proxy"]:
+                tokens = tokens[1:]
     if not tokens:
         return False
     return os.path.basename(tokens[0]).lower() in AGENT_LAUNCH_NAMES
 
 
+def _python_document_data(command: str) -> str:
+    """Separate Python data from command arguments in a quoted stdin program.
+
+    A semicolon/newline in a Python value is never a shell boundary. Mask those
+    values even when the program also imports helpers or runs a read-only
+    subprocess. Scan actual execution arguments separately, including aliases
+    and assigned command values. Shell/expanded heredocs and unknown headers
+    retain the conservative shell scan. This never executes the program.
+    """
+    pattern = re.compile(
+        r"(?m)^(?P<header>[^\r\n]*?)<<\s*(?P<quote>['\"])"
+        r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)[ \t]*\r?\n"
+        r"(?P<body>.*?)\r?\n(?P=delimiter)(?:\r?\n|$)", re.S,
+    )
+    executable_calls = {
+        "eval", "exec", "compile", "__import__", "getattr", "setattr",
+        "globals", "locals", "vars", "startfile",
+        "system", "popen", "Popen", "run", "call", "check_call", "check_output",
+        "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp",
+        "execlpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv",
+        "spawnve", "spawnvp", "spawnvpe", "posix_spawn", "posix_spawnp",
+        "create_subprocess_exec", "create_subprocess_shell", "launch",
+    }
+
+    def execution_arguments(tree: ast.AST) -> list[str]:
+        assignments: dict[str, list[ast.AST]] = {}
+        imports: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for item in node.names:
+                    imports[item.asname or item.name] = (node.module or "") + "." + item.name
+            elif isinstance(node, ast.Import):
+                for item in node.names:
+                    imports[item.asname or item.name.split(".")[0]] = item.name
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        assignments.setdefault(target.id, []).append(node.value)
+
+        def executable(node: ast.AST, seen: frozenset[str] = frozenset()) -> bool:
+            if isinstance(node, ast.Name):
+                name = imports.get(node.id, node.id).rsplit(".", 1)[-1]
+                return (name in executable_calls or name.startswith("__")
+                        or node.id not in seen and any(executable(value, seen | {node.id})
+                            for value in assignments.get(node.id, ())))
+            if isinstance(node, ast.Attribute):
+                return node.attr in executable_calls or node.attr.startswith("__")
+            if isinstance(node, ast.Call):
+                return executable(node.func, seen)
+            return False
+
+        def resolve(node: ast.AST, seen: frozenset[str] = frozenset()) -> list[Any]:
+            # Bounded static values only; never eval/compile/import user code.
+            if len(seen) > 20:
+                return []
+            if isinstance(node, ast.Name) and node.id not in seen:
+                return [value for source in assignments.get(node.id, ())
+                        for value in resolve(source, seen | {node.id})][:32]
+            try:
+                return [ast.literal_eval(node)]
+            except (ValueError, TypeError, SyntaxError, RecursionError):
+                pass
+            if isinstance(node, (ast.List, ast.Tuple)):
+                values = [resolve(item, seen) for item in node.elts]
+                if all(len(items) == 1 for items in values):
+                    return [[items[0] for items in values]]
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                return [left + right for left in resolve(node.left, seen)
+                        for right in resolve(node.right, seen)
+                        if isinstance(left, str) and isinstance(right, str)][:32]
+            if isinstance(node, ast.Subscript):
+                result = []
+                for container in resolve(node.value, seen):
+                    for key in resolve(node.slice, seen):
+                        try:
+                            result.append(container[key])
+                        except (TypeError, KeyError, IndexError):
+                            pass
+                return result[:32]
+            return []
+
+        def render(value: Any, shell: bool = False) -> list[str]:
+            if isinstance(value, bytes):
+                return [value.decode("utf-8", errors="replace")]
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, (list, tuple)) and value and all(isinstance(v, str) for v in value):
+                if shell:
+                    return [value[0]]
+                # argv entries are not independent shell commands: echoing
+                # "Claude status" must stay harmless. Inspect shell -c code.
+                if os.path.basename(value[0]) in {"sh", "bash", "zsh", "dash"} and "-c" in value:
+                    index = value.index("-c") + 1
+                    return [value[index]] if index < len(value) else []
+                return ["codex"] if _text_starts_agent_launch(shlex.join(value)) else []
+            return []
+
+        commands = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not executable(node.func):
+                continue
+            # Positional argv / code or its conventional keyword equivalent.
+            args = list(node.args[:1]) + [kw.value for kw in node.keywords
+                    if kw.arg in {"args", "command", "code", "executable"}]
+            shell = any(kw.arg == "shell" and resolve(kw.value) == [True]
+                        for kw in node.keywords)
+            for argument in args:
+                for value in resolve(argument):
+                    commands.extend(render(value, shell=shell))
+        return commands
+
+    def replace(match: re.Match[str]) -> str:
+        try:
+            argv = shlex.split(match["header"], posix=True)
+            if argv[:1] == ["rtk"]:
+                argv = argv[1:]
+                if argv[:1] == ["proxy"]:
+                    argv = argv[1:]
+            if (len(argv) < 2
+                    or not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", os.path.basename(argv[0]))
+                    or any(c in argv[0] for c in "$`\\\r\n")
+                    or argv[-1] != "-"
+                    or any(v not in ("-B", "-u", "-I", "-E", "-s", "-S") for v in argv[1:-1])):
+                return match[0]
+            body = match["body"]
+            tree = ast.parse(body)
+        except (SyntaxError, ValueError, RecursionError):
+            return match[0]
+        nodes = list(ast.walk(tree))
+        executable_text = execution_arguments(tree)
+        # AST column offsets are UTF-8 bytes, including on non-ASCII documents.
+        raw = body.encode("utf-8")
+        starts, offset = [], 0
+        for line in raw.split(b"\n"):
+            starts.append(offset)
+            offset += len(line) + 1
+        masked = bytearray(raw)
+        for node in nodes:
+            if (isinstance(node, ast.JoinedStr)
+                    or isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))):
+                begin = starts[node.lineno - 1] + node.col_offset
+                end = starts[node.end_lineno - 1] + node.end_col_offset
+                for index in range(begin, end):
+                    if masked[index] not in (10, 13):
+                        masked[index] = 32
+        start = match.start("body") - match.start()
+        stop = match.end("body") - match.start()
+        return (match[0][:start] + masked.decode("utf-8") + match[0][stop:]
+                + "\n" + "\n".join(executable_text) + "\n")
+
+    return pattern.sub(replace, command)
+
+
 def _shell_starts_agent_launch(command: str) -> bool:
     """Detect a direct agent launch in any simple shell command segment."""
-    for segment in re.split(r"(?:^|\s*(?:&&|\|\||;|\n)\s*)", command):
+    for segment in re.split(r"(?:^|\s*(?:&&|\|\||;|\n)\s*)", _python_document_data(command)):
         if _text_starts_agent_launch(segment.strip()):
             return True
     return False

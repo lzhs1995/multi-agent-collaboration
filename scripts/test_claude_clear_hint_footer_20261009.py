@@ -126,6 +126,20 @@ class ClaudeClearHintFooterTests(unittest.TestCase):
         rows[start + 1] = rows[start + 1][:-1]
         self.assert_unknown_and_zero_input("\n".join(rows))
 
+    def test_standalone_clear_hint_accepts_only_exact_goal_suffix(self):
+        base = with_hint("")
+        for duration in ("4h", "4h 2m", "3m 2s", "8s"):
+            hint = HINT + f" · ◎ /goal active ({duration})"
+            screen = base + "  " + hint + "\n"
+            self.assertTrue(b.compose_block_is_empty(screen))
+            self.assertFalse(b._queued_or_active_input(screen))
+            draft = with_draft(screen, hint)
+            self.assertEqual(b.compose_block_text(draft), hint)
+            self.assert_zero_input(draft)
+        for suffix in (" · ◎ /goal active (4h) extra", " · ◎ /goal done (4h)",
+                       " · ◎ /goal active (soon)", " | ◎ /goal active (4h)"):
+            self.assert_unknown_and_zero_input(base + "  " + HINT + suffix + "\n")
+
     def test_compaction_and_reconnection_with_hint_refuse_all_input(self):
         for status in ("✻ Compacting context (23s)",
                        "✽ Compacting conversation… (23s)", "✢ Reconnecting... 1/10"):

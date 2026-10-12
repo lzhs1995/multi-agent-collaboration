@@ -3,12 +3,14 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import os
+import stat
 import time
 from pathlib import Path
 
 from cmux_callback_journal import write_json
 import cmux_native_delivery as native
-from cmux_evidence_io import read_bytes, attempt_paths, open_regular_lock
+from cmux_evidence_io import read_bytes, attempt_paths, open_regular_lock, snapshot
 import cmux_prompt_reference as prompt_reference
 
 
@@ -64,13 +66,7 @@ def verified_receipt(bridge, surface, text, marker):
                 or receipt.get('confirmation_scope') != 'reference_notice'
                 or receipt.get('body_read_confirmed') is not False):
             return None
-        events = attempt['events']
-        pastes = [e for e in events if e['phase'] == 'PASTE_INTENT']
-        if len(pastes) != 1:
-            return None
-        before = pastes[0]['screen']
-        if pastes[0].get('screen_sha256') != bridge.screen_hash(before):
-            return None
+        native._original_intent(attempt, attempt.get('native_binding'), text)
         pins = [(receipt_path, receipt_pin), (attempt_path, attempt_pin)]
         if receipt.get('reconciled_read_only') is True:
             observation_path = Path(receipt['observation'])
@@ -93,6 +89,66 @@ def verified_receipt(bridge, surface, text, marker):
             proof.update(body_pin=body_pin, confirmation_scope='reference_notice',
                          body_read_confirmed=False)
         return proof
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        return None
+
+
+def verified_no_input(bridge, surface, text, marker):
+    """Prove an original message never reached input intent; never retry it.
+
+    Absence of evidence is not NO_INPUT. Every original attempt must positively
+    record NO_INPUT with no events, under the unchanged request binding. Hold the
+    existing journal lock and recheck the complete evidence set before returning.
+    """
+    try:
+        if not isinstance(marker, str) or not marker or marker not in text:
+            return None
+        live = bridge.pin_workspace(surface)
+        identity = {k: live[k] for k in ('workspace_uuid', 'caller_surface_uuid',
+                                        'target_surface_uuid', 'target_pane_uuid')}
+        if not all(isinstance(v, str) and v for v in identity.values()):
+            return None
+        binding = dict(identity=identity, marker=marker, payload_sha256=digest(text))
+        root = Path.home() / '.local/state/multi-agent-collaboration'
+        key = digest(json.dumps([identity['caller_surface_uuid'], marker], sort_keys=True))
+        journal = root / 'message-dispatch-v1' / key
+        legacy = root / 'deliveries-v1' / (key + '.json')
+        receipt = journal / 'receipt.json'
+        lock_path = journal / 'delivery.lock'
+        # Read-only open: a missing journal/lock cannot manufacture zero-input
+        # proof or overwrite a historical controller's ownership.
+        with os.fdopen(os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as lock:
+            held, current = os.fstat(lock.fileno()), lock_path.lstat()
+            if (not stat.S_ISREG(held.st_mode) or held.st_nlink != 1
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                return None
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if os.path.lexists(legacy) or os.path.lexists(receipt):
+                return None
+            paths = attempt_paths(journal)
+            if not paths or len(paths) > 2 or paths != [
+                    journal / ('attempt-%04d.json' % n) for n in range(1, len(paths) + 1)]:
+                return None
+            pins, proofs, body_pins = [], [], []
+            for path in paths:
+                raw, pin = snapshot(path)
+                attempt = json.loads(raw)
+                if (attempt.get('binding') != binding or attempt.get('phase') != 'NO_INPUT'
+                        or attempt.get('events') != [] or attempt.get('result')):
+                    return None
+                body_pins.append((attempt, original_body_pin(text, attempt)))
+                pins.append((path, raw, pin))
+                proofs.append(dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest(),
+                    device=pin[0], inode=pin[1], size=pin[2], mtime_ns=pin[3], ctime_ns=pin[4]))
+            current = lock_path.lstat()
+            if (attempt_paths(journal) != paths or os.path.lexists(legacy)
+                    or os.path.lexists(receipt) or bridge.pin_workspace(surface) != live
+                    or (held.st_dev, held.st_ino, 1) != (current.st_dev, current.st_ino, current.st_nlink)
+                    or any(snapshot(path) != (raw, pin) for path, raw, pin in pins)
+                    or any(original_body_pin(text, attempt) != pin for attempt, pin in body_pins)):
+                return None
+            return dict(source='revalidated_message_no_input_v1', binding=binding,
+                        attempts=proofs, input_operations=0)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
         return None
 
@@ -194,12 +250,9 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             attempt['phase'] = 'CONFIRMED'
             write_json(attempt_path, attempt)
         elif reconcile_only:
-            pastes = [e for e in (old or {}).get('events', []) if e['phase'] == 'PASTE_INTENT']
-            if len(pastes) != 1:
+            if not old or old.get('phase') in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_MESSAGE')
-            before = pastes[0]['screen']
-            if pastes[0].get('screen_sha256') != bridge.screen_hash(before):
-                raise bridge.TaskPackContractError('MESSAGE_EVIDENCE_CHANGED')
+            native._original_intent(old, old.get('native_binding'), text)
             result = native.scan_original(bridge, surface, text, attempts[-1], old.get('native_binding'))
             observation = journal / ('observation-' + str(time.time_ns()) + '.json')
             write_json(observation, dict(result, input_operations=0, at_epoch=time.time()))
@@ -226,13 +279,14 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 attempt.update(body_reference=body_reference, body_pin=body_pin)
             write_json(attempt_path, attempt)
 
-            def observe(phase, screen=None):
+            def observe(phase, screen=None, *, evidence=None):
                 recheck()
                 # Refuse stale nonce before the very first mutation.
                 if phase == 'PASTE_INTENT' and ''.join(marker.split()) in ''.join(screen.split()):
                     raise bridge.TaskPackContractError('MESSAGE_MARKER_ALREADY_VISIBLE')
                 fence = native.capture_paste_fence(attempt['native_binding']) if phase == 'PASTE_INTENT' else None
-                event = dict(phase=phase, at_epoch=time.time())
+                fields = native.input_event_fields(attempt['native_binding'], text, phase, evidence)
+                event = dict(fields, phase=phase, at_epoch=time.time())
                 if fence is not None:
                     event['native_paste_fence'] = fence
                 if screen is not None:

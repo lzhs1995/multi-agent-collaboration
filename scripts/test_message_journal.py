@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 class MessageJournalTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class MessageJournalTests(unittest.TestCase):
         p.start(); self.addCleanup(p.stop)
         self.identity = dict(workspace_uuid='workspace', caller_surface_uuid='caller',
                              target_surface_uuid='target', target_pane_uuid='pane')
-        self.native = NativeFixture.attach(self, home=self.home, identity=self.identity)
+        self.native = LegacyTerminalFixture.attach(self, home=self.home, identity=self.identity)
         self.home = self.native.home
         self.pin = self.native.pin
         p = patch.object(b.time, 'sleep')

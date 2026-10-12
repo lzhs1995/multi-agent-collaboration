@@ -134,9 +134,9 @@ class CloseoutTests(unittest.TestCase):
         self.assert_waiting_stop(self.stop())
         self.assertEqual(self.pre().returncode, 2)
 
-    def no_input_command(self):
+    def no_input_command(self, release_name='original-release'):
         # A different complete controller remains bound by the frozen pack.
-        original = self.root / 'original-release'
+        original = self.root / release_name
         (original / 'scripts').mkdir(parents=True)
         (original / 'SKILL.md').write_text('Original task-bound skill.\n')
         controller = original / 'scripts/cmux_bridge.py'
@@ -159,6 +159,69 @@ class CloseoutTests(unittest.TestCase):
         self.assertEqual(before, self.snapshot())
         self.assert_waiting_stop(self.stop())
         self.assertEqual(self.pre().returncode, 2)
+
+    def test_no_input_successor_accepts_equivalent_literal_unicode_quoting(self):
+        quoted = self.no_input_command(release_name='原始版本')
+        argv = shlex.split(quoted)
+        variants = [' '.join(argv), ' '.join("'" + arg + "'" for arg in argv),
+                    ' '.join('"' + arg + '"' for arg in argv),
+                    quoted.replace('rtk proxy ', "'rt'k  \"proxy\" ", 1)]
+        before = self.snapshot()
+        for command in variants:
+            with self.subTest(command=command):
+                result = self.pre(tool_input={'command': command, 'timeout': 600000})
+                self.assertEqual((result.returncode, result.stderr), (0, ''))
+                self.assertEqual(before, self.snapshot())
+
+    def test_no_input_successor_missing_or_equivalent_callback_metadata(self):
+        command = self.no_input_command(release_name='原始版本')
+        original_argv = shlex.split(command)[2:]
+        for supplied in (False, True):
+            with self.subTest(metadata_present=supplied):
+                self.pack.pop('callback_command', None)
+                if supplied:
+                    self.pack['callback_command'] = ' '.join(original_argv)
+                self.write(self.pack_path, self.pack)
+                self.attempt['binding']['task_pack_sha256'] = self.sha(self.pack_path)
+                self.write(self.attempt_path, self.attempt)
+                result = self.pre(tool_input={'command': ' '.join(shlex.split(command))})
+                self.assertEqual((result.returncode, result.stderr), (0, ''))
+
+    def test_no_input_successor_shell_expansion_is_not_literal_argv(self):
+        for release_name in ('原始$HOME', '原始`true`', '原始*', '原始[abc]', '原始{a,b}'):
+            with self.subTest(release_name=release_name):
+                command = self.no_input_command(release_name=release_name)
+                self.assertEqual(self.pre(tool_input={'command': command}).returncode, 0)
+                raw = ' '.join(shlex.split(command))
+                # shlex alone sees identical words; the shell would expand them.
+                self.assertEqual(shlex.split(raw), shlex.split(command))
+                self.assertEqual(self.pre(tool_input={'command': raw}).returncode, 2)
+                if '$' in release_name or '`' in release_name:
+                    double = ' '.join('"' + arg + '"' for arg in shlex.split(command))
+                    self.assertEqual(self.pre(tool_input={'command': double}).returncode, 2)
+
+    def test_no_input_successor_rejects_comment_and_empty_control_tail(self):
+        command = self.no_input_command(release_name='原始版本')
+        for suffix in (';', '&', '\n', '\r', ' # comment', ' || true', ' > receipt.json',
+                       ' --task-pack ' + shlex.quote(str(self.pack_path))):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(self.pre(tool_input={'command': command + suffix}).returncode, 2)
+        for bad in (None, False, 0, [], {}, '"' + command,
+                    command.replace(sys.executable, '/usr/bin/python3', 1)):
+            with self.subTest(command=bad):
+                self.assertEqual(self.pre(tool_input={'command': bad}).returncode, 2)
+
+    def test_no_input_successor_rejects_invalid_callback_metadata(self):
+        command = self.no_input_command()
+        original = self.pack['callback_command']
+        for bad in (None, False, [], original + ';', original + ' # note',
+                    original.replace('original-release', 'other-release')):
+            with self.subTest(metadata=bad):
+                self.pack['callback_command'] = bad
+                self.write(self.pack_path, self.pack)
+                self.attempt['binding']['task_pack_sha256'] = self.sha(self.pack_path)
+                self.write(self.attempt_path, self.attempt)
+                self.assertEqual(self.pre(tool_input={'command': command}).returncode, 2)
 
     def test_no_input_successor_rejects_shell_wrappers_and_other_targets(self):
         command = self.no_input_command()

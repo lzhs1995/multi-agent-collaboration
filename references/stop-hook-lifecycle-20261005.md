@@ -1,3 +1,5 @@
+> Current policy (0.4.19): [non-blocking recovery](nonblocking-recovery.md) overrides historical session-wide tool/Stop blocks and old-supervisor handshake restrictions below. Installed workflow hooks are advisory; explicit transport evidence and draft protection remain.
+
 # Stop Hook 重入与回调状态
 
 适用于所有 cmux Claude Code 的共享协作 Hook，不依赖 surface 白名单。投递、封口与等待以[统一合同](verified-compose-delivery.md)为准。

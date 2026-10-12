@@ -1,0 +1,180 @@
+"""The installed workflow entrypoints observe every failure without blocking."""
+import contextlib
+import io
+import json
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import cmux_hook_runtime_audit as audit
+import cmux_workflow_advisory as advisory
+import manage_install as manager
+import executor_ready as ready
+import executor_reask as reask
+import supervisor_inbox as inbox
+from offline_hook_thread_fixture import native_thread
+
+
+class WorkflowAdvisoryTests(unittest.TestCase):
+    def test_all_installed_workflow_commands_allow_fault_payloads(self):
+        events = dict(manager.GUARDS, **manager.OPTIONAL_GUARDS)
+        for name in sorted(advisory.WORKFLOW_HOOKS):
+            event = events[Path(name).stem]
+            faults = ['{broken', '[]', json.dumps({
+                'session_id': 'unresolved-native-session',
+                'hook_event_name': event,
+                'tool_name': 'Bash',
+                'tool_input': {'command': 'cmux-agent self'},
+                'stop_hook_active': True,
+                'last_assistant_message': 'Report frozen; callback could not be resolved.',
+                'error': 'HOOK_CALLER_UNRESOLVED',
+            })]
+            for raw in faults:
+                with self.subTest(hook=name, payload=raw[:30]):
+                    command = shlex.split(manager.command(Path(name).stem))
+                    self.assertEqual(Path(command[2]).name, 'cmux_workflow_advisory.py')
+                    run = subprocess.run(command, input=raw, text=True,
+                                         capture_output=True, timeout=10)
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    # Empty output cannot deny a tool, force continuation,
+                    # request another task or misrepresent delivery evidence.
+                    self.assertEqual((run.stdout, run.stderr), ('', ''))
+
+    def test_invalid_options_payload_or_observer_error_never_blocks(self):
+        for argv, raw in [([], '{}'), (['--hook', 'foreign.py'], '{}'),
+                          (['--hook', 'cmux_consensus_stop_guard.py'], 'null'),
+                          (['--hook', 'cmux_consensus_stop_guard.py'],
+                           'x' * (advisory.MAX_INPUT_CHARS + 1))]:
+            with self.subTest(argv=argv, chars=len(raw)), \
+                    patch.object(sys, 'argv', ['advisory', *argv]), \
+                    patch.object(sys, 'stdin', io.StringIO(raw)), \
+                    patch.object(audit, 'record') as record:
+                self.assertEqual(advisory.main(), 0)
+                record.assert_not_called()
+        with patch.object(sys, 'argv', ['advisory', '--hook', 'cmux_consensus_stop_guard.py']), \
+                patch.object(sys, 'stdin', io.StringIO('{}')), \
+                patch.object(audit, 'record', side_effect=OSError('state unavailable')):
+            self.assertEqual(advisory.main(), 0)
+
+    def test_real_wrapper_records_original_hook_without_claiming_native_delivery(self):
+        # Run the product wrapper/main and audit in a separate interpreter.
+        # Only the storage home is isolated; no process provenance is forged.
+        with tempfile.TemporaryDirectory(prefix='advisory-audit-') as directory:
+            wrapper = Path(advisory.__file__).resolve()
+            driver = (
+                'from pathlib import Path; import runpy,sys; '
+                'root=Path(sys.argv.pop(1)); '
+                'Path.home=staticmethod(lambda: root); '
+                'script=sys.argv.pop(1); sys.argv[0]=script; '
+                'sys.path.insert(0,str(Path(script).parent)); '
+                'runpy.run_path(script,run_name="__main__")'
+            )
+            session = '11111111-1111-4111-8111-111111111111'
+            hook = 'cmux_native_delivery_guard.py'
+            payload = dict(session_id=session, hook_event_name='PostToolUse',
+                           tool_input={'command': 'private-command-data'})
+            run = subprocess.run([sys.executable, '-B', '-c', driver, directory,
+                                  str(wrapper), '--hook', hook], input=json.dumps(payload),
+                                 text=True, capture_output=True, timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual((run.stdout, run.stderr), ('', ''))
+            receipts = list(Path(directory).rglob('*.json'))
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text())
+            self.assertEqual(receipt['mode'], 'advisory')
+            self.assertEqual(receipt['hook'], hook)
+            self.assertEqual(receipt['original_hook'], hook)
+            self.assertEqual(receipt['entrypoint'], wrapper.name)
+            self.assertEqual(receipt['event'], 'PostToolUse')
+            self.assertFalse(receipt['native_receipt'])
+            self.assertNotIn('automatic_client_adoption', receipt)
+            self.assertNotIn('private-command-data', receipts[0].read_text())
+
+
+class SupervisorInboxAdvisoryTests(unittest.TestCase):
+    """Exercise the installed entry with the real file writer/reader protocol."""
+    CALLER = '11111111-1111-4111-8111-111111111111'
+    SUPERVISOR = '22222222-2222-4222-8222-222222222222'
+    WORKSPACE = '33333333-3333-4333-8333-333333333333'
+
+    def setUp(self):
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.home = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve()
+        self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
+        self.payload, self.proof = native_thread(self.home)
+        self.stack.enter_context(patch.object(inbox.identity, 'native_proof', return_value=self.proof))
+        self.stack.enter_context(patch.object(inbox.identity, 'evaluation',
+                                              return_value=contextlib.nullcontext()))
+        self.identity = self.stack.enter_context(patch.object(
+            inbox.identity, 'identity', return_value=(self.WORKSPACE, self.SUPERVISOR)))
+        self.record = self.stack.enter_context(patch.object(audit, 'record'))
+        self.state = reask.start(self.CALLER, self.SUPERVISOR, 'completed-task',
+                                 now=1.0, workspace=self.WORKSPACE)
+        self.marker = 'EXECUTOR_READY_advisory'
+        result = reask.write_channels(self.state, self.marker, 'request next fixed pack', 2.0)
+        self.assertEqual(result['errors'], [])
+
+    def invoke(self, hook='cmux_supervisor_report_guard.py', event='PostToolUse'):
+        payload = dict(self.payload, hook_event_name=event)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'argv', ['advisory', '--hook', hook]), \
+                patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(advisory.main(), 0)
+        self.assertEqual(err.getvalue(), '')
+        return out.getvalue()
+
+    def test_real_file_request_reaches_supported_context_and_is_deduplicated(self):
+        raw = self.invoke()
+        result = json.loads(raw)
+        self.assertEqual(set(result), {'hookSpecificOutput'})
+        context = result['hookSpecificOutput']
+        self.assertEqual(set(context), {'hookEventName', 'additionalContext'})
+        self.assertEqual(context['hookEventName'], 'PostToolUse')
+        self.assertIn(self.marker, context['additionalContext'])
+        self.assertIn(str(reask.inbox_path(self.state)), context['additionalContext'])
+        self.assertIn('File discovery is not native transport', context['additionalContext'])
+        self.assertEqual(self.invoke(), '')
+        self.assertFalse((ready.state_root() / 'message-dispatch-v1').exists())
+
+    def test_telemetry_failure_does_not_suppress_file_request(self):
+        self.record.side_effect = OSError('audit storage unavailable')
+        self.assertIn(self.marker, self.invoke())
+
+    def test_discovery_error_never_blocks_or_emits_a_control_response(self):
+        with patch.object(inbox, 'discover', side_effect=OSError('inbox unavailable')):
+            self.assertEqual(self.invoke(), '')
+        self.record.assert_called_once()
+
+    def test_unresolved_or_foreign_identity_emits_no_request(self):
+        for binding in [(None, None), ('unresolved', self.SUPERVISOR),
+                        (self.WORKSPACE, self.CALLER)]:
+            with self.subTest(binding=binding):
+                self.identity.return_value = binding
+                self.assertEqual(self.invoke(), '')
+        self.identity.side_effect = RuntimeError('HOOK_CALLER_UNRESOLVED')
+        self.assertEqual(self.invoke(), '')
+
+    def test_other_hooks_and_stop_do_not_discover_or_force_a_reask(self):
+        with patch.object(inbox, 'discover') as discover:
+            for hook in advisory.WORKFLOW_HOOKS:
+                if hook != 'cmux_supervisor_report_guard.py':
+                    self.assertEqual(self.invoke(hook=hook), '')
+            for event in ('PreToolUse', 'Stop', 'SubagentStop'):
+                self.assertEqual(self.invoke(event=event), '')
+            discover.assert_not_called()
+
+    def test_an_exact_reply_suppresses_discovery(self):
+        body = ready.read_json(reask.inbox_path(self.state))
+        ready.write_json(Path(body['reply_mailbox']), dict(
+            body['reply_template'], trigger='Current chapter review must finish.'))
+        self.assertEqual(self.invoke(), '')
+
+
+if __name__ == '__main__':
+    unittest.main()

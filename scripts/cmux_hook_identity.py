@@ -8,6 +8,7 @@ import cmux_workspace_guard as workspace
 import cmux_identity_budget as budget
 
 _current = ContextVar('cmux_hook_identity', default=None)
+_proof = ContextVar('cmux_hook_native_proof', default=None)
 
 
 def resolve(payload):
@@ -18,6 +19,7 @@ def resolve(payload):
 
 
 def _resolve(payload):
+    _proof.set(None)
     collector = lambda: workspace.daemon_identity.collect_hook(os.environ, payload)
     proof = collector()
     if proof is not None:
@@ -29,6 +31,7 @@ def _resolve(payload):
         ws, surface = env.get('CMUX_WORKSPACE_ID'), env.get('CMUX_SURFACE_ID')
         if not ws or not surface:
             workspace.deny('resolved hook caller lacks workspace or surface')
+        _proof.set(proof)
         return ws, surface
     return (os.environ.get('CMUX_WORKSPACE_ID') or payload.get('workspace_id') or 'default',
             os.environ.get('CMUX_SURFACE_ID') or payload.get('surface_id')
@@ -40,6 +43,10 @@ def identity(payload):
     return value if value is not None else resolve(payload)
 
 
+def native_proof():
+    return _proof.get()
+
+
 @contextmanager
 def evaluation(payload):
     # PostToolUse reconciliation descends through bridge.pin_workspace() to
@@ -48,11 +55,15 @@ def evaluation(payload):
     # same evaluation. Each nested snapshot obtains fresh process evidence.
     collector = lambda: workspace.daemon_identity.collect_hook(os.environ, payload)
     with workspace.caller_collection(collector):
-        token = _current.set(resolve(payload))
+        proof_token = _proof.set(None)
         try:
-            yield
+            token = _current.set(resolve(payload))
+            try:
+                yield
+            finally:
+                _current.reset(token)
         finally:
-            _current.reset(token)
+            _proof.reset(proof_token)
 
 
 ERRORS = (workspace.WorkspaceScopeError, workspace.daemon_identity.IdentityError,

@@ -114,6 +114,7 @@ def terminal_report(marker, workspace, surface):
             phase = attempt['phase']
             events = attempt['events']
             phases = {'PASTE_INTENT', 'PASTED', 'ENTER_INTENT', 'ENTER_SENT',
+                      'NATIVE_INPUT_INTENT', 'NATIVE_INPUT_RESULT',
                       'DRAFT_OBSERVATION', 'RECOVERY_OBSERVATION',
                       'POST_ENTER_OBSERVATION', 'EXTRA_ENTER_INTENT',
                       'QUEUE_TAB_INTENT', 'POST_QUEUE_TAB_OBSERVATION'}

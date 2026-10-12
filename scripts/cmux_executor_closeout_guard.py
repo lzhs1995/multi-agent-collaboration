@@ -2,9 +2,10 @@
 """PreToolUse: end post-delivery work on the currently armed executor task."""
 import json
 import cmux_hook_identity as hook_identity
+import cmux_hook_scope as hook_scope
 import sys
 from cmux_consensus_stop_guard import (
-    _active_markers, _has_active_markers, _workspace_key, _surface_key,
+    _active_markers, _scope_candidates, _workspace_key, _surface_key,
 )
 from executor_closeout import terminal_report, superseded, closeout_instructions
 from cmux_callback_queue_resume import allowed as queue_resume_allowed
@@ -51,12 +52,12 @@ def evaluate(payload):
     if payload.get('hook_event_name') != 'PreToolUse':
         return True, ''
     try:
-        if not _has_active_markers():
-            return True, ''
-        with hook_identity.evaluation(payload):
+        with hook_scope.evaluation(payload, _scope_candidates()) as markers:
+            if not markers:
+                return True, ''
             return _evaluate_resolved(payload)
     except hook_identity.ERRORS as exc:
-        return False, 'HOOK_CALLER_UNRESOLVED: ' + str(exc)
+        return False, 'TASK_EVIDENCE_INVALID: ' + str(exc)
 
 
 def main():

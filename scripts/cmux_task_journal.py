@@ -47,13 +47,7 @@ def verified_receipt(bridge, surface, text, marker, task_pack_path):
         if (receipt.get('confirmed') is not True or receipt.get('binding') != binding
                 or attempt.get('binding') != binding):
             return None
-        events = attempt['events']
-        pastes = [e for e in events if e['phase'] == 'PASTE_INTENT']
-        if len(pastes) != 1:
-            return None
-        before = pastes[0]['screen']
-        if pastes[0].get('screen_sha256') != bridge.screen_hash(before):
-            return None
+        native._original_intent(attempt, attempt.get('native_binding'), text)
         pins = [(path, pack_pin), (receipt_path, receipt_pin), (attempt_path, attempt_pin)]
         if receipt.get('reconciled_read_only') is True:
             observation_path = Path(receipt['observation'])
@@ -85,6 +79,12 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         raise bridge.TaskPackContractError('DISPATCH_MARKER_REQUIRED: bind a visible payload marker')
     if force_compose:
         raise bridge.TaskPackContractError('DISPATCH_PRESERVE_COMPOSE: resolve the original draft first')
+    # Reject an invalid wire before reserving the task slot. Read-only legacy
+    # reconciliation must retain the original bytes, including old multiline
+    # notices; only new input is subject to the current wire budget.
+    if not reconcile_only:
+        from cmux_prompt_reference import require_inline
+        require_inline(text)
     proof = bridge.pin_workspace(surface)
     identity = {k: proof[k] for k in ('workspace_uuid', 'caller_surface_uuid',
                                     'target_surface_uuid', 'target_pane_uuid')}
@@ -170,16 +170,17 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
                            delivery_lock_identity=delivery_lock_identity)
             write_json(attempt_path, attempt)
 
-            def observe(phase, screen=None):
+            def observe(phase, screen=None, *, evidence=None):
                 recheck()
                 fence = native.capture_paste_fence(attempt['native_binding']) if phase == 'PASTE_INTENT' else None
-                attempt['phase'] = phase
-                event = dict(phase=phase, at_epoch=time.time())
+                fields = native.input_event_fields(attempt['native_binding'], text, phase, evidence)
+                event = dict(fields, phase=phase, at_epoch=time.time())
                 if fence is not None:
                     event['native_paste_fence'] = fence
                 if screen is not None:
                     event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
                 attempt['events'].append(event)
+                attempt['phase'] = phase
                 write_json(attempt_path, attempt)
 
             try:

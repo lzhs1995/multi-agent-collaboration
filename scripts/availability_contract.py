@@ -91,7 +91,10 @@ def classify_failure(payload, attempts=0, now=None, last_attempt_at=None):
     if payload.get("budget_below_phase_minimum"):
         return {"category": "SUPERVISOR_BUDGET_TOO_SHORT", "takeover": False, "retry": False}
     code = payload.get("http_status")
-    if "billing" in text or "payment" in text or "no-account" in text:
+    # Some providers prepend "/login" even when their actual error is a balance
+    # failure. Classify the explicit cause before the generic 401/403 fallback.
+    if ("billing" in text or "payment" in text or "no-account" in text
+            or re.search(r"\binsufficient(?:\s+account)?\s+balance\b", text)):
         return {"category": "UNAVAILABLE_BILLING", "takeover": True, "retry": False}
     if code in (401, 403):
         return {"category": "UNAVAILABLE_AUTH", "takeover": True, "retry": False}

@@ -1,4 +1,4 @@
-"""Exercise handshake ACKs through the actual Stop hook, without terminal I/O."""
+"""Exercise the legacy Stop diagnostic's ACK budget with fixture-local identity."""
 import contextlib
 from datetime import datetime, timedelta, timezone
 import importlib.util
@@ -54,6 +54,9 @@ class HandshakeStopBudgetTests(unittest.TestCase):
         # All identity and marker state is fixture-local; no live cmux is called.
         with patch.dict(os.environ, {}, clear=True), \
              patch.object(self.guard, "ACTIVE_DIR", self.active), \
+             patch.object(self.guard.hook_identity, "resolve", side_effect=lambda p: (
+                 p["workspace_id"], p["surface_id"])), \
+             patch.object(self.guard.hook_scope.runtime_audit, "record"), \
              patch.object(self.guard, "_now", return_value=self.now), \
              patch("sys.argv", ["stop_guard"]), \
              patch("sys.stdin", io.StringIO(json.dumps(payload))), \

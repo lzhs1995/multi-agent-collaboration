@@ -11,6 +11,7 @@ import time
 
 import cmux_consensus_stop_guard as stop_guard
 import cmux_hook_identity as hook_identity
+import cmux_hook_scope as hook_scope
 import executor_ready
 
 OPEN_STATES = ('BOUND', 'IDLE_ASKING')
@@ -47,6 +48,10 @@ def _evaluate_resolved(payload):
         return True, ''
     path = _binding_path(workspace, surface)
     state = executor_ready.read_json(path) or {}
+    session = hook_scope.session_id(payload)
+    if session and state.get('native_session_id') != session:
+        # A new conversation in a reused pane is not the old executor.
+        state = {}
     now = time.time()
     bound = _executor_binding(stop_guard._active_markers(payload), surface)
     if bound:
@@ -59,6 +64,7 @@ def _evaluate_resolved(payload):
                 or state.get('surface_uuid') != surface):
             executor_ready.write_json(path, dict(bound, workspace_uuid=workspace,
                                                  surface_uuid=surface, state='BOUND',
+                                                 native_session_id=session,
                                                  last_bound_epoch=now))
         return True, ''
     if state.get('state') in OPEN_STATES:

@@ -1,14 +1,27 @@
+Current release: **0.4.28**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+
 # Multi-Agent Collaboration
+
+New and successor Codex supervisors use their active
+native foreground thread. Caller discovery failure cannot lock ordinary tools or
+Stop; task evidence stays intact and terminal input still verifies both endpoints.
+See [recovery without a session lock](references/native-caller-inventory.md#recovery-without-a-session-lock).
 
 Evidence-bound collaboration for Codex and Claude Code in macOS cmux.
 中文：复用完整上下文会话，明确分工，以真实报告和主动 callback 完成协作；
 压缩故障及时干预，不以重开会话、假 ACK 或反复轮询代替恢复。
 
-Current source: **0.4.7**. New messages use bounded single-line notices for pinned
+New messages use bounded single-line notices for pinned
 bodies; formal packs and callbacks retain their dedicated task-bound routes.
-Enter or Tab only requests submission. Reception requires the complete exact
+Native RPC acceptance, Enter or Tab only requests submission. Reception requires the complete exact
 payload in a new record of the bound receiver's native journal. See the
 [delivery contract](references/verified-compose-delivery.md).
+
+The existing Codex control socket must authenticate as the current user and expose
+the exact loaded receiver thread. Persist one native input intent before the only
+steer/start request. Never fall back to paste/Tab after failure or uncertainty.
+Claude-bound input retains the protected terminal route; old queued callbacks
+remain under their original controller for read-only reconciliation.
 
 ## Install
 
@@ -27,8 +40,12 @@ python3 scripts/manage_install.py doctor
 Install defaults to dry-run. It links this checkout into both clients' skill
 directories and merges only this project's hooks. Existing foreign skill
 directories are refused, never overwritten. Keep the checkout at its installed
-path. Complete active work before installation or upgrading; restart/reload client
-configuration only at a user-approved boundary, never replace an agent session.
+path. For a live shared installation, stage a complete immutable release and
+coordinate the upgrade with an installation lock, compare-and-swap checks and
+rollback snapshots. The basic installer is not a transaction spanning the whole
+installation. Preserve in-flight attempts under their original controller;
+independent authorized work need not wait. Verify active-client adoption
+separately, and never replace an agent session to upgrade its configuration.
 
 ```sh
 python3 scripts/manage_install.py uninstall --apply
@@ -38,6 +55,13 @@ Uninstall removes only entries and links owned by this checkout. JSON backups
 remain beside the original configs and may contain credentials: keep them private.
 Other settings and hooks survive. Use `--home /absolute/sandbox` to test installation
 without touching real client configuration.
+
+For explicitly authorized 60-second executor follow-ups, add `--executor-reask`
+to installation and doctor. To preserve owned hooks across cc-switch changes,
+use the single [configuration guardian](references/configuration-and-reasks.md)
+with a complete immutable release and its pinned CURRENT manifest. It repairs
+hook registrations only; Markdown guidance does not itself register a hook, and
+configuration repair does not prove a running client has loaded it.
 
 ## Use
 

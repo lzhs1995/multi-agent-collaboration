@@ -1,3 +1,5 @@
+> Current policy (0.4.19): [non-blocking recovery](nonblocking-recovery.md) overrides historical session-wide tool/Stop blocks and old-supervisor handshake restrictions below. Installed workflow hooks are advisory; explicit transport evidence and draft protection remain.
+
 # Same-workspace handshake guard
 
 ## Same-workspace handshake: mandatory transport boundary

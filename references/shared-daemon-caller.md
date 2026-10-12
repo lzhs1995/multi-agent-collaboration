@@ -3,7 +3,7 @@
 A managed CLI daemon can inherit the terminal environment of its first client.
 That environment identifies the daemon origin, not necessarily the current task.
 Resolve a managed Codex caller using the current thread selector, verified tool
-ancestry and a unique same-user native resumed client. Require executable,
+ancestry and a unique same-user active native client. Require executable,
 PID/birth, TTY and live cmux surface/workspace UUIDs to agree; recheck the proof
 around tree reads and before each input. Ambiguity or drift denies input. Never
 override CMUX environment values, use focus, relax the workspace boundary or
@@ -18,8 +18,9 @@ rejection. Test the assembled runtime, preserving existing delivery guards.
 Hook readers must use that same identity too: Stop callback/ACK checks, executor
 closeout and lease lookup resolve workspace and surface together. Reuse one
 snapshot only within a hook evaluation; never cache it across calls or rewrite
-process environment. Discovery failure denies the check, and a managed caller
-cannot downgrade to inherited identity mid-resolution. Boolean Stop reentry
+process environment. Discovery failure leaves task scope empty so ordinary tools
+and Stop can continue; transport still refuses unauthenticated input. A managed
+caller cannot downgrade to inherited identity mid-resolution. Boolean Stop reentry
 still exits before discovery without confirming or releasing a task.
 
 CLI subprocess fixtures must isolate kernel ancestry and marker directories.
@@ -34,7 +35,7 @@ relative-root rejection even when no shell write target was extracted.
 
 A managed daemon can spawn a hook directly after the intermediate shell execs
 away, without CODEX_THREAD_ID. Authenticate the managed ancestor first, then use
-the supported hook payload's session_id to select the unique live resumed client.
+the supported hook payload's session_id to select the active native foreground thread.
 Any thread selector present in the hook or intermediate ancestry must agree.
 The payload cannot supply terminal identity: retain kernel PID/birth/executable,
 TTY and live cmux UUID checks, including the process reread after the last tree.
@@ -52,8 +53,10 @@ and results returned after the deadline are rejected.
 Before discovery, Stop/closeout check for eligible active markers, and lease
 checks for parseable markers or an explicit absolute artifact root. No marker
 means no workspace-owned task gate. An explicit root cannot hide another marker
-or invalid root. With applicable markers, unresolved identity still refuses;
-report HOOK_CALLER_UNRESOLVED rather than a consensus violation or a disarm hint.
+or invalid root. Even with enrolled markers, unresolved identity cannot impose
+a global tool/Stop lock. Preserve the original markers and receipts, select no
+task jurisdiction, and leave diagnostics and authorized solo work available.
+Explicit artifact-root validation and live transport authentication remain intact.
 
 `test_hook_native_caller.py` covers direct and intermediate daemon children,
 missing/conflicting selectors, ordinary login boundaries, drift and bounded
@@ -81,7 +84,7 @@ own freshly computed identities; a copied trust hash is not sufficient.
 
 ## Recycled TTY names are not caller identity
 
-Resolve the unique live resumed native client first, then join its kernel-read
+Resolve the active native client first, then join its kernel-read
 surface/workspace UUIDs to the current tree. Require that exact surface row to
 be terminal and to match the client's TTY. An unrelated tree row retaining the
 same recycled TTY name must neither select nor veto the caller. Duplicate caller

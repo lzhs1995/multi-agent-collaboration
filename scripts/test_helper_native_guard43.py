@@ -1,4 +1,5 @@
 """沿用42原 helper 端到端用例，仅改接现役 native PostToolUse API。"""
+from contextlib import ExitStack
 import importlib.util
 import io
 import json
@@ -14,6 +15,7 @@ import cmux_message_journal as J
 import cmux_native_delivery as N
 import cmux_native_delivery_guard as G
 import cmux_submission_inputs as I
+from native_test_support import historical_terminal_dispatch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +32,17 @@ F.B, F.J, F.N = B, J, N
 H.A, H.B, H.E, H.G, H.I, H.J, H.N = A, B, E, G, I, J, N
 
 class HookEnforcementCases(H.HelperGuardCases):
+    def setUp(self):
+        super().setUp()
+        # These inherited cases exercise old paste/key journals, never the live
+        # daemon. Native routing has its own explicitly fake-RPC test suite.
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch("cmux_codex_input.DaemonRPC",
+            side_effect=AssertionError("offline fixture forbids live Codex RPC")))
+        stack.enter_context(mock.patch.object(B, "_submit_text_once",
+            side_effect=historical_terminal_dispatch))
+
     # 继承原业务反例；补验真实 main 的阻断退出码与只读恢复文案。
     def test_hook_main_blocks_newline_and_only_offers_original_readonly_intent(self):
         self.on_key = lambda key, count: setattr(self, "view", self.compose(self.payload + "\n"))

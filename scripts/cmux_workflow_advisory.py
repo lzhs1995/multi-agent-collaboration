@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Observe workflow hook payloads without making ordinary turns fail.
+
+The workspace and panel guards remain the transport boundary.  This entrypoint
+never calls the historical workflow gates. At the supervisor PostToolUse entry,
+it also exposes authenticated file requests as context, without sending input,
+settling tasks, or preventing ordinary work and turn-end.
+"""
+import json
+import sys
+
+WORKFLOW_HOOKS = frozenset({
+    'cmux_executor_closeout_guard.py',
+    'cmux_handshake_receipt_guard.py',
+    'cmux_consensus_round_guard.py',
+    'cmux_lease_guard.py',
+    'cmux_consensus_stop_guard.py',
+    'cmux_executor_idle_guard.py',
+    'cmux_executor_reask_stop_guard.py',
+    'cmux_native_delivery_guard.py',
+    'cmux_supervisor_report_guard.py',
+})
+MAX_INPUT_CHARS = 2 * 1024 * 1024
+
+
+def hook_from_argv(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) != 2 or argv[0] != '--hook':
+        return None
+    value = argv[1]
+    return value if value in WORKFLOW_HOOKS else None
+
+
+def main() -> int:
+    # A hook must never turn an unreadable or stale payload into a session
+    # block.  Keep stdin bounded by the host's normal hook payload limits.
+    try:
+        raw = sys.stdin.read(MAX_INPUT_CHARS + 1)
+        if len(raw) > MAX_INPUT_CHARS:
+            return 0
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return 0
+        hook = hook_from_argv()
+        if not hook:
+            return 0
+    except BaseException:
+        return 0
+
+    try:
+        import cmux_hook_runtime_audit as runtime_audit
+        runtime_audit.record(
+            payload,
+            'ADVISORY_OBSERVED',
+            original_hook=hook,
+            mode='advisory',
+        )
+    except BaseException:
+        # Advisory telemetry is never allowed to recreate the outage it
+        # diagnoses.  Native delivery and explicit harness paths retain their
+        # own strict checks and receipts.
+        pass
+
+    # File fallback must have a reader. Keep discovery independent of telemetry
+    # so a failed audit write cannot hide a valid request. Only this registered
+    # event authenticates the current supervisor and offers bounded, deduplicated
+    # context. No legacy checker, terminal sender, reask loop or task gate runs.
+    if (hook == 'cmux_supervisor_report_guard.py'
+            and payload.get('hook_event_name') == 'PostToolUse'):
+        try:
+            import supervisor_inbox
+            supervisor_inbox.discover(payload, emit=supervisor_inbox.emit_context)
+        except BaseException:
+            pass
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

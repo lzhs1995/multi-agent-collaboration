@@ -118,8 +118,13 @@ class NativeHookCallerTests(unittest.TestCase):
         self.assertEqual(reads, 9)
 
     def test_direct_daemon_is_not_valid_tool_shell_proof(self):
-        with self.assertRaisesRegex(daemon.IdentityError, 'ancestry'):
-            daemon.collect(self.fixture.env)
+        # The managed parent alone is insufficient. An exec-replaced tool must
+        # also carry the matching selector in its own kernel-read environment.
+        self.fixture.processes[40] = dict(self.fixture.processes[20], pid=40, ppid=10,
+                                          env=dict(self.env))
+        with patch.object(daemon.os, 'getpid', return_value=40):
+            with self.assertRaisesRegex(daemon.IdentityError, 'ancestry'):
+                daemon.collect(self.fixture.env)
 
     def test_ordinary_terminal_stops_at_verified_login(self):
         self.parent.return_value = 20

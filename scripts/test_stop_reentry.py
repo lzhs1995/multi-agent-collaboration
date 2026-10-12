@@ -181,7 +181,8 @@ class StopReentryTests(unittest.TestCase):
         payload = dict(surface_id=self.surface, final_message='Report pending')
         with offline_test_hook.hook_environment(self.active), \
                 mock.patch.object(guard, 'ACTIVE_DIR', self.active), \
-                mock.patch.dict(os.environ, {'CMUX_SURFACE_ID': self.surface}), \
+                mock.patch.dict(os.environ, {'CMUX_SURFACE_ID': self.surface,
+                                            'CMUX_WORKSPACE_ID': self.workspace}), \
                 mock.patch.object(guard, '_active_markers', side_effect=[[marker], []]) as read, \
                 mock.patch.object(sys, 'argv', [str(HOOK)]), \
                 mock.patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \

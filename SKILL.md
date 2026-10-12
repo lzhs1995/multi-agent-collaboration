@@ -5,20 +5,66 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 
 # Multi-Agent Collaboration
 
-For zero-input identity refusals, read [native caller inventory failures](references/native-caller-inventory.md).
-Repair discovery before retrying a handshake; retain kernel/UUID authentication
-and distinguish local bridge failure from executor availability.
+用户授权的正常继任握手、新进度通知与独立新任务联络默认允许，无需旧主管批准或
+无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
+永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-Hook reconciliation carries its authenticated native caller source through nested
-bridge checks and recollects live process evidence at each boundary. It must not
-fall back to the shared daemon's inherited workspace. UI readiness uses current
-provider status chrome; quoted compaction/reconnection text in a completed report
-does not describe the live turn. See the [runtime rules](references/verified-compose-delivery.md#current-status-and-nested-hook-identity).
+Version 0.4.28 retains the removal of session-wide workflow blocks and recognizes
+the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
+heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
+non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
+review rounds and executor reasks must never prevent tools, replies or Stop. The
+installed advisory entrypoint records automatic invocation and exits zero; it does
+not run the historical blocking checker. Explicit senders still protect existing
+drafts, avoid duplicate input and verify complete native reception.
 
-Use this skill for an explicitly requested supervisor/executor workflow. Do not
-start agents merely because this skill is being installed, edited, or reviewed.
-Requires Python 3.10+ and macOS cmux for live coordination. Offline tests also run
-on Linux. Other terminals and agent-native sessions are not certified transports.
+New Codex-bound messages, task packs and callbacks use the authenticated native
+control socket of the already-loaded receiver thread. Active turns receive one
+`turn/steer` with the fresh expected turn id; idle threads receive one `turn/start`
+without settings overrides. Persist `NATIVE_INPUT_INTENT` and a fresh EOF fence
+first. No composer read, paste, Enter or Tab is involved. RPC acceptance alone
+does not prove reception. An uncertain result permits only original-record
+observation, never a retry or queue fallback. Historical attempts stay with their
+original controller and must not be replayed through this new transport.
+
+The supervisor PostToolUse observer exposes at most eight authenticated file
+requests per tool event, rotates fairly and reminds again after at least 60
+seconds while unanswered. It commits its cursor only after successful output
+flush. The authenticated foreground thread is preserved; actual child identity
+is not replaced by an inherited root selector. A child cannot consume its
+parent's inbox. Discovery never sends, accepts work or forces a turn, and cannot
+wake a truly idle supervisor.
+A measured ellipsis-clipped git branch is accepted only at the physical end of
+a footer row below matching complete composer borders; real drafts stay protected.
+
+Explicit insufficient-balance errors are billing failures even when the provider
+also prints a login hint or HTTP 403. Transport uncertainty and a supervisor's
+short observation budget retain priority; neither is an API failure. Classifying
+an outage does not restore the provider or prove a safe SOLO takeover boundary.
+
+`cmux-agent self` resolves the same current native caller as the bridge. Raw
+`cmux identify` can report the shared daemon's inherited surface and is not a
+current-session identity verdict. Never require an old `codex resume` command.
+The native resolver supports tools executed directly by the managed daemon after
+shell exec optimization; no incidental shell or proxy ancestor is required. It
+checks the tool's actual kernel identity and current native foreground selection.
+
+Any successor supervisor authorized by the user may contact the specified existing
+executor, including across workspaces. For such communication use
+`successor_rebind_cli.py` with a `successor-rebind-v2` maintenance authorization:
+user text plus current caller/receiver workspace, surface and pane UUIDs. It does
+not require a dead supervisor's approval, old task settlement or fabricated freeze
+receipts. This authorizes communication only; old tasks are never replayed and no
+shared write scope is transferred. New business work gets its own reviewed scope.
+
+Use the same current release for new calls. Reconcile old attempts under their
+original controller. One fresh native user record proves reception; an executor
+response proves acknowledgement. Neither alone accepts the work. See
+[non-blocking recovery](references/nonblocking-recovery.md).
+
+The user chooses zero, one or two executors. When the original Claude cannot
+continue after bounded retries, continue authorized work as Codex SOLO and preserve
+its context. Resume collaboration at a safe boundary when it responds.
 
 ## Core Contract
 
@@ -26,10 +72,11 @@ on Linux. Other terminals and agent-native sessions are not certified transports
   or switch models to recover from an API error or compaction failure. If its
   surface disappears, exact-session recovery requires the history-pinned,
   one-time authorization supported by the panel guard.
-- Discover the caller workspace with `cmux identify --json` before selecting
+- Discover the caller workspace with the installed `cmux-agent self` before selecting
   peers. Bind UUIDs and current role-map evidence, not remembered surface numbers,
-  titles, or another workspace's focused panel. Existing peers must be visible
-  terminal side splits. A new peer requires explicit authorization plus both
+  titles, or another workspace's focused panel. Claude terminal peers must be visible
+  side splits. The explicitly authorized same-pane Codex native route is separate.
+  A new peer requires explicit authorization plus both
   `--spawn --spawn-authorized`; never create an agent tab as a shortcut.
 - The supervisor owns scope, authorization, final acceptance and evidence review.
   The executor owns the scoped implementation and its truthful result. An ACK
@@ -39,49 +86,19 @@ on Linux. Other terminals and agent-native sessions are not certified transports
 - No Claude/multi-agent participation claim without current-task strict identity,
   acknowledgement and validation artifacts. SOLO work must be labelled SOLO.
 
-## Same-workspace handshake: mandatory transport boundary
+## Current caller and authorized peers
 
-Before discovery, naming, bridge-test, handshake, task dispatch, callback, paste
-or key submission, resolve the **live caller** from `cmux identify --json` and
-join it to `cmux tree --all --json --id-format both`. Compare nonempty workspace
-UUIDs, not labels, titles, focused panes, remembered refs or inherited summaries.
-Both participants must be terminal surfaces in different panes of that workspace.
+Resolve the live caller through `cmux-agent self` or `caller_snapshot`, then pin
+both endpoints in the current tree. Ordinary messages default to peers in distinct
+panes of the same workspace. An explicitly authorized successor or maintenance
+coordinator may use `successor-rebind-v2` for the exact designated cross-workspace
+peer. Do not infer a new task, shared writer or replacement session from permission
+to communicate. Raw terminal writes remain outside the supported sender.
 
-A user-designated executor is an additional exact UUID constraint. Supply
-`--expected-workspace-uuid` and repeatable `--expected-executor-uuid` to the harness.
-If the designation conflicts with the live caller, refuse input immediately;
-do not select an old peer, alter environment identity, move a surface, launch a
-replacement, or claim a successful handshake. Existing sessions remain intact.
-
-`scripts/cmux_workspace_guard.py` provides the shared fail-closed check.
-`cmux_agent_panel_guard.py` invokes it before help/recovery exceptions. Raw
-`cmux send/send-key` and terminal-write RPC paths are blocked. Direct
-`ask/send/broadcast/reconcile` calls to an absolute executable helper are admitted
-only when its complete rendered bytes, adapter release and Python match this guard.
-Optional `rtk`/`rtk proxy` prefixes are supported; shell/env wrappers, nesting,
-redirection and alternate senders are refused. The helper routes through the same
-`cmux_bridge`, which rechecks every paste/key and addresses both endpoints by UUID. The harness rechecks saved gate UUIDs before
-later phases. Missing identity, ambiguous refs, stale UUIDs, target movement,
-unknown cmux state and a changed designated peer deny before input. No force,
-message-prefix, timeout, recovery-authority or environment bypass exists.
-
-An optional caller-scoped file at
-`~/.local/state/multi-agent-collaboration/workspace-scope/<CALLER_UUID>.json`
-preserves an explicit user designation across invocations. Schema:
-`{"version":1,"caller_surface_uuid":"UUID","workspace_uuid":"UUID","target_surface_uuids":["UUID"],"authorization_source":"user instruction"}`.
-Only a new explicit user designation may replace that intent; do not clear it
-because a target is unavailable. The scope narrows access and cannot permit
-cross-workspace input. Resource coordination across workspaces uses existing
-file/queue receipts, not executor-handshake transport or a STATUS-prefix exemption.
-
-Install via `scripts/manage_install.py`; it registers the guard for both clients.
-Run the installed hook with a cross-workspace/raw-input negative case and verify
-exit 2 and zero input before claiming enforcement. Client settings registration,
-active hook execution and imported Python modules are separate states; a process
-that already imported an older transport has not magically hot-reloaded.
-There is no atomic cmux snapshot-plus-send API: UUID addressing closes ref reuse,
-and a fresh check precedes each input, but this is a supported-transport guard,
-not an OS sandbox against arbitrary self-written socket clients.
+Claude terminal input preserves occupied or unknown drafts. New Codex native
+input does not inspect or modify the composer and can steer its active turn.
+The conversation and unrelated authorized work continue. Identity, send, native
+receipt, executor ACK, callback and acceptance are separate observations.
 
 ## Workflow
 
@@ -137,19 +154,11 @@ Use [efficiency and task closeout](references/efficiency-and-closeout.md) to
 choose zero, one or two executors, apply phase-specific handshake budgets,
 attribute delivery failures, and close accepted work without repeated reviews.
 
-Use [executor closeout enforcement](references/executor-closeout-enforcement.md):
-the PreToolUse guard freezes the report, task pack and original attempt after the
-bound callback returns. Strict task-bound read-only diagnostics and original-controller
-reconciliation remain available. Stop accepts an ordinary honest waiting statement
-as WAITING_SUPERVISOR (continue:false, suppressOutput:true); no exact STATUS template
-is required. It preserves task/receipt state and rejects unsupported confirmation or
-consensus claims. Missing/in-flight/changed evidence cannot use this boundary.
-
-After a proven sole `attempt-0001` with `NO_INPUT` and `events=[]`, closeout also
-admits the exact synchronous original callback CLI once. The frozen pack chooses
-that controller; the original journal retains its two-attempt limit and all live
-gates. A receipt, legacy pending state, changed pins or any recorded input denies
-this exception. It does not require retrying and never resends a queued callback.
+After a report is written, preserve its original pack, callback and journal.
+Pending closeout is a task status, never a seal on all tools or future communication.
+Read diagnostics, receive successor handshakes and perform separately authorized
+work normally. Reconcile an old send without repeating its input. Global Stop and
+reask hooks do not force additional turns or periodic polling.
 
 After verified acceptance/disarm, the supervisor owns
 [closeout feedback and the next dependency](references/efficiency-and-closeout.md#核收后把结论和下一步交回执行者).
@@ -173,13 +182,14 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   observation is a supervisor budget limitation, not executor silence. Recover a
   late genuine ACK against the original task/provider/nonce without resending.
 - **Keys and queue entries do not prove reception.** Bind the exact receiver
-  process/session/transcript and a fresh EOF fence at the original PASTE_INTENT.
+  process/session/transcript and a fresh EOF fence at the original input intent.
   Only a new whole native user record after that fence, exactly equal to the
   payload including whitespace, yields NATIVE_RECEIVED. Claude queued_command
-  remains pending. Paste once, wait for the full stable draft, then submit once:
-  use Tab directly for busy Codex displaying the verified tab-to-queue hint,
-  otherwise Enter in a clear supported state. All recovery paths share at most
-  one additional key under the original controller; no separate Enter/Tab budget.
+  remains pending. New Codex input uses `NATIVE_INPUT_INTENT` and native
+  steer/start, never the follow-up queue. Claude-bound terminal input retains
+  `PASTE_INTENT`, one paste and one key after the complete draft is stable.
+  Historical terminal recovery shares at most one additional key under its
+  original controller; a native input has no key or resend recovery budget.
 - `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
   A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
@@ -199,11 +209,27 @@ current evidence for authorized follow-up; never ask the user to relay to a boun
   Supervisors continue independent work while callbacks are pending. Persistent
   executor failures use the authorized solo takeover boundary below.
 
-Supervisors use authenticated active markers for bounded discovery of frozen
-reports through the PostToolUse `scripts/cmux_supervisor_report_guard.py`
-(REPORT_DISCOVERED). Discovery is not delivery,
-acceptance or disarm. Idle Stop records one durable notice and allows termination;
-explicit `executor_ready.py persist` is read-only and bounded to 300 seconds.
+Supervisors explicitly inspect authenticated active markers and frozen reports.
+The installed supervisor PostToolUse observer discovers bound file requests,
+not old reports; it neither replies nor settles them. Read the exact request and
+write its issued mailbox reply before attempting fresh dispatch to a reasking
+executor. This lets its explicit wait return and a fresh live preflight run.
+Discovery is not delivery, acceptance or disarm. Idle Stop only observes its
+invocation and allows termination; it neither creates notices nor starts reasks.
+Explicit `executor_ready.py persist` is read-only and bounded to 300 seconds.
+An explicitly authorized `executor_reask.py run` checks every five seconds,
+issues a new marker no more often than every 60 seconds, with a polling budget
+of at most 540 seconds per invocation. Synchronous I/O can extend wall time.
+After the command returns, its durable episode may remain WAITING_REPLY;
+that state does not prove a runner is active. Version 0.4.28 also provides a
+separate launchd file scheduler. Explicit authenticated `executor_reask start`
+enrolls the current task/purpose/workspace/controller; merely installing the job
+does not enroll anyone. Each 60-second sweep updates files only, with a
+256-enrollment cap and a 10-second budget. It never sends or observes transport,
+reads transcripts, wakes a model or migrates old episodes. Verify enrollment,
+actual sweep execution and supervisor exposure separately. Current advisory hooks do not refresh the
+legacy idle binding needed by AUTHENTICATED_NEW_DISPATCH. Use a bound supervisor
+reply to end the wait; never restart the episode to evade an old pending send.
 CCC waits have a deadline; native Goal behavior requires separate evidence.
 
 Follow [bounded handshakes, delivery and closeout](references/bounded-collaboration.md)
@@ -258,23 +284,28 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
 
 ## Enforcement And Evidence
 
-PostToolUse success must use the client-supported `hookSpecificOutput` envelope
-with `hookEventName: PostToolUse` and the verified proof in `additionalContext`.
-Internal `action/results` objects are not valid top-level Codex hook output.
-Validate the wire format against the official schema and then observe automatic
-execution in the active client; a manual script exit is a separate offline check.
+Installed workflow observers emit no tool denial or turn-control output. They
+record entrypoint, original hook, advisory mode and actual process provenance.
+The supervisor file-request observer and any explicit diagnostic use the
+client-supported `hookSpecificOutput` envelope; internal `action/results` objects
+are not valid top-level hook output. Actual automatic invocation in an active
+client is separate from a manual script test and from native delivery evidence.
 
 - Install guards on both clients through `scripts/manage_install.py`; `doctor`
   checks configuration and benign execution. Installation is not proof that an
   already-running client reloaded its configuration. Run harness `guard-check`
   after client settings changes and at task close.
 - Require semantic positive and negative tests through real hook entrypoints,
-  not only helper definitions or source-string counts. Missing/null/boolean-as-
-  count, stale evidence, changed pins and malformed receipts must fail closed.
+  not only helper definitions or source-string counts. Workflow hook failures
+  must leave tools and Stop available. Explicit senders and receipt validators
+  reject missing evidence, changed pins and malformed receipts without claiming
+  delivery or imposing a conversation-wide lock.
 - Evidence roots are explicit or registry-bound, never guessed from cwd. A
   missing read is unmeasured, not zero. Parse structured data and check producer
   semantics before declaring a defect. Record mutation hit counts in test probes.
-- Cross-workspace coordination uses file/queue receipts for resources, never another task's executor or raw terminal input.
+- Cross-workspace resource coordination uses file/queue receipts. User-authorized
+  successor communication with a specified existing executor uses `successor-rebind-v2`;
+  it does not transfer another task's shared write scope or permit raw terminal input.
   Word/Zotero share one serial resource; NotebookLM sharing is account-wide.
   A lease, an actual OS lock and a task-bound drain receipt are distinct facts.
   Unknown Word document counts and unknown remote query outcomes prevent release.
@@ -288,7 +319,7 @@ execution in the active client; a manual script exit is a separate offline check
 
 ## 双向投递与高效协作维护
 
-执行[原生投递与有界等待](references/verified-compose-delivery.md)：原 PASTE_INTENT 新鲜 EOF fence 后的完整 native user 才确认收到；排队仍 pending。原次恢复共用一次补键，封口保留 task-bound 诊断与零输入核收。默认 idle Stop 不要求求派；另行保留用户明确授权的每60秒新 marker 主动求派及其配套 hook，直到主管答复、新派发或 operator stop。
+执行[原生投递与有界等待](references/verified-compose-delivery.md)：新 Codex 输入经原会话的 native steer/start，先落 NATIVE_INPUT_INTENT 及新鲜 EOF fence，不操作 composer、不入 Tab 队列。原 fence 后完整 native user 才确认收到；RPC 接受与业务接受分列。未知结果只读核原次，历史排队 callback 不转发重放。Claude 终端与旧次保留原控制器。idle Stop 仅观察；主动求派依原授权显式运行。
 
 ### Stop hook reentry
 
@@ -341,3 +372,47 @@ Keep full stable-draft matching and exact new native user proof; never infer
 delivery from keys, partial text, queue banners or composer clearing. Live
 acceptance records the callback and automatic hook invocation in the actual
 client; running a hook manually proves only the invoked test.
+
+## Consume pending supervisor requests and repair zero-input notices
+
+At a major tool boundary, before a new long batch, and before reporting progress,
+inspect the current supervisor surface for queued follow-up inputs. Verify each
+pinned UTF-8 body and SHA, read it, and reply to its exact mailbox. Record consumed
+and pending items; duplicate notice markers do not need duplicate replies. A UI
+queue, body reading, native receipt, ACK and business acceptance are separate.
+Do not leave maintenance requests unread while repeating status probes.
+
+For new formal tasks, generate `TASK_PACK_V2` with `cmux_bridge.task_pack_notice`
+(or `task-notice --task-pack /absolute/task-pack.json`) from the finalized pack.
+Never hand-assemble a multiline task prompt. Since 0.4.23, wire validation happens
+before a task journal is reserved. The explicit `scripts/repair_task_notice.py`
+coordinator handles only a first `NO_INPUT` wire-format rejection with `events=[]`.
+It verifies the pinned original attempt, original payload and unchanged pack;
+requires the same caller, receiver process/session and original lock; and uses
+the complete original immutable controller for terminal input and native proof.
+The read-only default must return `READY_ZERO_INPUT` before `--apply`. It appends
+only the original journal's one second attempt, retaining the original bytes,
+completion nonce and callback controller. A crash consumes this budget. Pasted,
+queued, uncertain, changed or already-received attempts cannot use this route.
+The corrected TASK_PACK_V2 marker is the task id; this is not a new business task.
+
+A busy Claude may expose a `queued_command` attachment while working on a task.
+Preserve that observation without declaring an exact native-user receipt. Never
+resend merely because an ACK or report preceded that record. Executors must wait
+for a finalized, hash-pinned task notice rather than treating a draft pack found
+on disk as authority. Continue independent authorized work in SOLO when a peer
+is unavailable; maintenance does not reopen accepted research reviews.
+
+0.4.24 also recognizes local SQLite and disk-space inventory imports in quoted Python document heredocs. Agent names after semicolons inside literal document data are not CLI launches; adjacent real shell launches remain checked. Verify the exact rejected command through the real hook before claiming recovery.
+
+## Opt-in continuing inquiries
+
+0.4.28 adds explicit `--continuing` authorization across bound replies and child
+task boundaries. Read [the continuing contract](references/configuration-and-reasks.md#continuing-authorization-0428).
+ANSWERED remains unconsumed; only the authenticated original executor's
+`consume --reply-sha256` records consumption and rearms the same authorization.
+Formal task reservations pause requests; their release resumes authorized work.
+Stop, expiry and revocation end it. Defaults and old controllers remain unchanged.
+
+同pane原生Codex的显式线程授权、继任迟到ACK核收与20GB主动空间管理，见
+[协作效率与收尾](references/efficiency-and-closeout.md)。普通终端侧窗格门禁保持。

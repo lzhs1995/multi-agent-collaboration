@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import cmux_bridge as bridge
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_compaction_queue_block import BEFORE, COMPACTING, working
 
 
@@ -28,7 +28,7 @@ class CurrentStatusTests(unittest.TestCase):
         self.assertFalse(bridge.receiver_cannot_submit_now(CLAUDE_IDLE))
         # Public send proceeds to exactly one paste; without a visible exact
         # draft or a native user event it must still refuse any submit key.
-        with NativeFixture(provider='claude') as native, patch.object(
+        with LegacyTerminalFixture(provider='claude') as native, patch.object(
                 bridge, 'read_screen', return_value=CLAUDE_IDLE):
             with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
                 bridge.submit_text('peer', TEXT, marker='LAYOUT1003')
@@ -40,7 +40,7 @@ class CurrentStatusTests(unittest.TestCase):
         for status in ('✻ Compacting context (23s)', '✽ Compacting conversation… (23s)',
                        '✢ Reconnecting... 1/10'):
             screen = self.claude_status(status)
-            with self.subTest(status=status), NativeFixture(provider='claude') as native, \
+            with self.subTest(status=status), LegacyTerminalFixture(provider='claude') as native, \
                     patch.object(bridge, 'read_screen', return_value=screen):
                 self.assertTrue(bridge.receiver_cannot_submit_now(screen))
                 with self.assertRaises(bridge.DispatchUnconfirmed):
@@ -50,7 +50,7 @@ class CurrentStatusTests(unittest.TestCase):
 
     def test_unknown_claude_footer_cannot_authorize_input(self):
         screen = CLAUDE_IDLE + '\nunknown current editor state'
-        with NativeFixture(provider='claude') as native, patch.object(
+        with LegacyTerminalFixture(provider='claude') as native, patch.object(
                 bridge, 'read_screen', return_value=screen):
             self.assertEqual(bridge.receiver_input_kind(screen), 'UNKNOWN')
             with self.assertRaises(bridge.DispatchUnconfirmed):
@@ -63,7 +63,7 @@ class CurrentStatusTests(unittest.TestCase):
                                '• Press up to edit queued messages')
         for status in (COMPACTING, '• Reconnecting... 1/10'):
             screen = steer.replace(COMPACTING, status)
-            with self.subTest(status=status), NativeFixture() as native, patch.object(
+            with self.subTest(status=status), LegacyTerminalFixture() as native, patch.object(
                     bridge, 'read_screen', return_value=screen):
                 self.assertTrue(bridge.receiver_cannot_submit_now(screen))
                 with self.assertRaises(bridge.DispatchUnconfirmed):
@@ -77,7 +77,7 @@ class WarningFooterTests(unittest.TestCase):
     def test_standalone_warning_footer_allows_exact_draft_native_delivery(self):
         before = '› Ask Codex to do anything\nGPT-6 high\n' + WARN
         draft = '› ' + TEXT + '\nGPT-6 high\n' + WARN
-        with NativeFixture() as native, patch.object(bridge, 'read_screen', side_effect=
+        with LegacyTerminalFixture() as native, patch.object(bridge, 'read_screen', side_effect=
                 native.ready_screens(before, draft)):
             native.key.side_effect = native.receipt_on_key(TEXT)
             result = bridge.submit_text('peer', TEXT, marker='LAYOUT1003')
@@ -88,7 +88,7 @@ class WarningFooterTests(unittest.TestCase):
     def test_unknown_warning_hint_never_authorizes_input(self):
         for footer in ('⚠ 4 warnings · f3 to view', '⚠ 4 warnings · f2 to edit',
                        '⚠ 4 warnings · f2 to view\nunknown input'):
-            with self.subTest(footer=footer), NativeFixture() as native, patch.object(
+            with self.subTest(footer=footer), LegacyTerminalFixture() as native, patch.object(
                     bridge, 'read_screen', return_value='› \nGPT-6 high\n' + footer):
                 with self.assertRaises(bridge.DispatchUnconfirmed):
                     bridge.submit_text('peer', TEXT, marker='LAYOUT1003')
@@ -98,7 +98,7 @@ class WarningFooterTests(unittest.TestCase):
     def test_warning_like_user_draft_stays_occupied(self):
         for text in ('⚠ 4 warnings · f2 to view', TEXT + '\n  ⚠ 4 warnings · f2 to view'):
             screen = '› ' + text + '\nGPT-6 high\n' + WARN
-            with self.subTest(text=text), NativeFixture() as native, patch.object(
+            with self.subTest(text=text), LegacyTerminalFixture() as native, patch.object(
                     bridge, 'read_screen', return_value=screen):
                 self.assertFalse(bridge.compose_block_is_empty(screen))
                 with self.assertRaises(bridge.DispatchUnconfirmed):

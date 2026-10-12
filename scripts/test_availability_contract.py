@@ -91,6 +91,39 @@ class AvailabilityTests(unittest.TestCase):
                 cmux_bridge.submit_completion_callback("pack")
             send.assert_not_called()
 
+    def test_insufficient_balance_is_billing_even_with_login_hint(self):
+        for message in (
+            "Please run /login · API Error: 403 Insufficient account balance",
+            "API Error: 403 insufficient balance",
+            "INSUFFICIENT ACCOUNT BALANCE",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    a.classify_failure({"http_status": 403, "message": message}),
+                    {"category": "UNAVAILABLE_BILLING", "takeover": True, "retry": False},
+                )
+
+    def test_billing_message_does_not_override_transport_or_budget_evidence(self):
+        payload = {"http_status": 403, "message": "Insufficient account balance"}
+        for state in ("DELIVERY_QUEUED_AT_RECEIVER", "DELIVERY_UNVERIFIED_BY_DETECTOR"):
+            with self.subTest(state=state):
+                self.assertEqual(
+                    a.classify_failure(dict(payload, submission_state=state)),
+                    {"category": state, "takeover": False, "retry": False},
+                )
+        self.assertEqual(
+            a.classify_failure(dict(payload, budget_below_phase_minimum=True)),
+            {"category": "SUPERVISOR_BUDGET_TOO_SHORT", "takeover": False, "retry": False},
+        )
+
+    def test_generic_authentication_errors_stay_authentication(self):
+        for code, message in ((401, "Invalid API key"), (403, "Forbidden")):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    a.classify_failure({"http_status": code, "message": message}),
+                    {"category": "UNAVAILABLE_AUTH", "takeover": True, "retry": False},
+                )
+
     def test_registry_and_direct_submit_cannot_bypass_artifact_state(self):
         import cmux_bridge
         state_file = self.root / "executor-availability.json"

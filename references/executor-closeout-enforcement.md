@@ -1,3 +1,5 @@
+> Current policy (0.4.19): [non-blocking recovery](nonblocking-recovery.md) overrides historical session-wide tool/Stop blocks and old-supervisor handshake restrictions below. Installed workflow hooks are advisory; explicit transport evidence and draft protection remain.
+
 # 执行者交付后收口：运行约束与边界
 
 本页复用[原生投递与有界等待](verified-compose-delivery.md)。
@@ -29,6 +31,10 @@
 `.pending.json` 均不存在时，允许直接同步运行 `rtk proxy <原Python> -B
 <原required_skill目录>/scripts/cmux_bridge.py submit-completion-callback
 --task-pack <原绝对路径>` 一次。不能用变量、shell包装、后台或附加命令。
+只比较这条完整静态命令的 argv，允许等价的单引号、双引号及无空格中文
+路径引用；先严格排除动态展开、注释、重定向和控制尾缀，再解析参数。
+任务包缺少可选 `callback_command` 时从原绑定派生；显式空值、错误命令
+或不同原控制器仍拒绝。引用等价不放宽 task/report/attempt 与发送预算。
 `cmux_callback_no_input_successor.py` 仅作 PreToolUse 判定，不是新发送器。
 原 controller 重新核实时身份、草稿、锁及最多两次 journal 预算；第二次
 仍失败则交主管，不循环。已粘贴、排队、未知、第二份 attempt 或任何回执

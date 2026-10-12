@@ -12,6 +12,7 @@ import sys
 
 from cmux_callback_queue_resume import canonical
 from cmux_evidence_io import attempt_paths, read_bytes
+from cmux_submission_inputs import literal_command_argv
 
 
 def allowed(payload, marker, evidence):
@@ -32,10 +33,10 @@ def allowed(payload, marker, evidence):
         argv = [sys.executable, '-B', str(controller),
                 'submit-completion-callback', '--task-pack', str(task)]
         tool = payload.get('tool_input', {})
-        if (tool.get('command') != shlex.join(['rtk', 'proxy', *argv])
+        if (literal_command_argv(tool.get('command')) != ['rtk', 'proxy', *argv]
                 or tool.get('run_in_background')):
             return False
-        if pack.get('callback_command', shlex.join(argv)) != shlex.join(argv):
+        if literal_command_argv(pack.get('callback_command', shlex.join(argv))) != argv:
             return False
         receipt = Path(pack['completion_receipt'])
         if (receipt.parent != task.parent or os.path.lexists(receipt)

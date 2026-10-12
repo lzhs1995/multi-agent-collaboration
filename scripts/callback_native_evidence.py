@@ -122,13 +122,15 @@ def validate(pack_path, attempt_path, transcript, line, session_id):
             or not identity.get('target_pane_uuid')):
         raise ReceiptError('original participant binding changed')
     events = attempt.get('events', [])
-    pastes = [e for e in events if e.get('phase') == 'PASTE_INTENT']
-    enters = [e for e in events if e.get('phase') == 'ENTER_INTENT']
-    if (len(pastes) != 1 or len(enters) != 1
-            or events.index(pastes[0]) >= events.index(enters[0])):
-        raise ReceiptError('original paste and Enter intent required')
-    if hashlib.sha256(pastes[0]['screen'].encode('utf-8', 'replace')).hexdigest()[:16] != pastes[0].get('screen_sha256'):
-        raise ReceiptError('original screen hash mismatch')
+    if fence['schema'] == 'native-paste-fence-v1':
+        # Historical terminal attempts retain their own original evidence.
+        pastes = [e for e in events if e.get('phase') == 'PASTE_INTENT']
+        enters = [e for e in events if e.get('phase') == 'ENTER_INTENT']
+        if (len(pastes) != 1 or len(enters) != 1
+                or events.index(pastes[0]) >= events.index(enters[0])):
+            raise ReceiptError('original paste and Enter intent required')
+        if hashlib.sha256(pastes[0]['screen'].encode('utf-8', 'replace')).hexdigest()[:16] != pastes[0].get('screen_sha256'):
+            raise ReceiptError('original screen hash mismatch')
     native = native_user_record(transcript, line, session_id=session_id,
                                 exact_text=pack['completion_callback'], after=pack['finalized_at'])
     proof = dict(schema=delivery.SCHEMA, session_id=session_id,
@@ -137,7 +139,7 @@ def validate(pack_path, attempt_path, transcript, line, session_id):
                  payload_sha256=original_native['payload_sha256'])
     if not delivery.validate_proof(original_native, pack['completion_callback'], proof,
                                    not_before=intent_at, paste_fence=fence):
-        raise ReceiptError('original native paste fence does not prove this user record')
+        raise ReceiptError('original native input fence does not prove this user record')
     if (snapshot(pack_path) != pack_pin or snapshot(pack['report']) != report_pin
             or snapshot(attempt_path) != attempt_pin or snapshot(pack['identity_gate']) != gate_pin
             or sorted(journal.glob('attempt-*.json')) != attempts):

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture, ScreenSequence
+from native_test_support import LegacyTerminalFixture, ScreenSequence
 
 MARKER = "C2596_STATUS_20261008T131247Z"
 WORDS = ("%s | status: r22 cmaverse-source-delivery-evidence-20261008-r22: bridge test "
@@ -94,7 +94,7 @@ class StatusRegionTests(unittest.TestCase):
 class PrePasteGateTests(unittest.TestCase):
     def test_no_paste_while_receiver_compacting(self):
         idle = "\n".join([COMPACTING, " ", "› ", FOOTER])
-        with NativeFixture(), patch.object(b, "read_screen", return_value=idle), \
+        with LegacyTerminalFixture(), patch.object(b, "read_screen", return_value=idle), \
                 patch.object(b, "send_text") as send, patch.object(b, "send_key") as key, \
                 patch.object(b.time, "sleep"):
             with self.assertRaises(b.DispatchUnconfirmed) as caught:
@@ -108,7 +108,7 @@ class PrePasteGateTests(unittest.TestCase):
         # 完整草稿连续两次稳定后发 Enter；压缩在按键后开始。
         draft = "\n".join([" ", " "] + codex_wrap(WORDS) + [" ", " ", FOOTER])
         stuck = screen(COMPACTING)
-        with NativeFixture() as native, patch.object(b, "read_screen",
+        with LegacyTerminalFixture() as native, patch.object(b, "read_screen",
                 side_effect=native.ready_screens(idle, draft, stuck)), \
                 patch.object(b, "send_text"), patch.object(b, "send_key") as key, \
                 patch.object(b.time, "sleep"):
@@ -128,7 +128,7 @@ class MidRenderTests(unittest.TestCase):
                              "  tab to queue message"])
         consumed = "\n".join(["› " + WORDS, "• Read evidence", WORKING, " ", "› ", FOOTER])
         self.assertTrue(b._compose_is_partial_payload(partial.replace("  next_", ""), WORDS))
-        with NativeFixture() as native, patch.object(b, "read_screen",
+        with LegacyTerminalFixture() as native, patch.object(b, "read_screen",
                 side_effect=ScreenSequence([idle, partial.replace("\n  next_", ""),
                                             screen(WORKING), screen(WORKING), consumed])), \
                 patch.object(b, "send_text"), \
@@ -176,7 +176,7 @@ class RecoverStrandedTests(unittest.TestCase):
         return attempts[0]
 
     def run_recovery(self, screens, *, received=False, original_observations=None):
-        with NativeFixture() as native:
+        with LegacyTerminalFixture() as native:
             attempt = self.original_attempt(native, original_observations)
             with patch.object(b, "read_screen", side_effect=ScreenSequence(screens)), \
                     patch.object(b, "send_text") as send, \
@@ -273,7 +273,7 @@ class RecoverStrandedTests(unittest.TestCase):
         self.assertIsInstance(result, (b.DispatchUnconfirmed, b.TaskPackContractError))
 
     def test_rejected_queue_observation_cannot_be_retried_after_restore(self):
-        with NativeFixture() as native:
+        with LegacyTerminalFixture() as native:
             attempt = self.original_attempt(native)
             with patch.object(b, "send_text") as send, patch.object(b, "send_key") as key:
                 for observed in [self.queued_screen(), screen(WORKING)]:
@@ -301,7 +301,7 @@ class RecoverStrandedTests(unittest.TestCase):
 
     def test_rejected_changed_observation_cannot_be_retried_after_restore(self):
         intact = screen(WORKING)
-        with NativeFixture() as native:
+        with LegacyTerminalFixture() as native:
             attempt = self.original_attempt(native)
             with patch.object(b, "send_text") as send, patch.object(b, "send_key") as key:
                 for observed in [self.add_rows(intact, ""), intact]:
@@ -314,7 +314,7 @@ class RecoverStrandedTests(unittest.TestCase):
 
     def test_one_recovery_key_budget_includes_transport_failure(self):
         for fail_key in (False, True):
-            with self.subTest(fail_key=fail_key), NativeFixture() as native:
+            with self.subTest(fail_key=fail_key), LegacyTerminalFixture() as native:
                 attempt = self.original_attempt(native)
                 effect = RuntimeError("transport lost") if fail_key else None
                 with patch.object(b, "read_screen", return_value=screen(WORKING)), \

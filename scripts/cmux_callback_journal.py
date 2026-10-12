@@ -63,9 +63,7 @@ def verified_receipt(bridge, surface, task_pack_path):
                 or any(receipt.get(k) != v for k, v in binding.items())
                 or attempt.get('binding') != dict(binding, identity=identity)):
             return None
-        pastes = [e for e in attempt['events'] if e['phase'] == 'PASTE_INTENT']
-        if len(pastes) != 1 or pastes[0].get('screen_sha256') != bridge.screen_hash(pastes[0]['screen']):
-            return None
+        native._original_intent(attempt, attempt.get('native_binding'), pack['completion_callback'])
         if receipt.get('confirmation_source') != 'native_user_message_v1':
             return None
         if receipt.get('reconciled_read_only') is True and 'native_evidence' in receipt:
@@ -287,15 +285,21 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                        'started_at_epoch': time.time()}
             write_json(attempt_path, attempt)
 
-            def observe(phase, screen=None):
+            def observe(phase, screen=None, *, evidence=None):
+                if (current_identity() != proof
+                        or bridge._sha256_file(report) != binding['report_sha256']
+                        or bridge._sha256_file(task_pack_path) != binding['task_pack_sha256']):
+                    raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED_BEFORE_INPUT')
                 fence = native.capture_paste_fence(attempt['native_binding']) if phase == 'PASTE_INTENT' else None
-                attempt['phase'] = phase
-                event = {'phase': phase, 'at_epoch': time.time()}
+                fields = native.input_event_fields(attempt['native_binding'],
+                                                  pack['completion_callback'], phase, evidence)
+                event = dict(fields, phase=phase, at_epoch=time.time())
                 if fence is not None:
                     event['native_paste_fence'] = fence
                 if screen is not None:
                     event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
                 attempt['events'].append(event)
+                attempt['phase'] = phase
                 if phase == 'EXTRA_ENTER_INTENT':
                     attempt['extra_enter'] = 1
                 write_json(attempt_path, attempt)
@@ -334,6 +338,10 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                    'native_binding': result['native_binding'], 'native_proof': result['native_proof'],
                    'confirmation_source': result['confirmation_source'],
                    'recorded_at_epoch': time.time(), **evidence}
+        for name in ('transport', 'native_method', 'native_rpc_outcome', 'native_turn_id',
+                     'terminal_input_operations', 'input_operations', 'elapsed_ms'):
+            if name in result:
+                receipt[name] = result[name]
         encoded = (json.dumps(receipt, ensure_ascii=False, indent=2) + '\n').encode()
         fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'wb') as handle:

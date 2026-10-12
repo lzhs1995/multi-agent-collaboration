@@ -32,7 +32,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from cmux_submission_inputs import delivery_calls, target as submission_target
+from cmux_submission_inputs import (delivery_calls, is_bridge_help_command,
+                                    target as submission_target)
 
 # 触发词：只有疑似 peer 投递才去读屏，避免给每条 Bash 加开销。
 _DELIVERY_HINTS = (
@@ -166,24 +167,6 @@ def looks_like_delivery(command: str) -> bool:
         return False
     low = command.lower()
     return any(hint.lower() in low for hint in _DELIVERY_HINTS)
-
-
-def is_bridge_help_command(command: str) -> bool:
-    try:
-        if any(char in command for char in ('\n', ';', '|', '&', '`', '$', '<', '>')):
-            return False
-        args = shlex.split(command)
-    except ValueError:
-        return False
-    while args and args[0] in ('rtk', 'proxy'):
-        args.pop(0)
-    if not args or Path(args[0]).name not in ('cmux-bridge-toolchain', 'cmux_bridge.py'):
-        return False
-    rest = args[1:]
-    commands = {'submit-text', 'submit_text', 'submit-task-pack', 'submit_task_pack',
-                'submit-completion-callback', 'submit_completion_callback', 'read-screen'}
-    return (rest in (['--help'], ['-h']) or
-            (len(rest) == 2 and rest[0] in commands and rest[1] in ('--help', '-h')))
 
 
 def _task_pack_paths(command: str) -> list[Path]:

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -27,10 +28,14 @@ class InstallationTests(unittest.TestCase):
             # under test. Only its subprocess receives private process/marker
             # inputs; returning the real CompletedProcess preserves failures.
             self.assertEqual(argv[:2], [sys.executable, '-B'])
-            self.assertEqual(len(argv), 3)
-            self.assertIn(Path(argv[2]).stem, m.GUARDS)
+            if Path(argv[2]).name == 'cmux_workflow_advisory.py':
+                self.assertEqual(argv[3], '--hook')
+                self.assertIn(argv[4], m.WORKFLOW_HOOKS)
+            else:
+                self.assertEqual(len(argv), 3)
+                self.assertIn(Path(argv[2]).stem, m.GUARDS)
             kwargs.setdefault('env', self.env)
-            return subprocess.run(offline_test_hook.command(argv[2], self.active), **kwargs)
+            return subprocess.run(offline_test_hook.command(argv[2], self.active, *argv[3:]), **kwargs)
 
         runner = patch.object(m, 'subprocess', SimpleNamespace(run=run_hook))
         runner.start()
@@ -92,7 +97,7 @@ class InstallationTests(unittest.TestCase):
             cfg.write_text('{"hooks":{}}')
             self.assertFalse(m.manage(td, "doctor")["ok"])
 
-    def test_doctor_preserves_real_stop_guard_failure(self):
+    def test_doctor_stays_available_with_unresolved_frozen_report(self):
         with tempfile.TemporaryDirectory() as td:
             m.manage(td, 'install', True)
             root = Path(self.tmp.name) / 'task'
@@ -103,8 +108,8 @@ class InstallationTests(unittest.TestCase):
                 task_id='offline-doctor-task', artifact_root=str(root),
                 participants=[dict(role='executor', surface_uuid='offline-doctor-surface')])))
             result = m.manage(td, 'doctor')
-            self.assertFalse(result['ok'])
-            self.assertFalse(result['checks']['cmux_consensus_stop_guard']['benignExitZero'])
+            self.assertTrue(result['ok'])
+            self.assertTrue(result['checks']['cmux_consensus_stop_guard']['benignExitZero'])
 
     def test_post_submit_hook_both_clients_and_missing_registration(self):
         with tempfile.TemporaryDirectory() as td:
@@ -152,6 +157,35 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(m.transform(migrated, home=home), migrated)
         self.assertEqual(m.transform(migrated, True, home=home)['hooks']['Stop'],
                          [migrated['hooks']['Stop'][0]])
+
+    def test_workflow_advisory_exact_ownership_and_mixed_upgrade(self):
+        home = Path(self.tmp.name)
+        old = home / '.local/share/multi-agent-collaboration/releases/old/source/scripts'
+        name = 'cmux_consensus_stop_guard.py'
+        wrapper = old / 'cmux_workflow_advisory.py'
+        owned = [f'python3 -B {wrapper} --hook {name}',
+                 f'python3 -B {old / name}']
+        foreign = [f'python3 -B /opt/foreign/scripts/cmux_workflow_advisory.py --hook {name}',
+                   f'python3 -B {wrapper} --hook foreign.py',
+                   f'python3 -B {wrapper} --hook {name} --extra',
+                   f'python3 -B {wrapper} --hook={name}']
+        for command in owned:
+            self.assertTrue(m.owned_command(command, home))
+        for command in foreign:
+            self.assertFalse(m.owned_command(command, home))
+        original = {'hooks': {'Stop': [{'matcher': 'custom', 'hooks': [
+            {'type': 'command', 'command': value} for value in owned + foreign]}]}}
+        migrated = m.transform(original, home=home, executor_reask=True)
+        self.assertEqual(m.transform(migrated, home=home, executor_reask=True), migrated)
+        kept = migrated['hooks']['Stop'][0]['hooks']
+        self.assertEqual([hook['command'] for hook in kept], foreign)
+        commands = [hook['command'] for entries in migrated['hooks'].values()
+                    for entry in entries for hook in entry['hooks']]
+        self.assertEqual(set(foreign), set(commands) & set(foreign))
+        for name in dict(m.GUARDS, **m.OPTIONAL_GUARDS):
+            self.assertEqual(commands.count(m.command(name)), 1)
+        for name in ('cmux_workspace_guard', 'cmux_agent_panel_guard'):
+            self.assertEqual(Path(shlex.split(m.command(name))[2]).stem, name)
 
     def test_wrapper_migration_preserves_all_resources(self):
         home = Path(self.tmp.name).resolve() / 'wrapper-home'
