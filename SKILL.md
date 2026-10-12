@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-Version 0.4.30 retains the removal of session-wide workflow blocks and recognizes
+Version 0.4.31 retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -34,6 +34,15 @@ flush. The authenticated foreground thread is preserved; actual child identity
 is not replaced by an inherited root selector. A child cannot consume its
 parent's inbox. Discovery never sends, accepts work or forces a turn, and cannot
 wake a truly idle supervisor.
+A Claude executor that repeatedly waits for an unavailable old supervisor can
+starve an already queued successor notice. For an explicitly authorized recovery,
+enroll the original maintenance attempt with `scripts/claude_maintenance_context.py`.
+The nonblocking PostToolUse observer verifies the original queue record, full body,
+session, transcript and process, then exposes that body at a tool boundary. Read it
+before another wait; give the successor your actual write/reservation status.
+This is file-context recovery, not a repaste, native user receipt, business task or
+old callback settlement. No enrollment means no new behavior. See
+[queued maintenance recovery](references/nonblocking-recovery.md#queued-claude-maintenance).
 A measured ellipsis-clipped git branch is accepted only at the physical end of
 a footer row below matching complete composer borders; real drafts stay protected.
 

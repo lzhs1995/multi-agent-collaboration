@@ -90,3 +90,32 @@ pending 的完整内容和原请求另行持久保留，再释放新 episode 的
 Claude footer 的 Unicode `…` 和 ASCII `...` 行尾截断均支持，包括 git cwd
 和 `▸` 摘要；它们只在完整输入框边框外解释。正常空输入框可以握手，真实草稿
 保持原样，两标签共用同一 pane 时串行发送。收到正文、ACK、执行和业务验收分别记录。
+# Queued Claude maintenance
+
+An executor can receive a `queued_command` attachment and still spend repeated
+tool rounds waiting for a dead supervisor. Do not repaste that notice, send an
+extra Enter, reset the session or relabel the queue as native reception. Old
+callback ownership does not prevent reading an authorized successor notice.
+
+From 0.4.31, the shared maintainer can explicitly enroll that original
+`successor-attempt-v2` maintenance attempt with
+`scripts/claude_maintenance_context.py --attempt /absolute/attempt.json
+--queued-offset ORIGINAL_OFFSET --queued-bytes ORIGINAL_RECORD_BYTES
+--maintenance-request /absolute/authorized-request.txt --reply /absolute/new-reply.json`.
+Obtain the offset and byte count from the actual original native queue record,
+not a screen capture or an invented fence. The registry is private and exclusive;
+it enrolls only this session and attempt. Installation alone enrolls nobody.
+
+The existing native-delivery PostToolUse advisory verifies that complete queued
+record and body, the original authorization, transcript device/inode and fence,
+and the hook's actual Claude process. It emits the complete body as additional
+context at a natural tool boundary. Read it before another old-supervisor wait,
+then write your own bound reply with actual write and reservation state. A
+maintenance notice is not a formal task pack. The successor retains dispatch.
+
+Exposure never modifies the original journal or proves native user reception,
+body reading, a safe write boundary or task acceptance. Keep those observations
+separate. Successful output is reminded no more often than every 60 seconds;
+only an exact body-read reply suppresses the reminder. A failed output flush
+does not consume it. Unknown or absent enrollment, mismatched evidence and
+storage failures emit no blocking response. Stop never forces another turn.
