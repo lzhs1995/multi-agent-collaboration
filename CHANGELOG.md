@@ -1,3 +1,20 @@
+## 0.4.33
+
+- Recognize the measured Claude HUD context token breakdown, such as
+  `上下文 █████████░ 93% (输入: 78k, 缓存: 854k)`, only below matching
+  complete composer borders. Counts follow the HUD renderer's integer,
+  rounded `k`, and single-decimal `M` formats.
+- Preserve matching text inside drafts verbatim. Unknown statistics,
+  suffixes, units and incomplete borders still refuse input; recognizing
+  the footer does not permit ordinary messages during compaction or reconnect.
+- Add a synthetic observed-layout fixture and offline parser/delivery tests.
+- Final offline validation: 1,899 tests passed with zero failures or errors.
+- Preserve file scheduling for the fully verified 0.4.32 v3 producer and v2
+  issuer after CURRENT advances. Pin its complete manifest, controller and
+  scheduler combination and reviewed descriptor. Historical re-enrollment
+  support is bounded to the controllers its issuer actually supported; no
+  controller migration, old code execution or reply consumption is authorized.
+
 ## 0.4.32
 
 - Preserve the scheduler's rotation cursor before full-release verification.

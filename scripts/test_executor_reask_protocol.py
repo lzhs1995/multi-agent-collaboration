@@ -13,6 +13,8 @@ import executor_reask_protocol as protocol
 
 
 REVIEWED = tuple(protocol.LEGACY)
+REVIEWED_V2 = tuple(name for name in REVIEWED if name not in protocol.LEGACY_FILE_PROTOCOL)
+REVIEWED_V3 = tuple(protocol.LEGACY_FILE_PROTOCOL)
 PYTHON = str(Path(sys.executable).resolve())
 OWNER = '11111111-1111-4111-8111-111111111111'
 
@@ -79,18 +81,19 @@ class ProtocolTests(unittest.TestCase):
 
     def episode(self, name=None, *, current=False):
         source, pins, _raw = self.current if current else self.releases[name or REVIEWED[0]]
+        modern = current or name in protocol.LEGACY_FILE_PROTOCOL
         controller = identity(source, pins)
         continuation = dict(enabled=True, id='a' * 32, status='ACTIVE', overall_task='fixture task',
                             owner=OWNER, authorized_epoch=1.0, until_epoch=None,
                             authorization=dict(path=str(self.home / 'authorization.txt'),
                                                sha256='b' * 64, bytes=10),
                             controller=copy.deepcopy(controller))
-        state = dict(version=3 if current else 2, supervisor=OWNER,
+        state = dict(version=3 if modern else 2, supervisor=OWNER,
                      controller=controller, continuation=continuation)
-        record = dict(schema='executor-reask-enrollment-v2' if current else 'executor-reask-enrollment-v1',
+        record = dict(schema='executor-reask-enrollment-v2' if modern else 'executor-reask-enrollment-v1',
                       authorization='EXPLICIT_REASK_START', controller=copy.deepcopy(controller),
                       scheduler=issuer(source, pins))
-        if current:
+        if modern:
             state['file_protocol'] = protocol.descriptor()
             record['file_protocol'] = protocol.descriptor()
         return state, record
@@ -105,7 +108,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIs(protocol.supports_record(record, state, self.current_scheduler), False)
 
     def test_reviewed_v2_originals_and_missing_top_level_controller(self):
-        for name in REVIEWED:
+        for name in REVIEWED_V2:
             with self.subTest(release=name):
                 state, record = self.episode(name)
                 self.assert_supported(state, record)
@@ -115,6 +118,71 @@ class ProtocolTests(unittest.TestCase):
                 state['continuation'] = None
                 self.assert_supported(state, record)
                 self.assertFalse(protocol.supports_state(state))
+
+    def test_reviewed_v3_original_and_current_reenrollment_keep_controller(self):
+        for name in REVIEWED_V3:
+            with self.subTest(release=name):
+                state, record = self.episode(name)
+                original = copy.deepcopy(state)
+                self.assert_supported(state, record)
+                record.update(scheduler=self.current_scheduler,
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assert_supported(state, record)
+                self.assertEqual(state, original)
+                del state['controller']
+                self.assert_rejected(state, record)
+
+    def test_reviewed_v2_issuer_keeps_its_historical_controller_range(self):
+        for name in REVIEWED_V3:
+            for origin in (*REVIEWED_V2, name):
+                with self.subTest(issuer=name, controller=origin):
+                    state, record = self.episode(origin)
+                    record.update(schema='executor-reask-enrollment-v2',
+                                  file_protocol=protocol.descriptor(),
+                                  scheduler=issuer(*self.releases[name][:2]),
+                                  authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                    self.assert_supported(state, record)
+                    record['authorization'] = 'EXPLICIT_REASK_START'
+                    self.assertIs(protocol.supports_record(record, state, self.current_scheduler),
+                                  origin == name)
+            state, record = self.episode(current=True)
+            record.update(scheduler=issuer(*self.releases[name][:2]),
+                          authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+            # The old issuer could not enroll the new CURRENT's controller.
+            self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
+    def test_reviewed_v3_requires_its_actual_schemas_and_both_descriptors(self):
+        for name in REVIEWED_V3:
+            for target, key, value in (
+                    ('state', 'version', 2), ('state', 'file_protocol', {}),
+                    ('record', 'file_protocol', {}),
+                    ('record', 'schema', 'executor-reask-enrollment-v1'),
+                    ('record', 'authorization', 'INFERRED_FROM_INSTALLATION')):
+                with self.subTest(release=name, target=target, field=key):
+                    state, record = self.episode(name)
+                    (state if target == 'state' else record)[key] = value
+                    self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+                    if target == 'state':
+                        self.assertFalse(protocol.supports_state(state))
+            state, record = self.episode(name)
+            record['scheduler']['sha256'] = '0' * 64
+            self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
+    def test_reviewed_v3_rechecks_complete_manifest_without_cached_trust(self):
+        for name in REVIEWED_V3:
+            source, _pins, manifest = self.releases[name]
+            state, record = self.episode(name)
+            self.assert_supported(state, record)
+            member = source / 'README.md'
+            raw = member.read_bytes()
+            self.write_pin(member, b'X' + raw[1:])
+            self.assert_rejected(state, record)
+            self.write_pin(member, raw)
+            self.assert_supported(state, record)
+            self.write_pin(source.parent / 'MANIFEST.json', manifest + b'\n')
+            self.assert_rejected(state, record)
+            self.write_pin(source.parent / 'MANIFEST.json', manifest)
+            self.assert_supported(state, record)
 
     def test_verified_current_v3_and_explicit_original_reenrollment(self):
         self.assert_supported(*self.episode(current=True))
@@ -139,6 +207,8 @@ class ProtocolTests(unittest.TestCase):
                 patch('subprocess.run', side_effect=AssertionError('subprocess')):
             self.assert_supported(state, record)
             self.assert_supported(*self.episode(current=True))
+            for name in REVIEWED_V3:
+                self.assert_supported(*self.episode(name))
         self.assertEqual((state, record), before)
 
     def test_raw_manifest_digest_cannot_be_redeclared(self):
@@ -354,7 +424,7 @@ class InstalledReleasePinsTests(unittest.TestCase):
         self.assertIs(protocol.supports_state(state, record), True)
         self.assertIs(protocol.supports_record(record, state, scheduler), True)
 
-    def test_reviewed_028_030_031_files_without_copying_or_loading_code(self):
+    def test_reviewed_installed_files_without_copying_or_loading_code(self):
         base = Path.home() / '.local/share/multi-agent-collaboration/releases'
         if not all((base / name / 'MANIFEST.json').is_file() for name in REVIEWED):
             self.skipTest('reviewed installed releases unavailable')
@@ -363,9 +433,13 @@ class InstalledReleasePinsTests(unittest.TestCase):
                 source = base / name / 'source'
                 pins = {key: dict(sha256=value) for key, value in protocol.LEGACY[name].items()}
                 controller = identity(source, pins)
-                state = dict(version=2, controller=controller, continuation=None)
-                record = dict(schema='executor-reask-enrollment-v1', authorization='EXPLICIT_REASK_START',
+                modern = name in protocol.LEGACY_FILE_PROTOCOL
+                state = dict(version=3 if modern else 2, controller=controller, continuation=None)
+                record = dict(schema='executor-reask-enrollment-v2' if modern else 'executor-reask-enrollment-v1', authorization='EXPLICIT_REASK_START',
                               controller=copy.deepcopy(controller), scheduler=issuer(source, pins))
+                if modern:
+                    state['file_protocol'] = protocol.descriptor()
+                    record['file_protocol'] = protocol.descriptor()
                 self.assertIs(protocol.supports_state(state, record), True)
                 self.assertIs(protocol.supports_record(record, state, record['scheduler']), True)
 

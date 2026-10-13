@@ -23,6 +23,7 @@ LEGACY_MANIFESTS = {
     '0.4.28-ae66245771d0': '31579cfab68b908561a6b6833079c5942bc27e05fe097f6f3249b3cef81cac6e',
     '0.4.30-ff75100795a9': '80f925fb74964f2cc0d72d7464f418e23ab637d504f78c79e4dd47fb26fe815f',
     '0.4.31-79ae83e9d5da': 'bc369ef7c81e7a4c34c4001736df61a99b634350248a2299def68e92efa098f5',
+    '0.4.32-c7338a400bf4': '682e2215a09381c2e565eb73b142f360ec506c4a428a776423f64ff22cdd77d5',
 }
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
@@ -53,7 +54,27 @@ LEGACY = {
         "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
         "scripts/executor_reask_lifecycle.py": "593acda82846ba68c86f09180fd336c602dc494538cea20649aec96d678993da",
         "scripts/executor_reask_scheduler.py": "e6111f7f969025b8ab3b2e1f883c9bc862c5507048d4b235fc323efbc37f4a28"
+    },
+    "0.4.32-c7338a400bf4": {
+        "VERSION": "3ef61d7b0f5aee9bd2d086657890fe0315f1c836954db4a6858e648bc611eee7",
+        "scripts/executor_reask.py": "f7782ae273d5cf2c2944b2372447bae8e85aa93b2da2f0ca5a1944acb39e1e24",
+        "scripts/executor_ready.py": "39e297b4ef4b2a1c5977570a81f050482156fd088d6a9cab364acb2e8510af62",
+        "scripts/cmux_bridge.py": "8e5706c42a2e94e99c050670c9beb10549975f486b98d7d53c191bc34f3544c3",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reask_lifecycle.py": "65328f881c2397d1f1e079d7bc129c109b1f4fb7385dfe54fd43a6813030660d",
+        "scripts/executor_reask_scheduler.py": "4376f237d8f15652f195bc856cd6ebc17ddfb447387783c1f58cb6b69cd4c901"
     }
+}
+# Reviewed v3 state/v2 enrollment producers, after full immutable verification.
+# A historical issuer can only have enrolled controllers supported when it ran;
+# it cannot claim to have enrolled a future CURRENT or a subsequently added release.
+LEGACY_FILE_PROTOCOL = {
+    '0.4.32-c7338a400bf4': {
+        'descriptor': {'id': 'executor-reask-file-v1',
+                       'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+        'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+                        '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4'),
+    },
 }
 CONTRACT = dict(id='executor-reask-file-v1', version=1,
                 operations=['bound-file-request', 'bound-file-reply-detection',
@@ -66,6 +87,11 @@ CONTRACT = dict(id='executor-reask-file-v1', version=1,
 def descriptor():
     raw = json.dumps(CONTRACT, sort_keys=True, separators=(',', ':')).encode()
     return dict(id=CONTRACT['id'], sha256=hashlib.sha256(raw).hexdigest())
+
+
+def _descriptor_producer(release):
+    return (release['kind'] == 'current'
+            or LEGACY_FILE_PROTOCOL.get(release.get('name'), {}).get('descriptor') == descriptor())
 
 
 def state_controller(state, record=None):
@@ -262,7 +288,7 @@ def _trusted_release(source, checked):
     files = _verify_release(source, LEGACY_MANIFESTS.get(name))
     if {key: files[key]['sha256'] for key in (*FILES, SCHEDULER)} != LEGACY[name]:
         raise ValueError('unreviewed controller/scheduler combination')
-    result = dict(kind='legacy', files=files)
+    result = dict(kind='legacy', name=name, files=files)
     checked[source] = result
     return result
 
@@ -282,10 +308,11 @@ def _supported_state(state, record, checked):
     if value is None or type(state.get('version')) is not int or state['version'] not in (2, 3):
         return False
     release = _controller_release(value, checked)
-    # The reviewed legacy producers wrote v2 only. A public descriptor cannot
-    # grant compatibility to an unknown v3 producer, even with plausible paths.
-    return state['version'] == 2 or (release['kind'] == 'current'
-                                    and state.get('file_protocol') == descriptor())
+    # Old v2 producers and the explicitly reviewed v3 producer have different
+    # schemas. A public descriptor never grants support to an unknown release.
+    if state['version'] == 2:
+        return release['kind'] == 'current' or release['name'] not in LEGACY_FILE_PROTOCOL
+    return _descriptor_producer(release) and state.get('file_protocol') == descriptor()
 
 
 def supports_state(state, record=None):
@@ -314,13 +341,16 @@ def supports_record(record, state, current_scheduler):
         same_origin = (str(source) == controller['source']
                        and issuer['python'] == controller['python'])
         if record.get('schema') == 'executor-reask-enrollment-v1':
-            return same_origin
+            return same_origin and release.get('name') not in LEGACY_FILE_PROTOCOL
         if (record.get('schema') != 'executor-reask-enrollment-v2'
-                or record.get('file_protocol') != descriptor() or release['kind'] != 'current'):
+                or record.get('file_protocol') != descriptor() or not _descriptor_producer(release)):
             return False
-        # Legacy producers did not issue v2 enrollments. Re-enrollment can only
-        # name the verified CURRENT scheduler; its explicit live/CAS proof is
-        # checked by the scheduler before committing this record.
+        if (release['kind'] == 'legacy' and release_name(controller)
+                not in LEGACY_FILE_PROTOCOL[release['name']]['controllers']):
+            return False
+        # A reviewed original issuer may remain on its original enrollment.
+        # Fresh registration still requires CURRENT and its explicit live/CAS
+        # checks; compatibility alone neither registers nor migrates a record.
         return (record.get('authorization') == 'EXPLICIT_REASK_ENROLL_EXISTING'
                 or record.get('authorization') == 'EXPLICIT_REASK_START' and same_origin)
     except (TypeError, KeyError, ValueError, OSError, RecursionError):

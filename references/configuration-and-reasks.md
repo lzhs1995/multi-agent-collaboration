@@ -328,6 +328,15 @@ alone is insufficient. Read old pins only; never import or execute old modules.
 CURRENT's own state format remains supported behind its full approval gate;
 unknown historical v3 producers are not supported by a matching descriptor.
 
+Version 0.4.33 also verifies the complete `0.4.32-c7338a400bf4` release and
+interprets its original v3 states and v2 enrollments. Both descriptors must match
+the reviewed protocol. Its original scheduler may retain enrollments for its
+own controller or the reviewed 0.4.28/30/31 controllers it supported when issued;
+it cannot claim to have enrolled a future CURRENT. This preserves original
+enrollment, controller, registration and pending evidence across the upgrade.
+Fresh enrollment still requires the explicit live CURRENT transaction, and
+reply consumption remains with the original authenticated executor/controller.
+
 Match the complete enrollment binding and registration token to the live state;
 legacy tokenless states match only tokenless records. An existing continuation
 must be structurally valid and contain the exactly equal complete original

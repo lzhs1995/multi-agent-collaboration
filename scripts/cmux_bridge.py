@@ -759,6 +759,15 @@ _CLAUDE_ACTIVE_TOOL_RE = re.compile(
 _CLAUDE_SUMMARY_RE = re.compile(
     rf"(?:{_CLAUDE_COUNTS}|✓\s+{_CLAUDE_TOOL}(?:\s+\[[\w.-]+\])?:\s+"
     rf"[^|\n]+\((?:<)?{_CLAUDE_DURATION}\)|▸\s+[^\n│]+(?:\(\d+/\d+\)|…|\.{{3}}))")
+# Measured 2026-10-13: the HUD appends input/cache counts at high context.
+# Its formatTokens renders <1000 as integers, rounded thousands as Nk (up
+# to 1000k), and millions with one decimal and M. Accept only that grammar
+# below the complete borders; a matching draft is still verbatim user input.
+_CLAUDE_HUD_TOKENS = (
+    r"(?:0|[1-9][0-9]{0,2}|(?:[1-9][0-9]{0,2}|1000)k|[1-9][0-9]*\.[0-9]M)")
+_CLAUDE_CONTEXT_ROW_RE = re.compile(
+    r"上下文\s+[█░▒▓▏▎▍▌▋▊▉▐]+\s+(?:100|\d{1,2})%"
+    rf"(?: \(输入: {_CLAUDE_HUD_TOKENS}, 缓存: {_CLAUDE_HUD_TOKENS}\))?")
 
 
 def _claude_bordered_compose(screen):
@@ -835,7 +844,7 @@ def _claude_bordered_compose(screen):
         if rest and re.fullmatch(elapsed, rest[0]):
             rest = rest[1:]
         if (len(rest) < 3
-                or not re.fullmatch(r"上下文\s+[█░▒▓▏▎▍▌▋▊▉▐]+\s+(?:100|\d{1,2})%", rest[0])
+                or not _CLAUDE_CONTEXT_ROW_RE.fullmatch(rest[0])
                 or not re.fullmatch(
                     r"\d+\s+CLAUDE\.md\s*\|\s*(?:\d+\s+规则\s*\|\s*)?"
                     r"\d+\s+MCPs\s*\|\s*\d+\s+(?:钩子|hooks)", rest[1])

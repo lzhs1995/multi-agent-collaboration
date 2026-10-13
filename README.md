@@ -1,4 +1,10 @@
-Current source: **0.4.32**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+Current source: **0.4.33**. The Claude footer parser recognizes the HUD's measured input/cache token breakdown below complete composer borders. It preserves draft text and continues to refuse ordinary input during compaction or reconnect. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+
+Version **0.4.33** also retains file scheduling for the fully verified 0.4.32
+v3 producer and v2 issuer, including its original registrations of reviewed
+older controllers. Complete manifest and descriptor checks preserve the
+original controller and pending evidence; consumption remains executor-owned.
+The full 0.4.33 offline suite passed 1,899 tests with zero failures or errors.
 
 Version **0.4.32** adds CURRENT's reviewed cross-release v2 file interpreter,
 recoverable registration transactions and explicit registration of an existing
@@ -16,7 +22,7 @@ while retaining checks on executable shell code. A separate explicit zero-input
 recovery entrypoint defaults to a read-only history plan; applying it pins the
 complete history SHA and appends one attempt through the original controller
 only when every earlier attempt proves no input. See [SKILL.md](SKILL.md) for
-the exact evidence and readiness checks. The full offline suite passed 1,846
+the exact evidence and readiness checks. Its full offline suite passed 1,885
 tests with zero failures or errors. Installation and active-client adoption need
 their own evidence. See the [cross-release file contract](references/configuration-and-reasks.md#cross-release-file-contract).
 
