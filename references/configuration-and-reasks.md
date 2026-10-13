@@ -337,6 +337,13 @@ enrollment, controller, registration and pending evidence across the upgrade.
 Fresh enrollment still requires the explicit live CURRENT transaction, and
 reply consumption remains with the original authenticated executor/controller.
 
+Version 0.4.34 extends that full-manifest review to
+`0.4.33-09de16ceb823`, whose v3 state/v2 enrollment contract is unchanged.
+Its issuer can retain an explicit enrollment of 0.4.32 and the previously
+reviewed controllers. The 0.4.32 issuer's range stays fixed: it cannot claim a
+0.4.33 or future CURRENT controller. Both complete releases and all descriptors
+must still verify; original enrollment and controller bytes remain authoritative.
+
 Match the complete enrollment binding and registration token to the live state;
 legacy tokenless states match only tokenless records. An existing continuation
 must be structurally valid and contain the exactly equal complete original

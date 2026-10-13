@@ -168,6 +168,23 @@ class ProtocolTests(unittest.TestCase):
             record['scheduler']['sha256'] = '0' * 64
             self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
 
+    def test_0433_can_reenroll_0432_but_0432_cannot_claim_future_0433(self):
+        previous = '0.4.32-c7338a400bf4'
+        successor = '0.4.33-09de16ceb823'
+        for origin, scheduler, supported in (
+                (previous, successor, True), (successor, previous, False)):
+            with self.subTest(controller=origin, issuer=scheduler):
+                state, record = self.episode(origin)
+                original = copy.deepcopy((state, record['controller']))
+                record.update(scheduler=issuer(*self.releases[scheduler][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assertIs(protocol.supports_state(state, record), True)
+                self.assertIs(protocol.supports_record(record, state, self.current_scheduler),
+                              supported)
+                self.assertEqual((state, record['controller']), original)
+                record['authorization'] = 'EXPLICIT_REASK_START'
+                self.assertIs(protocol.supports_record(record, state, self.current_scheduler), False)
+
     def test_reviewed_v3_rechecks_complete_manifest_without_cached_trust(self):
         for name in REVIEWED_V3:
             source, _pins, manifest = self.releases[name]

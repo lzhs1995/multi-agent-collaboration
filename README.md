@@ -1,4 +1,13 @@
-Current source: **0.4.33**. The Claude footer parser recognizes the HUD's measured input/cache token breakdown below complete composer borders. It preserves draft text and continues to refuse ordinary input during compaction or reconnect. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+Current source: **0.4.34**. Late handshake reconciliation accepts a Claude native assistant record containing one exact ACK text block alongside structurally valid reasoning blocks. Extra text, tool blocks, malformed metadata and any ACK whitespace or nonce difference remain rejected; reasoning contents are never emitted in reconciliation results or archives. The original supervisor and complete original controller remain required. See [late ACK reconciliation](references/late-handshake-ack.md).
+
+File scheduling retains the fully verified 0.4.33 v3 producer and v2 issuer,
+including its historical enrollment of the 0.4.32 controller. An older issuer
+cannot claim support for a future controller. No registration, consumption or
+transport authority is inferred from compatibility.
+The 40 ACK behavior tests pass locally and through the original 0.4.32 controller.
+The final offline suite passes all 1,912 tests with no failures or errors.
+
+The Claude footer parser recognizes the HUD's measured input/cache token breakdown below complete composer borders. It preserves draft text and continues to refuse ordinary input during compaction or reconnect. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
 
 Version **0.4.33** also retains file scheduling for the fully verified 0.4.32
 v3 producer and v2 issuer, including its original registrations of reviewed
