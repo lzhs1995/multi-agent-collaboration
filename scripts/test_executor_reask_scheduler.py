@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 import uuid
 
 import executor_ready as ready
@@ -142,13 +142,61 @@ class SchedulerTests(unittest.TestCase):
     def test_cli_persists_authenticated_uuid_instead_of_surface_alias(self):
         self.transport.side_effect = None
         self.transport.return_value.pin_workspace.return_value = self.live()
-        with patch.object(reask, 'tick', side_effect=lambda caller: reask.load(caller)), \
+        with patch.object(reask, 'tick', side_effect=lambda caller, **kwargs: reask.load(caller)) as tick, \
                 patch.object(reask.sys, 'stdout', io.StringIO()):
             self.assertEqual(reask.main(['start', '--supervisor', 'surface:28',
                                          '--caller-uuid', CALLER, '--task', 'next']), 0)
         state = reask.load(CALLER)
+        tick.assert_called_once_with(CALLER, file_only=False)
         self.assertEqual((state['supervisor'], state['workspace_uuid']), (SUP, WORKSPACE))
         self.assertEqual(ready.read_json(scheduler.enrollment_path(CALLER))['status'], 'ENROLLED')
+
+    def test_cli_file_only_posts_and_schedules_without_transcript_or_transport(self):
+        self.transport.side_effect = None
+        self.transport.return_value.pin_workspace.return_value = self.live()
+        with patch.object(reask, 'idle_binding', side_effect=AssertionError('no idle binding')), \
+                patch.object(ready, 'Tail', side_effect=AssertionError('no transcript')), \
+                patch.object(reask.sys, 'stdout', io.StringIO()):
+            self.assertEqual(reask.main(['start', '--supervisor', SUP, '--caller-uuid', CALLER,
+                                         '--task', 'next', '--file-only']), 0)
+            state = reask.load(CALLER)
+            self.assertEqual(state['asks'][-1]['outcome'], 'FILE_ONLY_SCHEDULED')
+            self.assertEqual((state['ask_count'], state['file_posts']), (1, 1))
+            self.assertIsNone(state['continuation'])
+            self.assertEqual((state['terminal_attempts'], state['native_receipts']), (0, 0))
+            self.assertIsNone(state['terminal_pending'])
+            self.assertEqual(scheduler.sweep(now=state['next_due_epoch'])['file_posts'], 1)
+        # Resolve initially and recheck under the registration lock; no input.
+        self.assertEqual(self.transport.call_args_list, [call(), call()])
+        self.assertEqual(self.transport.return_value.mock_calls,
+                         [call.pin_workspace(SUP, caller_uuid=CALLER)] * 2)
+        self.assertEqual(reask.load(CALLER)['episode_id'], state['episode_id'])
+
+    def test_cli_file_only_continuation_still_requires_explicit_authorization(self):
+        self.transport.side_effect = None
+        self.transport.return_value.pin_workspace.return_value = self.live()
+        args = ['start', '--supervisor', SUP, '--caller-uuid', CALLER, '--task', 'next',
+                '--file-only', '--continuing', '--overall-task', 'overall']
+        with patch.object(reask.sys, 'stdout', io.StringIO()), self.assertRaises(ValueError):
+            reask.main(args)
+        self.assertIsNone(reask.load(CALLER))
+        auth = self.home / 'explicit-authorization.txt'
+        auth.write_text('Continue file inquiries for the overall task.')
+        with patch.object(reask.sys, 'stdout', io.StringIO()):
+            self.assertEqual(reask.main(args + ['--authorization-file', str(auth)]), 0)
+        state = reask.load(CALLER)
+        self.assertEqual(state['continuation']['overall_task'], 'overall')
+        self.assertEqual(state['asks'][-1]['outcome'], 'FILE_ONLY_SCHEDULED')
+        self.assertEqual(self.transport.return_value.mock_calls,
+                         [call.pin_workspace(SUP, caller_uuid=CALLER)] * 4)
+
+    def test_cli_file_only_rejects_transcript_before_registration(self):
+        with patch.object(reask.sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as exc:
+            reask.main(['start', '--supervisor', SUP, '--caller-uuid', CALLER,
+                        '--file-only', '--transcript', '/must-not-read'])
+        self.assertEqual(exc.exception.code, 2)
+        self.assertIsNone(reask.load(CALLER))
+        self.transport.assert_not_called()
 
     def test_capacity_enumeration_is_bounded(self):
         visited = []

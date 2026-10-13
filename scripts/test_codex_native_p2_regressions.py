@@ -242,12 +242,22 @@ class ReaskNoInputEvidenceTests(OfflineCase):
         state, old, _attempt = self.first_no_input()
         snapshot = self.original_snapshot(old)
         self.restore_unresolved_hold(state, old)
+        state_path = reask.state_path(CALLER)
+        state_bytes = state_path.read_bytes()
+        before_calls = copy.deepcopy(self.rpc.calls)
         other = copy.deepcopy(reask.controller())
         other["source"] += "-successor"
         with patch.object(reask, "controller", return_value=other):
-            state = self.assert_next_tick_stays_pending(old)
-        self.assertEqual(state["asks"][-1]["outcome"],
-                         "SKIPPED_ORIGINAL_CONTROLLER_REQUIRED")
+            self.fixture.rpc.reset_mock()
+            result = self.tick(1001.0 + reask.INTERVAL)
+        self.assertEqual(result["outcome"], "ORIGINAL_CONTROLLER_REQUIRED")
+        self.assertEqual(result["input_operations"], 0)
+        self.fixture.rpc.assert_not_called()
+        self.assertEqual(self.rpc.calls, before_calls)
+        # A foreign controller must stop before creating even a new inquiry;
+        # the original waiting state, request and unresolved hold stay intact.
+        self.assertEqual(state_path.read_bytes(), state_bytes)
+        self.assertEqual(reask.load(CALLER)["terminal_pending"]["marker"], old["marker"])
         self.assert_original_unchanged(old, snapshot)
 
     def test_missing_original_attempt_stays_pending_despite_false_input_flags(self):

@@ -9,7 +9,14 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-Version 0.4.31 retains the removal of session-wide workflow blocks and recognizes
+**Version: 0.4.32.** Adds file scheduling across reviewed releases, recoverable
+registration, formal reservation boundaries, a quoted-launch classification fix
+and explicit recovery after proven zero-input preflight exhaustion. The full
+offline suite passed 1,846 tests with zero failures or errors. Installation and
+active-client adoption require separate live evidence. The 0.4.31 maintenance
+notice recovery contract is retained.
+
+The released baseline retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
 heredocs and quoted search text do not constitute terminal writes. Global workflow hooks are
 non-blocking observers: missing identity, old task enrollment, unresolved callbacks,
@@ -190,6 +197,17 @@ After verified acceptance/disarm, the supervisor owns
 A normal task boundary is not an API failure or a permanent session stop. Use
 current evidence for authorized follow-up; never ask the user to relay to a bound peer.
 
+The primary next-task chain is callback → independent acceptance/exact disarm →
+prepare the next authorized pack → fresh live preflight → guarded dispatch.
+The explicitly authorized 60-second reask is a fallback; file timers cannot wake
+an idle model. ANSWERED means a reply was detected, not consumed: await the
+original executor's exact consumption without repeating dispatch or replacing
+the business episode. Formal reservation pauses remain in force until exact RELEASE.
+Measure accepted unique coverage, verified issue closures and actual stage
+latency p50/p95 with sample counts; ask_count is diagnostic, not a performance
+target. See [dispatch cadence and metrics](references/configuration-and-reasks.md#dispatch-cadence-and-metrics)
+for timestamp boundaries and the limits of detected-to-consumed observations.
+
 ### Fast handshake and verified delivery in both directions
 
 - Bridge cleanup must observe an empty compose, not merely the absence of the
@@ -246,13 +264,36 @@ An explicitly authorized `executor_reask.py run` checks every five seconds,
 issues a new marker no more often than every 60 seconds, with a polling budget
 of at most 540 seconds per invocation. Synchronous I/O can extend wall time.
 After the command returns, its durable episode may remain WAITING_REPLY;
-that state does not prove a runner is active. Version 0.4.28 also provides a
-separate launchd file scheduler. Explicit authenticated `executor_reask start`
-enrolls the current task/purpose/workspace/controller; merely installing the job
-does not enroll anyone. Each 60-second sweep updates files only, with a
-256-enrollment cap and a 10-second budget. It never sends or observes transport,
-reads transcripts, wakes a model or migrates old episodes. Verify enrollment,
-actual sweep execution and supervisor exposure separately. Current advisory hooks do not refresh the
+that state does not prove a runner is active or registration succeeded. The
+separate launchd file scheduler was introduced in 0.4.27. Explicit authenticated
+`executor_reask.py start` enrolls the exact task/purpose/workspace/controller;
+merely installing the job does not enroll anyone. Each 60-second sweep updates
+files only, with a 256-enrollment cap and a 10-second budget.
+
+Version 0.4.32 lets approved CURRENT interpret only reviewed v2 producers for
+cross-release file scheduling. It verifies the complete original manifest,
+controller and issuer scheduler pins without importing or executing old code.
+Original controller, UNKNOWN, terminal_pending and journals remain intact; a
+one-time snapshot preserves complete original state/enrollment bytes before the
+first cross-release write. File ticks never use transport, transcripts, legacy
+idle bindings or reply consumption, and cannot wake a model.
+
+Registration preflight precedes active state/channel changes. A PREPARING intent
+is not success: `REGISTRATION_UNCOMMITTED` and `COMMITTED_RECOVERY_REQUIRED` expose
+failures on either side of the live-state token commit. Recover the original
+transaction; do not start another episode to hide it. An authenticated original
+executor can explicitly use `enroll-existing --episode ID --enrollment-sha256 SHA`
+for an existing WAITING episode, preserving its controller and pending evidence
+without a new episode, tick or consume. SHA means the exact old enrollment bytes
+(`ABSENT` only when absent); a stale supervisor binding is never auto-migrated.
+See the [file and registration contract](references/configuration-and-reasks.md#cross-release-file-contract).
+
+Verify enrollment, actual sweep execution and supervisor exposure separately.
+Also verify automatic hooks, complete body reading and two real continuing
+request/reply/consume/rearm rounds in the original sessions. Explicit
+`start --file-only` is incompatible with transcript channels; file timers do
+not establish model wakeup or grant consumption authority.
+Current advisory hooks do not refresh the
 legacy idle binding needed by AUTHENTICATED_NEW_DISPATCH. Use a bound supervisor
 reply to end the wait; never restart the episode to evade an old pending send.
 CCC waits have a deadline; native Goal behavior requires separate evidence.
@@ -421,6 +462,25 @@ completion nonce and callback controller. A crash consumes this budget. Pasted,
 queued, uncertain, changed or already-received attempts cannot use this route.
 The corrected TASK_PACK_V2 marker is the task id; this is not a new business task.
 
+Version 0.4.32 adds `scripts/resume_task_no_input.py` for an original Claude
+task dispatch whose bounded preflight exhausted attempts without input. It
+defaults to a read-only plan: `--controller` names the original immutable source,
+`--surface` the original executor, `--task-pack` the original pack and
+`--text-file` the exact original notice. The plan returns `history_sha256` for
+the complete contiguous attempt list. Apply requires
+`--apply --history-sha256 SHA` matching that reviewed history.
+
+Every historical attempt must be NO_INPUT with `events=[]` and only
+COMPOSE_OCCUPIED or RECEIVER_COMPACTING. Original identity, full native binding,
+lock, pack, payload and nonce must remain unchanged, and the current composer
+must be empty and ready. Preserve every original byte and append one attempt
+through the complete original controller. Any PASTE_INTENT, native input intent,
+UNKNOWN, queue, receipt or changed history forbids recovery. Preserve a draft
+encountered again; never clear it. Ordinary automatic preflight remains bounded
+to two attempts, but proven zero input does not exhaust an actual-send budget.
+This explicit route removes only that proven preflight deadlock; it never
+authorizes an uncertain resend. Verify installation and live use separately.
+
 A busy Claude may expose a `queued_command` attachment while working on a task.
 Preserve that observation without declaring an exact native-user receipt. Never
 resend merely because an ACK or report preceded that record. Executors must wait
@@ -430,14 +490,45 @@ is unavailable; maintenance does not reopen accepted research reviews.
 
 0.4.24 also recognizes local SQLite and disk-space inventory imports in quoted Python document heredocs. Agent names after semicolons inside literal document data are not CLI launches; adjacent real shell launches remain checked. Verify the exact rejected command through the real hook before claiming recovery.
 
+Version 0.4.32 fixes the residual launch-classifier case where a single-quoted
+message containing `; Codex alone` was parsed as an adjacent command. Preserve
+the original message: classify literal data separately from shell code. Real
+adjacent agent CLIs, executable nested substitutions and wrapper command
+arguments still receive launch checks. Use the exact command with zero-input
+`--check-command` and the real hook entry in isolated tests; this is additional
+coverage beyond the earlier 0.4.24 literal and 0.4.27 heredoc fixes.
+
 ## Opt-in continuing inquiries
 
 0.4.28 adds explicit `--continuing` authorization across bound replies and child
 task boundaries. Read [the continuing contract](references/configuration-and-reasks.md#continuing-authorization-0428).
 ANSWERED remains unconsumed; only the authenticated original executor's
-`consume --reply-sha256` records consumption and rearms the same authorization.
-Formal task reservations pause requests; their release resumes authorized work.
-Stop, expiry and revocation end it. Defaults and old controllers remain unchanged.
+original controller may perform `consume --reply-sha256` and rearm the same
+authorization. CURRENT file compatibility grants no consumption authority.
+The [formal reservation boundary](references/configuration-and-reasks.md#formal-reservation-boundary)
+also protects ordinary WAITING episodes, including unsupported 0.4.27 producers.
+A valid same-supervisor reservation pauses requests; only its exact RELEASE can
+remove that pause while authority remains valid. An already-bound reply can
+still be discovered as ANSWERED during the pause. The authenticated original
+executor may consume it through the original controller, but consumption never
+clears the reservation or issues another request before RELEASE.
+A legitimate new supervisor's
+reservation for the original caller/workspace, newer than the episode, ends the
+old inquiry with `STOPPED / FORMAL_OWNER_CHANGED`. Unrelated or invalid markers
+grant no authority. Marker disappearance, heartbeat and TTL do not release a
+reservation or authorize a successor. Stop, expiry and revocation end authority;
+noncontinuing ANSWERED/CONSUMED and STOPPED episodes are never revived by this
+boundary. Original controllers and pending evidence remain unchanged.
+
+### Observe an original late handshake ACK
+
+`scripts/observe_handshake_ack.py` is a bounded, read-only observer. Supply the
+original immutable `--controller`, `--receipt` and `--receipt-sha256`, original
+dispatch `--attempt` and `--attempt-sha256`, and exact notice `--text-file`.
+It returns a separate observation and preserves the original timeout, task,
+nonce and send journal. It sends no input and does not settle or rewrite the
+original receipt. Exact notice reception, complete referenced body reading,
+the executor's ACK and business acceptance are separate claims.
 
 同pane原生Codex的显式线程授权、继任迟到ACK核收与20GB主动空间管理，见
 [协作效率与收尾](references/efficiency-and-closeout.md)。普通终端侧窗格门禁保持。

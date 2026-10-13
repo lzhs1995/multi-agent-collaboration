@@ -43,6 +43,8 @@ Options:
                            before bridge-test/dispatch (records an override)
 """
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -367,6 +369,42 @@ def _workspace_marker_paths():
     return paths
 
 
+@contextmanager
+def _marker_update_lock(marker_path, marker, *, create=False):
+    """Caller locks first, then a nonblocking marker-directory lock.
+
+    The directory also serializes legacy markers without executor UUIDs and
+    survives atomic file replacement. No lock sidecars accumulate on disarm.
+    """
+    from executor_reask_lifecycle import marker_locks
+    with marker_locks(marker):
+        if create:
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(marker_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+        finally:
+            os.close(fd)
+
+
+def _read_active_marker(path):
+    try:
+        marker = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    if not isinstance(marker, dict):
+        raise ValueError('active marker must be an object')
+    return marker
+
+
+def _same_active_marker(left, right):
+    """Only telemetry may change while acquiring the original participants."""
+    return (isinstance(left, dict) and isinstance(right, dict)
+            and {k: v for k, v in left.items() if k != 'last_activity_at'}
+            == {k: v for k, v in right.items() if k != 'last_activity_at'})
+
+
 def _touch_active_marker(written_path: Path):
     """Best-effort heartbeat: bump last_activity_at when a task artifact lands.
 
@@ -384,16 +422,30 @@ def _touch_active_marker(written_path: Path):
             return
         for marker_path in _workspace_marker_paths():
             try:
-                marker = json.loads(marker_path.read_text())
+                observed = _read_active_marker(marker_path)
+                root = str((observed or {}).get("artifact_root") or "")
+                if not root or not str(written_path).startswith(root.rstrip("/") + "/"):
+                    continue
+                with _marker_update_lock(marker_path, observed):
+                    marker = _read_active_marker(marker_path)
+                    if not _same_active_marker(observed, marker):
+                        # Disarm/replacement won before the lock. Never recreate
+                        # its marker or overwrite a different task/participant.
+                        continue
+                    marker["last_activity_at"] = _now()
+                    tmp = marker_path.parent / (
+                        f".{marker_path.name}.hb.{os.getpid()}.{secrets.token_hex(4)}")
+                    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    try:
+                        with os.fdopen(fd, 'w') as handle:
+                            json.dump(marker, handle, indent=2)
+                        os.replace(tmp, marker_path)
+                    finally:
+                        tmp.unlink(missing_ok=True)
             except Exception:
+                # Both locks are nonblocking. A busy task must not hold up an
+                # evidence write or suppress unrelated markers' heartbeats.
                 continue
-            root = str(marker.get("artifact_root") or "")
-            if not root or not str(written_path).startswith(root.rstrip("/") + "/"):
-                continue
-            marker["last_activity_at"] = _now()
-            tmp = marker_path.parent / f".{marker_path.name}.hb.{os.getpid()}"
-            tmp.write_text(json.dumps(marker, indent=2))
-            os.replace(str(tmp), str(marker_path))
     except Exception:
         # A heartbeat is telemetry for read-only viewers, never a gate input;
         # losing one beat is strictly better than failing the artifact write.
@@ -491,22 +543,32 @@ def arm_task(task_id, root, supervisor="", executor="", *,
             participant["native_session_id"] = str(_uuid.UUID(pin["native_session_id"]))
 
     collaboration_id = str(_uuid.uuid4())
+    workspace_id = _workspace_key()
+    workspace_uuid = workspace_uuid or workspace_id
     now = _now()
     marker = {
         "marker_version": _ACTIVE_MARKER_VERSION,
         "collaboration_id": collaboration_id,
         "task_id": task_id,
         "artifact_root": str(root),
-        "workspace_id": _workspace_key(),
-        "workspace_uuid": workspace_uuid or _workspace_key(),
+        "workspace_id": workspace_id,
+        "workspace_uuid": workspace_uuid,
         "participants": participants,
         "armed_at": now,
         "last_activity_at": now,
         "ttl_seconds": _ARM_TTL_SECONDS,
     }
-    _write(_collab_dir(workspace_uuid) / f"{collaboration_id}.json", marker)
-    from executor_reask_lifecycle import task_boundary
-    task_boundary(marker, 'RESERVED')
+    from executor_reask_lifecycle import task_boundary_locked
+    try:
+        with _marker_update_lock(
+                _collab_dir(workspace_uuid) / f"{collaboration_id}.json", marker, create=True):
+            # Publish the formal evidence first, under all participant locks.
+            # If reservation persistence fails, retain it for observation and
+            # propagate the error; no caller can mistake this for a good arm.
+            _write(_collab_dir(workspace_uuid) / f"{collaboration_id}.json", marker)
+            task_boundary_locked(marker, 'RESERVED')
+    except BlockingIOError as exc:
+        raise RuntimeError('inquiry state or active marker busy; task was not armed') from exc
     return marker
 
 
@@ -519,25 +581,36 @@ def disarm_task(task_id=None):
     Returns the number of markers removed.
     """
     paths = _workspace_marker_paths()
-    if task_id:
-        matched = []
-        for p in paths:
-            try:
-                if json.loads(p.read_text()).get("task_id") == task_id:
-                    matched.append(p)
-            except Exception:
-                continue
-        paths = matched
-    elif len(paths) > 1:
+    if not task_id and len(paths) > 1:
         raise ValueError(
             f"{len(paths)} active markers in this workspace — pass --task-id "
             "to disarm a specific collaboration")
+    from executor_reask_lifecycle import task_boundary_locked
+    removed = 0
     for p in paths:
-        from executor_reask_lifecycle import task_boundary
-        marker = json.loads(p.read_text())
-        task_boundary(marker, 'RELEASED')
-        p.unlink(missing_ok=True)
-    return len(paths)
+        try:
+            observed = _read_active_marker(p)
+        except (ValueError, OSError):
+            if task_id:
+                continue
+            raise
+        if observed is None or task_id and observed.get('task_id') != task_id:
+            continue
+        try:
+            with _marker_update_lock(p, observed):
+                marker = _read_active_marker(p)
+                if marker is None:
+                    continue
+                if not _same_active_marker(observed, marker):
+                    raise RuntimeError('active marker changed; nothing released or removed')
+                task_boundary_locked(marker, 'RELEASED')
+                if _read_active_marker(p) != marker:
+                    raise RuntimeError('active marker changed during release; marker preserved')
+                p.unlink()
+                removed += 1
+        except BlockingIOError as exc:
+            raise RuntimeError('inquiry state or active marker busy; marker preserved') from exc
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -3607,6 +3680,18 @@ def cmd_preflight(args):
 # CLI
 # ---------------------------------------------------------------------------
 
+def _supervisor_provider(value):
+    provider = value.lower()
+    if provider not in {"auto", "codex", "claude", "opencode"}:
+        raise argparse.ArgumentTypeError(
+            "--supervisor/--supervisor-provider expects a provider "
+            "(auto, codex, claude, opencode), not a surface or UUID; "
+            "for a Codex supervisor use --supervisor codex. "
+            "The caller surface is resolved from the current authenticated client."
+        )
+    return provider
+
+
 def main():
     p = argparse.ArgumentParser(
         description="cmux multi-agent harness (Mac/cmux native)",
@@ -3640,7 +3725,9 @@ def main():
     p.add_argument("--ttl-seconds",   type=int, default=LEASE_DEFAULT_TTL_SECONDS)
     p.add_argument("--reason",        default="")
     p.add_argument("--task-id",          default=DEFAULT_TASK_ID)
-    p.add_argument("--supervisor",       default="auto")
+    p.add_argument("--supervisor", "--supervisor-provider", dest="supervisor",
+                   type=_supervisor_provider, default="auto",
+                   help="provider: auto, codex, claude or opencode; not a surface selector")
     p.add_argument("--executor",         default="codex")
     p.add_argument("--executor-surface", action="append", default=[],
                    help="repeatable; first is EXECUTOR_1, second EXECUTOR_2, …; "

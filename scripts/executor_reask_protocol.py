@@ -1,0 +1,327 @@
+"""CURRENT's reviewed data interpreter; never load code from an old release."""
+import copy
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+LABEL = 'org.multi-agent-collaboration.executor-reask-scheduler'
+FILES = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
+         'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
+         'scripts/executor_reask_lifecycle.py')
+SCHEDULER = 'scripts/executor_reask_scheduler.py'
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_RELEASE_BYTES = 64 * 1024 * 1024
+MAX_RELEASE_FILES = 2048
+# Raw immutable manifests reviewed with LEGACY; never learn trust from a record
+# or from a manifest's self-reported version/tree hash.
+LEGACY_MANIFESTS = {
+    '0.4.28-ae66245771d0': '31579cfab68b908561a6b6833079c5942bc27e05fe097f6f3249b3cef81cac6e',
+    '0.4.30-ff75100795a9': '80f925fb74964f2cc0d72d7464f418e23ab637d504f78c79e4dd47fb26fe815f',
+    '0.4.31-79ae83e9d5da': 'bc369ef7c81e7a4c34c4001736df61a99b634350248a2299def68e92efa098f5',
+}
+# These COMPLETE combinations were reviewed together. A version string or one
+# matching file is not a compatibility grant.
+LEGACY = {
+    "0.4.30-ff75100795a9": {
+        "VERSION": "6028dc76386f65f57a4e92607c78ea99f5fa4085426ee6f3c7fe0564dc2b2485",
+        "scripts/executor_reask.py": "0a99a8737f689bccbe30e759c94ba9389226c208ab879b2160b7db9c704e0aa4",
+        "scripts/executor_ready.py": "c97b560208d741e98fd98eacc2363b130fa05a5e4a544b23bd447fdd764b9ffa",
+        "scripts/cmux_bridge.py": "8e5706c42a2e94e99c050670c9beb10549975f486b98d7d53c191bc34f3544c3",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reask_lifecycle.py": "593acda82846ba68c86f09180fd336c602dc494538cea20649aec96d678993da",
+        "scripts/executor_reask_scheduler.py": "e6111f7f969025b8ab3b2e1f883c9bc862c5507048d4b235fc323efbc37f4a28"
+    },
+    "0.4.31-79ae83e9d5da": {
+        "VERSION": "d03897ae78b6351d05a3491c29e362eea73d9bd8d2a53ad38a4e3fda3ef6b9ee",
+        "scripts/executor_reask.py": "0a99a8737f689bccbe30e759c94ba9389226c208ab879b2160b7db9c704e0aa4",
+        "scripts/executor_ready.py": "c97b560208d741e98fd98eacc2363b130fa05a5e4a544b23bd447fdd764b9ffa",
+        "scripts/cmux_bridge.py": "8e5706c42a2e94e99c050670c9beb10549975f486b98d7d53c191bc34f3544c3",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reask_lifecycle.py": "593acda82846ba68c86f09180fd336c602dc494538cea20649aec96d678993da",
+        "scripts/executor_reask_scheduler.py": "e6111f7f969025b8ab3b2e1f883c9bc862c5507048d4b235fc323efbc37f4a28"
+    },
+    "0.4.28-ae66245771d0": {
+        "VERSION": "528e6f9e867bd412b8e69662965d5a534798373abaebfc54a526624796f55e0c",
+        "scripts/executor_reask.py": "0a99a8737f689bccbe30e759c94ba9389226c208ab879b2160b7db9c704e0aa4",
+        "scripts/executor_ready.py": "c97b560208d741e98fd98eacc2363b130fa05a5e4a544b23bd447fdd764b9ffa",
+        "scripts/cmux_bridge.py": "8e5706c42a2e94e99c050670c9beb10549975f486b98d7d53c191bc34f3544c3",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reask_lifecycle.py": "593acda82846ba68c86f09180fd336c602dc494538cea20649aec96d678993da",
+        "scripts/executor_reask_scheduler.py": "e6111f7f969025b8ab3b2e1f883c9bc862c5507048d4b235fc323efbc37f4a28"
+    }
+}
+CONTRACT = dict(id='executor-reask-file-v1', version=1,
+                operations=['bound-file-request', 'bound-file-reply-detection',
+                            'authorization-stop', 'formal-reservation'],
+                forbidden=['transport', 'transcript', 'idle-binding', 'consume',
+                           'pending-reconciliation', 'old-code-execution'],
+                controller='immutable-original', terminal_pending='preserve-verbatim')
+
+
+def descriptor():
+    raw = json.dumps(CONTRACT, sort_keys=True, separators=(',', ':')).encode()
+    return dict(id=CONTRACT['id'], sha256=hashlib.sha256(raw).hexdigest())
+
+
+def state_controller(state, record=None):
+    """Return the complete original identity, or None; never repair missing pins."""
+    if not isinstance(state, dict) or record is not None and not isinstance(record, dict):
+        return None
+    candidates = []
+    if 'controller' in state:
+        candidates.append(state['controller'])
+    elif state.get('version') == 3:
+        return None
+    continuation = state.get('continuation')
+    if continuation is not None:
+        if not continuation_shape(continuation, state):
+            return None
+        candidates.append(continuation['controller'])
+    if record is not None:
+        candidates.append(record.get('controller'))
+    if (not candidates or not all(controller_shape(v) for v in candidates)
+            or any(value != candidates[0] for value in candidates[1:])):
+        return None
+    return copy.deepcopy(candidates[0])
+
+
+def sha256_shape(value):
+    return isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value) is not None
+
+
+def canonical_path(value):
+    return (isinstance(value, str) and bool(value)
+            and Path(value).is_absolute() and str(Path(value)) == value
+            and '..' not in Path(value).parts and Path(value).resolve() == Path(value))
+
+
+def controller_shape(value):
+    try:
+        return (isinstance(value, dict) and set(value) == {'source', 'python', 'files'}
+                and canonical_path(value['source']) and canonical_path(value['python'])
+                and isinstance(value['files'], dict)
+                and set(value['files']) == set(FILES)
+                and all(sha256_shape(v) for v in value['files'].values()))
+    except (TypeError, KeyError, ValueError, OSError):
+        return False
+
+
+def continuation_shape(value, state):
+    """Validate identity structure only; expiry/revocation remain caller gates."""
+    def text(v, limit):
+        return isinstance(v, str) and bool(v.strip()) and len(v) <= limit
+
+    def finite(v):
+        return type(v) in (int, float) and math.isfinite(v)
+
+    try:
+        if not isinstance(value, dict):
+            return False
+        pin, until, authorized = value['authorization'], value['until_epoch'], value['authorized_epoch']
+        return (value.get('enabled') is True and text(value.get('id'), 128)
+                and text(value.get('overall_task'), 4096) and text(value.get('status'), 128)
+                and text(value.get('owner'), 128) and value['owner'] == state.get('supervisor')
+                and finite(authorized) and (until is None or finite(until) and until > authorized)
+                and isinstance(pin, dict) and set(pin) == {'path', 'sha256', 'bytes'}
+                and canonical_path(pin['path']) and sha256_shape(pin['sha256'])
+                and type(pin['bytes']) is int and 0 < pin['bytes'] <= 65536
+                and controller_shape(value.get('controller')))
+    except (TypeError, KeyError, ValueError, OSError, OverflowError):
+        return False
+
+
+def release_name(value):
+    if not controller_shape(value):
+        return None
+    source = Path(value['source'])
+    base = Path.home() / '.local/share/multi-agent-collaboration/releases'
+    if source.name != 'source' or source.parent.parent != base:
+        return None
+    return source.parent.name
+
+
+def legacy_controller(value):
+    try:
+        return (release_name(value) in LEGACY
+                and _controller_release(value, {})['kind'] == 'legacy')
+    except (TypeError, KeyError, ValueError, OSError):
+        return False
+
+
+def scheduler_shape(value):
+    try:
+        return (isinstance(value, dict) and set(value) == {'path', 'sha256', 'python', 'label'}
+                and value['label'] == LABEL and canonical_path(value['path'])
+                and canonical_path(value['python'])
+                and Path(value['path']).parts[-2:] == ('scripts', 'executor_reask_scheduler.py')
+                and sha256_shape(value['sha256']))
+    except (TypeError, KeyError, ValueError, OSError):
+        return False
+
+
+def _read_regular(path, limit, *, readonly=True, executable=None):
+    """Bounded descriptor read; reject aliases, special files and changing pins."""
+    if not canonical_path(str(path)):
+        raise ValueError('noncanonical release file')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as handle:
+        before = os.fstat(handle.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_size > limit
+                or readonly and before.st_mode & 0o222
+                or executable is not None and bool(before.st_mode & 0o111) != executable):
+            raise ValueError('release file is not bounded, regular and read-only')
+        raw = handle.read(limit + 1)
+        after = os.fstat(handle.fileno())
+        named = path.stat(follow_symlinks=False)
+        fields = ('st_dev', 'st_ino', 'st_size', 'st_mode', 'st_mtime_ns', 'st_ctime_ns')
+        if (len(raw) != before.st_size or len(raw) > limit
+                or any(getattr(before, k) != getattr(after, k)
+                       or getattr(after, k) != getattr(named, k) for k in fields)):
+            raise ValueError('release file changed during verification')
+        return raw
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate manifest field')
+        result[key] = value
+    return result
+
+
+def _read_object(path, *, readonly=True):
+    raw = _read_regular(path, MAX_MANIFEST_BYTES, readonly=readonly)
+    value = json.loads(raw, object_pairs_hook=_unique_object)
+    if not isinstance(value, dict):
+        raise ValueError('release metadata must be an object')
+    return raw, value
+
+
+def _verify_release(source, expected):
+    if not sha256_shape(expected):
+        raise ValueError('missing trusted manifest digest')
+    manifest = source.parent / 'MANIFEST.json'
+    raw, value = _read_object(manifest)
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError('untrusted release manifest')
+    files = value.get('files')
+    required = {*FILES, SCHEDULER, 'scripts/configuration_guardian.py', 'scripts/manage_install.py'}
+    if (not isinstance(files, dict) or not 1 <= len(files) <= MAX_RELEASE_FILES
+            or not required.issubset(files)):
+        raise ValueError('incomplete release manifest')
+    total = 0
+    for name, pin in files.items():
+        member = Path(name)
+        if (not name or member.is_absolute() or '..' in member.parts
+                or str(member) != name or name == '.' or not isinstance(pin, dict)
+                or set(pin) != {'bytes', 'sha256', 'executable'}
+                or type(pin['bytes']) is not int or pin['bytes'] < 0
+                or type(pin['executable']) is not bool or not sha256_shape(pin['sha256'])):
+            raise ValueError('invalid release member pin')
+        total += pin['bytes']
+        if total > MAX_RELEASE_BYTES:
+            raise ValueError('release verification budget exceeded')
+        content = _read_regular(source / member, pin['bytes'], executable=pin['executable'])
+        if len(content) != pin['bytes'] or hashlib.sha256(content).hexdigest() != pin['sha256']:
+            raise ValueError('release member changed')
+    if _read_regular(manifest, MAX_MANIFEST_BYTES) != raw:
+        raise ValueError('manifest changed during verification')
+    return files
+
+
+def _trusted_release(source, checked):
+    """Only per-call reuse; no cached approval survives a later file mutation."""
+    if not canonical_path(str(source)):
+        raise ValueError('noncanonical release source')
+    if source in checked:
+        return checked[source]
+    if source == Path(__file__).resolve().parents[1]:
+        # The scheduler owns CURRENT's full approved_release gate under its
+        # locks. Check the actual local controller/provenance, also in writable
+        # test checkouts; this fast path is not an independent release approval.
+        files, total = {}, 0
+        for name in (*FILES, SCHEDULER):
+            raw = _read_regular(source / name, MAX_RELEASE_BYTES - total, readonly=False)
+            total += len(raw)
+            files[name] = dict(sha256=hashlib.sha256(raw).hexdigest())
+        result = dict(kind='current', files=files, python=str(Path(sys.executable).resolve()))
+        checked[source] = result
+        return result
+    base = Path.home() / '.local/share/multi-agent-collaboration/releases'
+    if source.name != 'source' or source.parent.parent != base:
+        raise ValueError('release is outside the immutable layout')
+    name = source.parent.name
+    if name not in LEGACY:
+        raise ValueError('unknown historical release is unsupported')
+    files = _verify_release(source, LEGACY_MANIFESTS.get(name))
+    if {key: files[key]['sha256'] for key in (*FILES, SCHEDULER)} != LEGACY[name]:
+        raise ValueError('unreviewed controller/scheduler combination')
+    result = dict(kind='legacy', files=files)
+    checked[source] = result
+    return result
+
+
+def _controller_release(value, checked):
+    if not controller_shape(value):
+        raise ValueError('invalid controller')
+    release = _trusted_release(Path(value['source']), checked)
+    if (value['files'] != {key: release['files'][key]['sha256'] for key in FILES}
+            or release['kind'] == 'current' and value['python'] != release['python']):
+        raise ValueError('controller pins differ from the trusted release')
+    return release
+
+
+def _supported_state(state, record, checked):
+    value = state_controller(state, record)
+    if value is None or type(state.get('version')) is not int or state['version'] not in (2, 3):
+        return False
+    release = _controller_release(value, checked)
+    # The reviewed legacy producers wrote v2 only. A public descriptor cannot
+    # grant compatibility to an unknown v3 producer, even with plausible paths.
+    return state['version'] == 2 or (release['kind'] == 'current'
+                                    and state.get('file_protocol') == descriptor())
+
+
+def supports_state(state, record=None):
+    """Compatibility only; caller gates CURRENT approval, binding, stop/expiry."""
+    try:
+        return bool(_supported_state(state, record, {}))
+    except (TypeError, KeyError, ValueError, OSError, RecursionError):
+        return False
+
+
+def supports_record(record, state, current_scheduler):
+    """Verify producer pins, not foreground authentication or enrollment CAS."""
+    try:
+        checked = {}
+        if not _supported_state(state, record, checked):
+            return False
+        controller, issuer = record['controller'], record.get('scheduler')
+        if not scheduler_shape(issuer):
+            return False
+        source = Path(issuer['path']).parents[1]
+        release = _trusted_release(source, checked)
+        if (issuer['sha256'] != release['files'][SCHEDULER]['sha256']
+                or release['kind'] == 'current' and
+                (issuer != current_scheduler or issuer['python'] != release['python'])):
+            return False
+        same_origin = (str(source) == controller['source']
+                       and issuer['python'] == controller['python'])
+        if record.get('schema') == 'executor-reask-enrollment-v1':
+            return same_origin
+        if (record.get('schema') != 'executor-reask-enrollment-v2'
+                or record.get('file_protocol') != descriptor() or release['kind'] != 'current'):
+            return False
+        # Legacy producers did not issue v2 enrollments. Re-enrollment can only
+        # name the verified CURRENT scheduler; its explicit live/CAS proof is
+        # checked by the scheduler before committing this record.
+        return (record.get('authorization') == 'EXPLICIT_REASK_ENROLL_EXISTING'
+                or record.get('authorization') == 'EXPLICIT_REASK_START' and same_origin)
+    except (TypeError, KeyError, ValueError, OSError, RecursionError):
+        return False

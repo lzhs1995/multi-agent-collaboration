@@ -1,8 +1,11 @@
 """Explicit continuing authorization; file state only, never input or hook loops."""
 import copy
+from contextlib import contextmanager, ExitStack
+from datetime import datetime
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import secrets
 import time
@@ -11,6 +14,7 @@ import executor_ready as ready
 from cmux_evidence_io import read_bytes
 
 WAIT_STATUSES = {'WAITING_DEPENDENCY', 'SOLO', 'BLOCKED'}
+MAX_FORMAL_MARKERS = 256
 
 
 def finite(value):
@@ -59,27 +63,65 @@ def valid_wait_contract(body, state):
             and finite(due) and finite(deadline) and 0 < due <= deadline)
 
 
-def poll_authorization(state, now):
+def poll_authorization(state, now, *, publish=True):
+    """Check authority; publish=False changes only the supplied preview state."""
     import executor_reask as reask
     value = state.get('continuation')
     if not value or state['state'] == reask.STOPPED:
         return
     reason = None
-    if value.get('status') != 'ACTIVE':
+    if not isinstance(value, dict):
+        reason = 'AUTHORIZATION_INVALID'
+    elif value.get('status') != 'ACTIVE':
         reason = 'AUTHORIZATION_INACTIVE'
+    elif value.get('until_epoch') is not None and not finite(value['until_epoch']):
+        reason = 'AUTHORIZATION_INVALID'
     elif value.get('until_epoch') is not None and now >= value['until_epoch']:
         reason = 'AUTHORIZATION_EXPIRED'
     else:
         try:
             if authorization_pin(value['authorization']['path']) != value['authorization']:
                 reason = 'AUTHORIZATION_CHANGED'
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError):
             reason = 'AUTHORIZATION_UNAVAILABLE'
     if reason:
-        value['status'] = reason
+        if publish:
+            reask.preserve_legacy_snapshot(state)
+        if isinstance(value, dict):
+            value['status'] = reason
         state.update(state=reask.STOPPED, stopped_epoch=now, exit_reason=reason)
-        marker = state['asks'][-1]['marker'] if state['asks'] else ''
-        reask.write_channels(state, marker, reason, now, status=reask.STOPPED)
+        if publish:
+            marker = state['asks'][-1]['marker'] if state.get('asks') else ''
+            reask.write_channels(state, marker, reason, now, status=reask.STOPPED)
+
+
+def _consume_controller(state):
+    """Recover identity only; compatibility never grants consumption authority."""
+    from executor_reask_protocol import state_controller
+    original = state_controller(state)
+    if (original is not None or state.get('version') != 2 or 'controller' in state
+            or state.get('continuation') is not None):
+        return original
+    import executor_reask_scheduler as scheduler
+    try:
+        path = scheduler.enrollment_path(state['caller_surface_uuid'])
+        # Caller lock is already held. Selection only reads the committed
+        # state's matching intent; never recover a transaction or lock registry.
+        record = scheduler._select(ready.read_json(path), state, path)
+        if (not record or record.get('schema') not in (scheduler.SCHEMA, scheduler.LEGACY_SCHEMA)
+                or record.get('status') not in ('ENROLLED', 'FINISHED')
+                or record.get('uid') != os.getuid()
+                or record.get('authorization') not in (
+                    'EXPLICIT_REASK_START', 'EXPLICIT_REASK_ENROLL_EXISTING')
+                or (record.get('schema') == scheduler.LEGACY_SCHEMA
+                    and record.get('authorization') != 'EXPLICIT_REASK_START')
+                or record.get('binding') != scheduler.binding(state)
+                or record.get('registration') != state.get('registration')
+                or not scheduler._registration_matches(record, state, path)):
+            return None
+        return state_controller(state, record)
+    except (KeyError, ValueError, TypeError, AttributeError, OSError):
+        return None
 
 
 def consume(caller, reply_sha256='', *, now=None):
@@ -96,6 +138,8 @@ def consume(caller, reply_sha256='', *, now=None):
             return dict(outcome='NO_EPISODE')
         if reask.stop_file(caller).exists():
             return reask.tick_locked(caller, now, file_only=True)
+        if _consume_controller(state) != reask.controller():
+            return dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0)
         poll_authorization(state, now)
         if state.get('state') != reask.ANSWERED:
             reask.save(state)
@@ -143,46 +187,184 @@ def consume(caller, reply_sha256='', *, now=None):
         return state
 
 
+def marker_callers(marker):
+    participants = marker.get('participants') if isinstance(marker, dict) else None
+    if not isinstance(participants, list):
+        return []
+    return sorted({p['surface_uuid'] for p in participants
+                   if isinstance(p, dict) and p.get('role') == 'executor'
+                   and isinstance(p.get('surface_uuid'), str) and p['surface_uuid'].strip()})
+
+
+@contextmanager
+def marker_locks(*markers):
+    """All CURRENT formal writers share the scheduler's caller locks.
+
+    Sort multi-executor locks globally. Never hold a caller lock while taking
+    the enrollment registry lock (the registration order is registry -> caller).
+    Older immutable harnesses cannot acquire this new protection retroactively.
+    """
+    import executor_reask as reask
+    with ExitStack() as stack:
+        for caller in sorted({c for marker in markers for c in marker_callers(marker)}):
+            stack.enter_context(reask.episode_lock(caller))
+        yield
+
+
+def marker_epoch(marker):
+    try:
+        value = datetime.fromisoformat(marker['armed_at'].replace('Z', '+00:00'))
+        return value.timestamp() if value.tzinfo is not None else None
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return None
+
+
+def _boundary_eligible(state):
+    """Stopping/pausing an owner needs no permission to run its file protocol."""
+    import executor_reask as reask
+    continuation = state.get('continuation')
+    return (state.get('state') == reask.WAITING
+            or isinstance(continuation, dict) and continuation.get('enabled') is True
+            and state.get('state') in (reask.ANSWERED, reask.CONSUMED))
+
+
+def _boundary_stop(state, reason, now, *, publish, **evidence):
+    import executor_reask as reask
+    if publish:
+        reask.preserve_legacy_snapshot(state)
+    state.update(state=reask.STOPPED, stopped_epoch=now, exit_reason=reason, **evidence)
+    if isinstance(state.get('continuation'), dict):
+        state['continuation']['status'] = 'STOPPED' if reason == 'OPERATOR_STOP' else reason
+    if publish:
+        last = state['asks'][-1]['marker'] if state.get('asks') else ''
+        reask.write_channels(state, last, reason, now, status=reask.STOPPED)
+
+
+def apply_boundary(state, marker, event, now, *, observed=False, publish=True):
+    """Formal reservation only; never grants a new owner or changes controller.
+
+    publish=False performs the same checks on a caller-supplied deep copy,
+    without publishing channels, snapshots or state. Direct RESERVED calls are
+    fresh harness events; disk observations must carry their original armed_at.
+    """
+    import executor_reask as reask
+    if (not _boundary_eligible(state) or not isinstance(marker, dict)
+            or event not in ('RESERVED', 'RELEASED') or not finite(now)):
+        return False
+    participants = marker.get('participants')
+    if not isinstance(participants, list) or not all(isinstance(p, dict) for p in participants):
+        return False
+    owners = [p.get('surface_uuid') for p in participants if p.get('role') == 'supervisor']
+    uuids = [p.get('surface_uuid') for p in participants if p.get('surface_uuid')]
+    if (len(owners) != 1 or not all(isinstance(u, str) and u.strip() for u in uuids)
+            or not owners[0] or len(uuids) != len(set(uuids))
+            or not state.get('supervisor') or not state.get('workspace_uuid')
+            or state.get('caller_surface_uuid') not in marker_callers(marker)
+            or state.get('workspace_uuid') != marker.get('workspace_uuid')
+            or any(not isinstance(marker.get(key), str) or not marker[key].strip()
+                   for key in ('collaboration_id', 'task_id'))):
+        return False
+    foreign = owners[0] != state['supervisor']
+    reserved = marker_epoch(marker)
+    if event == 'RESERVED':
+        if reserved is None and not observed and 'armed_at' not in marker:
+            reserved = now
+        if not finite(reserved) or reserved > now:
+            return False
+        # A still-present older owner's marker is not a handover. Neither a
+        # heartbeat nor observing the marker later can refresh this timestamp.
+        if foreign and (not finite(state.get('started_epoch'))
+                        or reserved <= state['started_epoch']):
+            return False
+    elif foreign or 'armed_at' in marker and reserved is None:
+        return False
+    before = copy.deepcopy(state)
+    if reask.stop_file(state['caller_surface_uuid']).exists():
+        _boundary_stop(state, 'OPERATOR_STOP', now, publish=publish)
+        return state != before
+    poll_authorization(state, now, publish=publish)
+    if state['state'] == reask.STOPPED:
+        return state != before
+    reservation = dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])
+    if foreign:
+        _boundary_stop(state, 'FORMAL_OWNER_CHANGED', now, publish=publish,
+                       formal_successor=dict(supervisor=owners[0],
+                                             reserved_epoch=reserved, **reservation))
+        return state != before
+    paused = state.get('paused_tasks', [])
+    if event == 'RESERVED' and reservation not in paused:
+        if publish:
+            reask.preserve_legacy_snapshot(state)
+        state.setdefault('paused_tasks', []).append(reservation)
+    elif event == 'RELEASED' and reservation in paused:
+        if publish:
+            reask.preserve_legacy_snapshot(state)
+        paused.remove(reservation)
+        due = state.get('next_due_epoch')
+        state['next_due_epoch'] = max(now, due) if finite(due) else now
+    else:
+        return state != before
+    state['last_task_boundary'] = dict(event=event, at_epoch=now, **reservation)
+    return state != before
+
+
+def observe_formal_tasks(state, now, *, publish=True):
+    """Bounded observation while the caller lock is held, including old harnesses.
+
+    Absence or TTL expiry never releases a recorded reservation. Only a matching
+    formal RELEASED event can do that. A legacy writer racing this read remains
+    a disclosed limit; CURRENT writers use marker_locks.
+    """
+    import os
+    import mac_harness as harness
+    if not _boundary_eligible(state):
+        return
+    workspace = state.get('workspace_uuid')
+    if not isinstance(workspace, str) or not workspace or Path(workspace).name != workspace:
+        return
+    directory = harness._ACTIVE_DIR / workspace
+    paths = []
+    try:
+        with os.scandir(directory) as entries:
+            for index, entry in enumerate(entries):
+                if index >= MAX_FORMAL_MARKERS:
+                    raise ValueError('formal marker observation capacity exceeded')
+                if entry.is_file(follow_symlinks=False) and entry.name.endswith('.json'):
+                    paths.append(Path(entry.path))
+    except FileNotFoundError:
+        pass
+    legacy = harness._ACTIVE_DIR / (workspace + '.json')
+    if legacy.is_file():
+        paths.append(legacy)
+    for path in sorted(paths):
+        marker = ready.read_json(path)
+        if marker:
+            apply_boundary(state, marker, 'RESERVED', now, observed=True, publish=publish)
+
+
+def task_boundary_locked(marker, event, *, now=None):
+    """Used only when the caller holds every marker participant lock."""
+    import executor_reask as reask
+    now = time.time() if now is None else now
+    results = []
+    for caller in marker_callers(marker):
+        state = reask.load(caller)
+        if state and apply_boundary(state, marker, event, now):
+            # Includes revocation/stop changes, even if no reservation survives.
+            reask.save(state)
+            results.append(dict(caller=caller, event=event,
+                                state=state['state'], paused_tasks=len(state.get('paused_tasks', []))))
+    return results
+
+
 def task_boundary(marker, event, *, now=None):
     """Reserve/release tasks from the formal harness, not from mailbox prose.
 
     A reservation pauses inquiries before input; it is not dispatch evidence.
     This helper never enables continuation, changes controllers, or sends input.
     """
-    import executor_reask as reask
-    now = time.time() if now is None else now
-    participants = marker.get('participants', [])
-    supervisors = [p for p in participants if p.get('role') == 'supervisor']
-    if len(supervisors) != 1 or event not in ('RESERVED', 'RELEASED'):
-        return []
-    results = []
-    for participant in participants:
-        caller = participant.get('surface_uuid')
-        if participant.get('role') != 'executor' or not caller:
-            continue
-        try:
-            with reask.episode_lock(caller):
-                state = reask.load(caller)
-                if (not state or not state.get('continuation')
-                        or state['continuation'].get('controller') != reask.controller()
-                        or state.get('supervisor') != supervisors[0].get('surface_uuid')
-                        or state.get('workspace_uuid') != marker.get('workspace_uuid')):
-                    continue
-                poll_authorization(state, now)
-                if state['state'] == reask.STOPPED or reask.stop_file(caller).exists():
-                    continue
-                paused = state.setdefault('paused_tasks', [])
-                reservation = dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])
-                if event == 'RESERVED' and reservation not in paused:
-                    paused.append(reservation)
-                elif event == 'RELEASED' and reservation in paused:
-                    paused.remove(reservation)
-                    state['next_due_epoch'] = max(now, state.get('next_due_epoch', now))
-                state['last_task_boundary'] = dict(event=event, at_epoch=now, **reservation)
-                reask.save(state)
-                results.append(dict(caller=caller, event=event, paused_tasks=len(paused)))
-        except BlockingIOError:
-            # Failure is visible to the explicit harness caller, never silently
-            # reported as a successful reservation or used to authorize input.
-            raise RuntimeError('inquiry state busy; task boundary was not recorded')
-    return results
+    try:
+        with marker_locks(marker):
+            return task_boundary_locked(marker, event, now=now)
+    except BlockingIOError:
+        raise RuntimeError('inquiry state busy; task boundary was not recorded')

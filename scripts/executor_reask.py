@@ -20,7 +20,9 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import sys
+import tempfile
 import time
 import uuid
 
@@ -120,6 +122,29 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
                  now=None, reason='MANUAL', own_prefixes=(), workspace='',
                  purpose='REQUEST_NEXT_TASK', resume_stopped=False, continuing=False,
                  continuation=None):
+    """Local unscheduled API. The authenticated CLI uses scheduler.start()."""
+    old = load(caller)
+    state = prepare_start_locked(caller, supervisor, task_id, transcript, channels,
+                                executor_ref, now, reason, own_prefixes, workspace,
+                                purpose, resume_stopped, continuing, continuation)
+    if state == old or state.get('state') != WAITING:
+        return state
+    if old:
+        archive_episode(old)
+    stop_file(caller).unlink(missing_ok=True)
+    Path(state['mailbox']).mkdir(parents=True, exist_ok=True, mode=0o700)
+    save(state)
+    if old:
+        last = old.get('asks', [])[-1]['marker'] if old.get('asks') else ''
+        write_channels(old, last, 'superseded inquiry; original attempts remain held',
+                       state['started_epoch'], status='SUPERSEDED')
+    return state
+
+
+def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels=None,
+                         executor_ref='', now=None, reason='MANUAL', own_prefixes=(),
+                         workspace='', purpose='REQUEST_NEXT_TASK', resume_stopped=False,
+                         continuing=False, continuation=None):
     """Only the same complete inquiry binding can reuse a waiting episode."""
     now = time.time() if now is None else now
     if purpose not in ('REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'):
@@ -137,15 +162,6 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
     continuation = validate_continuation(continuation, now) if continuing else None
     if continuation and continuation['owner'] != supervisor:
         raise ValueError('continuation owner must be the authenticated supervisor')
-    if old:
-        archive_episode(old)
-        last = old.get('asks', [])[-1]['marker'] if old.get('asks') else ''
-        write_channels(old, last, 'superseded inquiry; original attempts remain held',
-                       now, status='SUPERSEDED')
-    try:
-        os.unlink(stop_file(caller))
-    except FileNotFoundError:
-        pass
     tail = None
     if transcript:
         try:
@@ -153,7 +169,9 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
         except (OSError, ValueError):
             transcript = ''
     chans = list(channels) if channels else configured_channels(supervisor)
-    state = dict(version=2, caller_surface_uuid=caller, executor_ref=executor_ref or caller,
+    from executor_reask_protocol import descriptor
+    state = dict(version=3, controller=controller(), file_protocol=descriptor(),
+                 caller_surface_uuid=caller, executor_ref=executor_ref or caller,
                  workspace_uuid=workspace, purpose=purpose,
                  supervisor=supervisor, task_id=task_id, state=WAITING, reason=reason,
                  started_epoch=now, next_due_epoch=now,
@@ -167,8 +185,6 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
                  reply_detected_epoch=None, reply_consumed_epoch=None,
                  terminal_pending=copy.deepcopy(old.get('terminal_pending')) if old else None,
                  reply=None, own_prefixes=list(own_prefixes))
-    Path(state['mailbox']).mkdir(parents=True, exist_ok=True, mode=0o700)
-    save(state)
     return state
 
 
@@ -197,6 +213,96 @@ def archive_episode(state):
         handle.flush()
         os.fsync(handle.fileno())
     return path
+
+
+def snapshot_files(directory, files, identity):
+    """Publish one complete immutable snapshot, preserving the original bytes."""
+    from cmux_evidence_io import read_bytes
+    directory = Path(directory)
+    index_path = directory / 'INDEX.json'
+    if directory.exists():
+        index = ready.read_json(index_path)
+        if not index or index.get('identity') != identity:
+            raise ValueError('snapshot identity mismatch')
+        members, absent = index.get('files'), index.get('absent')
+        if (not isinstance(members, dict) or not isinstance(absent, list)
+                or not all(isinstance(name, str) for name in absent)
+                or len(absent) != len(set(absent)) or set(members).intersection(absent)):
+            raise ValueError('invalid snapshot index')
+        for name in (*members, *absent):
+            if not name or Path(name).name != name or name == 'INDEX.json':
+                raise ValueError('noncanonical snapshot member')
+        for name in absent:
+            if (directory / name).exists() or (directory / name).is_symlink():
+                raise ValueError('absent snapshot member appeared')
+        if files and set(files) != set(members).union(absent):
+            raise ValueError('snapshot member set changed')
+        for name, pin in index['files'].items():
+            if (not isinstance(pin, dict) or set(pin) != {'bytes', 'sha256'}
+                    or type(pin['bytes']) is not int or pin['bytes'] < 0):
+                raise ValueError('invalid snapshot member pin')
+            raw = read_bytes(directory / name, limit=ready.MAX_JSON_BYTES)
+            if len(raw) != pin['bytes'] or hashlib.sha256(raw).hexdigest() != pin['sha256']:
+                raise ValueError('snapshot content changed')
+            if files and files[name] != raw:
+                raise ValueError('snapshot differs from the supplied preimage')
+        if files and any(files[name] is not None for name in absent):
+            raise ValueError('snapshot preimage was not absent')
+        return index
+    directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = Path(tempfile.mkdtemp(prefix='.snapshot-', dir=directory.parent))
+    try:
+        index = dict(identity=identity, files={}, absent=[])
+        for name, raw in files.items():
+            if Path(name).name != name or name == 'INDEX.json':
+                raise ValueError('invalid snapshot member')
+            if raw is None:
+                index['absent'].append(name)
+                continue
+            if len(raw) > ready.MAX_JSON_BYTES:
+                raise ValueError('snapshot member exceeds state limit')
+            fd = os.open(temporary / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fchmod(handle.fileno(), 0o400)
+                os.fsync(handle.fileno())
+            index['files'][name] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        ready.write_json(temporary / 'INDEX.json', index)
+        (temporary / 'INDEX.json').chmod(0o400)
+        ready.sync_directory(temporary)
+        os.rename(temporary, directory)
+        ready.sync_directory(directory.parent)
+        return index
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+def preserve_legacy_snapshot(state, record=None):
+    """Before CURRENT first writes old data, retain all history and pending IO.
+
+    This is evidence preservation, not permission to interpret or execute an
+    old controller. One snapshot per episode, never a copy on every minute.
+    Call while holding the caller lock, before mutating the loaded state.
+    """
+    from cmux_evidence_io import read_bytes
+    from executor_reask_protocol import state_controller
+    if state.get('version') == 3 and state_controller(state, record) == controller():
+        return None
+    caller, episode = state['caller_surface_uuid'], state['episode_id']
+    directory = root() / 'legacy-snapshots' / ready.digest(caller) / ready.digest(episode)
+    identity = dict(schema='executor-reask-original-files-v1', caller=caller, episode=episode)
+    if directory.exists():
+        snapshot_files(directory, {}, identity)
+        return directory
+    raw = read_bytes(state_path(caller), limit=ready.MAX_JSON_BYTES)
+    if json.loads(raw) != state:
+        raise ValueError('snapshot requires the unchanged original live state')
+    from executor_reask_scheduler import enrollment_path
+    path = enrollment_path(caller)
+    registration = read_bytes(path, limit=ready.MAX_JSON_BYTES) if path.exists() else None
+    snapshot_files(directory, {'state.json': raw, 'enrollment.json': registration}, identity)
+    return directory
 
 
 def _recent_files(directory, since, limit=CHANNEL_SCAN):
@@ -367,6 +473,12 @@ def write_channels(state, marker, text, now, status=WAITING):
                                   for c in state.get('channels', [])]
     for path in dict.fromkeys(paths):
         try:
+            if status == 'SUPERSEDED':
+                previous = ready.read_json(path) or {}
+                if (any(previous.get(key) != state.get(key) for key in
+                        ('caller_surface_uuid', 'supervisor', 'episode_id'))
+                        or previous.get('status') == 'SUPERSEDED'):
+                    continue
             ready.write_json(path, dict(
                 schema='executor-reask-current-v2', status=status, at_epoch=now,
                 episode_id=state['episode_id'], workspace_uuid=state.get('workspace_uuid', ''),
@@ -603,11 +715,16 @@ def poll_locked(state, now, *, file_only=False):
             state['continuation']['status'] = 'STOPPED'
         last = state['asks'][-1]['marker'] if state['asks'] else ''
         write_channels(state, last, 'episode stopped by operator', now, status=STOPPED)
-    from executor_reask_lifecycle import poll_authorization
+    from executor_reask_lifecycle import poll_authorization, observe_formal_tasks
     poll_authorization(state, now)
-    if state['state'] != WAITING or state.get('paused_tasks'):
+    observe_formal_tasks(state, now)
+    if state['state'] != WAITING:
         return state
-    binding = {} if file_only or state.get('continuation') else idle_binding(caller, state.get('workspace_uuid', '')) or {}
+    # A reservation forbids new inquiries, not observation of a reply to an
+    # already-issued request. Paused observation uses files only, so a legacy
+    # idle binding cannot consume the inquiry or imply that the task released.
+    files_only = file_only or bool(state.get('paused_tasks'))
+    binding = {} if files_only or state.get('continuation') else idle_binding(caller, state.get('workspace_uuid', '')) or {}
     if (binding.get('state') == 'BOUND' and binding.get('supervisor_uuid') == state['supervisor']
             and binding.get('task_id') and binding['task_id'] != state.get('task_id')
             and float(binding.get('last_bound_epoch', 0)) > float(state['started_epoch'])):
@@ -616,7 +733,7 @@ def poll_locked(state, now, *, file_only=False):
         last = state['asks'][-1]['marker'] if state['asks'] else ''
         write_channels(state, last, 'authenticated new dispatch', now, status=CONSUMED)
         return state
-    reply = find_reply(state, file_only=file_only)
+    reply = find_reply(state, file_only=files_only)
     if reply:
         state.update(state=ANSWERED, reply=dict(reply, at_epoch=now), reply_detected_epoch=now)
     if state['state'] != WAITING:
@@ -633,13 +750,56 @@ def tick(caller, now=None, send=default_send, *, file_only=False):
         return dict(outcome='EPISODE_BUSY', state=WAITING)
 
 
-def tick_locked(caller, now=None, send=default_send, *, file_only=False):
+def observe_boundaries_locked(state, now):
+    """Honor revocation and formal ownership even for an unsupported producer.
+
+    This grants no permission to interpret replies or invoke transport. Callers
+    hold the episode lock; lifecycle preserves original evidence before writes.
+    """
+    from executor_reask_lifecycle import poll_authorization, observe_formal_tasks
+    before = copy.deepcopy(state)
+    poll_authorization(state, now)
+    observe_formal_tasks(state, now)
+    if state != before:
+        save(state)
+    return state
+
+
+def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_record=None):
     realtime = now is None
     now = time.time() if realtime else now
     tick_start = time.monotonic()
     state = load(caller)
     if not state:
         return dict(outcome='NO_EPISODE')
+    # An explicit stop is effective even if registration or compatibility is
+    # incomplete. It grants no transport or reply-consumption authority.
+    if stop_file(caller).exists():
+        if state.get('state') != STOPPED:
+            preserve_legacy_snapshot(state, file_record)
+            state.update(state=STOPPED, stopped_epoch=now, exit_reason='OPERATOR_STOP')
+            if state.get('continuation'):
+                state['continuation']['status'] = 'STOPPED'
+            marker = state['asks'][-1]['marker'] if state.get('asks') else ''
+            write_channels(state, marker, 'episode stopped by operator', now, status=STOPPED)
+            save(state)
+        return state
+    observe_boundaries_locked(state, now)
+    if state.get('state') != WAITING:
+        return state
+    if state.get('registration'):
+        from executor_reask_scheduler import registration_observation
+        observation = registration_observation(state)
+        if observation != 'REGISTERED':
+            return dict(state, registration_observation=observation, input_operations=0)
+    from executor_reask_protocol import state_controller, supports_state
+    original = state_controller(state, file_record)
+    if file_only:
+        if not supports_state(state, file_record):
+            return dict(outcome='UNSUPPORTED_FILE_PROTOCOL', input_operations=0)
+        preserve_legacy_snapshot(state, file_record)
+    elif original != controller():
+        return dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0)
     state['check_count'] = state.get('check_count', 0) + 1
     poll_locked(state, now, file_only=file_only)
     poll_end = time.monotonic()
@@ -692,7 +852,7 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False):
     state['file_posts'] = state.get('file_posts', 0) + int(posted)
     state['ask_count'] += int(posted or bool(ask.get('terminal')) or bool(ask.get('native_received')))
     pending = state.get('terminal_pending') or {}
-    if pending.get('marker') == marker:
+    if not file_only and pending.get('marker') == marker:
         zero_input = (ask.get('zero_input_verified') is True and _original_no_input(
             ready._bridge(), state['supervisor'], caller, ask))
         if (ask.get('native_received') or str(ask.get('outcome', '')).startswith('SKIPPED_')
@@ -708,7 +868,8 @@ def run(caller, max_seconds=MAX_RUN_SECONDS, poll=POLL, send=default_send,
         clock=time.time, sleep=time.sleep):
     deadline = clock() + max(1.0, min(float(max_seconds), MAX_RUN_SECONDS))
     state = tick(caller, clock(), send)
-    while state.get('state') == WAITING and clock() + poll < deadline:
+    while (state.get('state') == WAITING and not state.get('outcome')
+           and not state.get('registration_observation') and clock() + poll < deadline):
         sleep(poll)
         state = tick(caller, clock(), send)
     return state
@@ -724,18 +885,23 @@ def summary(state):
     if not isinstance(state, dict) or 'caller_surface_uuid' not in state:
         return state
     last = state['asks'][-1] if state.get('asks') else None
-    return dict(outcome=state['state'], ask_count=state['ask_count'],
+    result = dict(outcome=state.get('registration_observation') or state.get('outcome') or state.get('state'),
+                ask_count=state.get('ask_count', 0),
                 check_count=state.get('check_count', 0), attempt_count=state.get('attempt_count', 0),
                 file_posts=state.get('file_posts', 0), native_receipts=state.get('native_receipts', 0),
                 terminal_attempts=state.get('terminal_attempts', 0),
                 terminal_sends=state.get('terminal_sends', 0), last_ask=last,
-                reply=state.get('reply'), supervisor=state['supervisor'],
+                reply=state.get('reply'), supervisor=state.get('supervisor'),
                 continuation=state.get('continuation'), paused_tasks=state.get('paused_tasks', []),
                 rearm_count=state.get('rearm_count', 0),
                 reply_detected_epoch=state.get('reply_detected_epoch'),
                 reply_consumed_epoch=state.get('reply_consumed_epoch'),
                 next_ask_epoch=state.get('next_due_epoch'), last_poll=state.get('last_poll'),
                 state_file=str(state_path(state['caller_surface_uuid'])))
+    for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent'):
+        if key in state:
+            result[key] = state[key]
+    return result
 
 
 def main(argv=None):
@@ -753,6 +919,8 @@ def main(argv=None):
     s.add_argument('--authorization-file', type=Path)
     s.add_argument('--authorization-until', type=float)
     s.add_argument('--resume-stopped', action='store_true', help='explicit operator resume only')
+    s.add_argument('--file-only', action='store_true',
+                   help='register and issue the first request through files only; no transcript or input')
     r = sub.add_parser('run')
     r.add_argument('--max-seconds', type=float, default=MAX_RUN_SECONDS)
     for name in ('tick', 'status'):
@@ -761,6 +929,10 @@ def main(argv=None):
     consume_parser.add_argument('--reply-sha256', default='')
     st = sub.add_parser('stop')
     st.add_argument('--reason', default='OPERATOR')
+    e = sub.add_parser('enroll-existing', help='authenticate and register one existing episode; no tick or send')
+    e.add_argument('--episode', required=True)
+    e.add_argument('--enrollment-sha256', required=True,
+                   help='exact original registration SHA256; ABSENT only if no registration exists')
     for p in sub.choices.values():
         p.add_argument('--caller-uuid', default=os.environ.get('CMUX_SURFACE_ID', ''))
     args = parser.parse_args(argv)
@@ -768,6 +940,8 @@ def main(argv=None):
         parser.error('--caller-uuid or CMUX_SURFACE_ID required')
     caller = args.caller_uuid
     if args.cmd == 'start':
+        if args.file_only and args.transcript:
+            parser.error('--file-only cannot be combined with --transcript')
         live = ready._bridge().pin_workspace(args.supervisor, caller_uuid=caller)
         if live.get('caller_surface_uuid', '').upper() != caller.upper():
             raise ValueError('caller identity mismatch')
@@ -781,14 +955,22 @@ def main(argv=None):
             continuation = dict(enabled=True, overall_task=args.overall_task,
                                 authorization_file=str(args.authorization_file or ''),
                                 owner=supervisor, until_epoch=args.authorization_until)
-        state = start(caller, supervisor, args.task, args.transcript, args.channel,
-                      caller, own_prefixes=args.own_prefix, workspace=workspace,
-                      purpose=args.purpose, resume_stopped=args.resume_stopped,
-                      continuing=args.continuing, continuation=continuation)
-        if state.get('state') == WAITING:
-            import executor_reask_scheduler
-            executor_reask_scheduler.enroll(state, live)
-        state = tick(caller)
+        import executor_reask_scheduler as scheduler
+        state = scheduler.start(live, task_id=args.task, transcript=args.transcript,
+                                channels=args.channel, executor_ref=caller,
+                                own_prefixes=args.own_prefix, purpose=args.purpose,
+                                resume_stopped=args.resume_stopped,
+                                continuing=args.continuing, continuation=continuation)
+        if (state.get('state') == WAITING and not state.get('registration_observation')
+                and scheduler.registered(state)):
+            state = tick(caller, file_only=args.file_only)
+    elif args.cmd == 'enroll-existing':
+        import executor_reask_scheduler as scheduler
+        original = load(caller) or {}
+        if original.get('episode_id') != args.episode:
+            raise ValueError('existing episode changed; reread its original evidence')
+        live = ready._bridge().pin_workspace(original['supervisor'], caller_uuid=caller)
+        state = scheduler.enroll_existing(live, args.episode, args.enrollment_sha256)
     elif args.cmd == 'run':
         state = run(caller, args.max_seconds)
     elif args.cmd == 'tick':
@@ -806,8 +988,17 @@ def main(argv=None):
         state = consume(caller, args.reply_sha256)
     else:
         state = load(caller) or dict(outcome='NO_EPISODE')
-    print(json.dumps(summary(state), ensure_ascii=False, indent=1))
-    return 0
+        if state.get('registration'):
+            from executor_reask_scheduler import registration_observation
+            observation = registration_observation(state)
+            if observation != 'REGISTERED':
+                state = dict(state, registration_observation=observation, input_operations=0)
+    result = summary(state)
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 2 if result.get('outcome') in {
+        'REGISTRATION_UNCOMMITTED', 'COMMITTED_RECOVERY_REQUIRED',
+        'ORIGINAL_CONTROLLER_REQUIRED', 'UNSUPPORTED_FILE_PROTOCOL', 'EPISODE_BUSY',
+    } else 0
 
 
 if __name__ == '__main__':
