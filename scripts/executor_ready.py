@@ -138,6 +138,15 @@ def read_json(path):
         return None
 
 
+def sync_directory(path):
+    """Persist a rename/unlink; a file fsync alone does not persist its name."""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -149,6 +158,9 @@ def write_json(path, value):
             handle.flush()
             os.fsync(handle.fileno())
         tmp.replace(path)
+        # Exceptions here are AFTER the visible replacement. Transaction
+        # callers inspect their commit token, never roll back on this error.
+        sync_directory(path.parent)
     finally:
         # A deadline or write failure keeps the original state and cannot
         # accumulate temporary files on the next scheduled sweep.

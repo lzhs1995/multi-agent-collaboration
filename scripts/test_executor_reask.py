@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""空闲 executor 60 秒主动求派与其 Stop hook 的离线回归（无真实 bridge 输入）。"""
+"""空闲 executor 求派与旧显式 Stop checker 的离线回归（无真实 bridge 输入）。"""
 import json
 import copy
 import contextlib
@@ -18,6 +18,7 @@ import executor_ready as ready  # noqa: E402
 import executor_reask as reask  # noqa: E402
 import cmux_executor_reask_stop_guard as guard  # noqa: E402
 import executor_reply as replies
+import mac_harness as harness
 
 CALLER = 'E7C1C83C-946C-4E59-8753-F506F2069A12'
 SUP = '2A2CDBE8-DD07-4185-A972-2E56BB3135DF'
@@ -42,6 +43,11 @@ class Base(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(self.tmp.cleanup)
+        # Formal markers use an absolute /tmp root, independent of Path.home().
+        # Never let real task ownership affect an isolated episode fixture.
+        active_patcher = mock.patch.object(harness, '_ACTIVE_DIR', self.home / 'active')
+        active_patcher.start()
+        self.addCleanup(active_patcher.stop)
         self.channel = self.home / 'channel'
         self.channel.mkdir()
         self.transcript = self.home / 't.jsonl'
@@ -480,16 +486,37 @@ class StopGuardTest(Base):
         self.assertEqual(run.stdout, '')
         self.assertNotIn('INTERNAL_ERROR', run.stderr)
 
-    def test_authenticated_hook_blocks_without_terminal_input(self):
-        self.begin()
+    def authenticated_check(self):
         with mock.patch.object(guard.sys, 'stdin', io.StringIO(json.dumps(self.payload()))), \
              mock.patch.object(guard.hook_identity, 'evaluation', return_value=contextlib.nullcontext()), \
              mock.patch.object(guard.hook_identity, 'identity', return_value=(WORKSPACE, CALLER)), \
              mock.patch.object(reask, 'default_send') as send, \
-             contextlib.redirect_stdout(io.StringIO()) as output:
+             mock.patch.object(ready, '_bridge', side_effect=AssertionError('checker must not use bridge')), \
+             contextlib.redirect_stdout(io.StringIO()) as output, \
+             contextlib.redirect_stderr(io.StringIO()) as error:
             self.assertEqual(guard.main(), 0)
-        self.assertEqual(json.loads(output.getvalue())['decision'], 'block')
+        self.assertEqual(error.getvalue(), '')
         send.assert_not_called()
+        return output.getvalue()
+
+    def test_authenticated_hook_blocks_without_terminal_input(self):
+        self.begin()
+        output = self.authenticated_check()
+        self.assertEqual(reask.load(CALLER)['state'], reask.WAITING)
+        self.assertEqual(json.loads(output)['decision'], 'block')
+
+    def test_authenticated_checker_honors_isolated_formal_reservation(self):
+        original = self.begin()
+        marker = dict(collaboration_id='isolated-formal-owner', task_id='new-formal-task',
+                      workspace_uuid=WORKSPACE, armed_at='1970-01-01T00:16:41+00:00',
+                      participants=[dict(role='executor', surface_uuid=CALLER),
+                                    dict(role='supervisor', surface_uuid='11111111-1111-4111-8111-111111111111')])
+        ready.write_json(harness._ACTIVE_DIR / WORKSPACE / (marker['collaboration_id'] + '.json'), marker)
+        self.assertEqual(self.authenticated_check(), '')
+        stopped = reask.load(CALLER)
+        self.assertEqual((stopped['state'], stopped['exit_reason']), (reask.STOPPED, 'FORMAL_OWNER_CHANGED'))
+        self.assertEqual(stopped['controller'], original['controller'])
+        self.assertEqual(stopped['ask_count'], 0)
 
 
 if __name__ == '__main__':

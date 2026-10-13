@@ -1,3 +1,82 @@
+## 0.4.32
+
+- Preserve the scheduler's rotation cursor before full-release verification.
+  A timeout while reading the cursor leaves the original STATUS bytes intact
+  and records LAST-ERROR separately. Report phase and per-episode durations,
+  the interrupted enrollment and incomplete file-post counts without weakening
+  the 10-second budget or source verification. Four targeted deadline and
+  partial-commit cases pass; live latency still requires separate evidence.
+- Distinguish each foreground consume call from the continuing episode state.
+  Return an explicit consumed result with receipt/body/time evidence on success;
+  unanswered, stopped, missing and foreign-controller attempts exit 2 without
+  claiming consumption. Preserve formal pauses and old controller semantics.
+- Treat Claude queue removal and queued-command attachments as pending client
+  evidence with no promise of a later native user record. Avoid competing
+  self-wakeups during a live dispatch; native Goal, loop and advisory evidence
+  remain separate.
+- Add explicit late ACK reconciliation through the complete original controller.
+  Only the original supervisor can apply after the expired harness exits; retain
+  timeout archives, dispatch uncertainty, locks and native ACK proof, and run the
+  original writer/validator without input. Test 28 behavior cases both locally
+  and with the complete original 0.4.31 controller.
+- Bound review work to its fixed question and adequate checks. Deliver a report
+  at the task boundary; do not reopen accepted work or repeat full regressions
+  while waiting for unrelated closeout. Measure consumption latency separately
+  from two successful continuing request/reply/consume/rearm rounds.
+
+- Interpret reviewed legacy v2 inquiry files in CURRENT's own code after full
+  original manifest, controller-member and issuer-scheduler verification. Never
+  load old modules; preserve controller, UNKNOWN, terminal_pending, journals and
+  a one-time complete original state/enrollment snapshot. Unknown old producers
+  remain unsupported; file interpretation grants no transport or consume authority.
+- Make start registration recoverable with preflight, a pinned PREPARING intent
+  and a live-state registration-token commit. Distinguish uncommitted failure
+  from COMMITTED_RECOVERY_REQUIRED; recover the exact transaction without a new
+  episode. Verify original INDEX bytes and all five snapshot members, including
+  absence. Preserve precommit state/channels and protect newer episode channels.
+- Add authenticated `enroll-existing` with explicit episode and original raw
+  enrollment SHA. Preserve the original controller and pending evidence; do not
+  auto-migrate stale supervisor bindings, reopen finished work or tick on enrollment.
+- Enforce formal ownership independently of file compatibility and continuation:
+  same-supervisor reservations pause; a legitimate newer supervisor reservation
+  for the original caller/workspace stops the old inquiry with FORMAL_OWNER_CHANGED.
+  Only exact RELEASE removes a pause. TTL, heartbeat and missing markers grant
+  no release or takeover. CURRENT harness marker/reservation operations share
+  caller locks; nonblocking heartbeat rereads and never recreates a disarmed marker.
+- Fix the residual single-quoted `; Codex alone` launch false positive without
+  changing message text. Real adjacent CLIs, executable nested substitutions and
+  wrappers remain checked. Earlier literal/heredoc fixes remain historical entries.
+- Add `scripts/resume_task_no_input.py`: a read-only plan pins the
+  original immutable controller, executor, task pack, exact notice and complete
+  contiguous attempt history. `--apply --history-sha256` must match that plan.
+  Only all-NO_INPUT/events=[] COMPOSE_OCCUPIED or RECEIVER_COMPACTING history,
+  unchanged identity/native/lock/pack/payload/nonce and an empty ready composer
+  allow one appended attempt through the complete original controller. Keep all
+  original bytes; refuse input intent, UNKNOWN, queue, receipt or changed history
+  and preserve any new draft. Ordinary automatic preflight stays bounded to two
+  attempts; proven zero input is not exhaustion of the actual sending budget.
+- Keep discovering a bound reply while a formal reservation pauses new requests.
+  The pause survives ANSWERED and exact consumption until its matching RELEASE;
+  only the original authenticated executor through its original controller may
+  consume. File-only start is explicit and cannot enable transcript channels.
+- Add a bounded read-only original-handshake ACK observer. Pin the original
+  controller, timeout receipt, dispatch attempt and exact notice; write a separate
+  observation without editing the timeout or sending input. Notice reception,
+  body reading, ACK and business acceptance remain separate evidence.
+- Clarify the supervisor's primary callback → acceptance/disarm → next-pack
+  preparation → fresh preflight → dispatch chain. Keep 60-second reasks as a
+  fallback, preserve episodes and prevent repeated dispatch while ANSWERED is
+  unconsumed. File timers do not wake models. Measure accepted unique coverage,
+  verified issue closure and stage-specific latency p50/p95 with sample counts;
+  ask_count is no productivity score. Historical detected-to-consumed intervals
+  establish neither pure idle time nor causation or live adoption.
+
+Validation: the full offline suite passed 1,885 tests with zero failures or
+errors. Registration, actual scheduler execution, automatic hooks, full body
+reading and two real continuing request/reply/consume/rearm rounds each require
+separate live evidence. Native delivery, nonblocking hooks, no-resend behavior
+and Claude maintenance notice exposure retain the 0.4.31 contract.
+
 ## 0.4.31
 
 - Add opt-in file context for a Claude executor that keeps waiting for a failed

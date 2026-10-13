@@ -97,8 +97,11 @@ def _contains_agent_launch(command: str) -> bool:
     return False
 
 
-def _text_starts_agent_launch(text: str) -> bool:
+def _text_starts_agent_launch(text: str, *, _depth: int = 0, _allow_help: bool = False) -> bool:
     """Return True when text executes an agent CLI rather than mentions one."""
+    # Reserved words are syntax only when unquoted, before quote removal.
+    while prefix := re.match(r"\s*(?:!|\{|if|then|elif|else|while|until|do)(?=\s|$)\s*", text):
+        text = text[prefix.end():]
     try:
         tokens = shlex.split(text, posix=True)
     except ValueError:
@@ -106,22 +109,47 @@ def _text_starts_agent_launch(text: str) -> bool:
     if not tokens:
         return False
 
-    # Shell wrappers commonly used to start a long-lived CLI process.
-    while tokens and tokens[0] in {"exec", "command", "nohup", "rtk"}:
-        wrapper, tokens = tokens[0], tokens[1:]
-        if wrapper == "rtk" and tokens[:1] == ["proxy"]:
+    # Only command heads are wrappers; quoted arguments of ordinary commands
+    # remain data. Unwrap repeatedly, including absolute executable paths.
+    while tokens:
+        name = os.path.basename(tokens[0])
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0], re.S):
             tokens = tokens[1:]
-    if tokens and tokens[0] == "env":
-        tokens = tokens[1:]
-        while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]):
+        elif name in {"exec", "command", "nohup", "rtk", "env"}:
             tokens = tokens[1:]
-        while tokens and tokens[0] in {"exec", "command", "nohup", "rtk"}:
-            wrapper, tokens = tokens[0], tokens[1:]
-            if wrapper == "rtk" and tokens[:1] == ["proxy"]:
+            if name == "rtk" and tokens[:1] == ["proxy"]:
                 tokens = tokens[1:]
+            while tokens and tokens[0].startswith("-"):
+                option, tokens = tokens[0], tokens[1:]
+                if option == "--":
+                    break
+                if name == "command" and option in {"-v", "-V"}:
+                    return False  # lookup, not execution
+                if (name == "exec" and option == "-a"
+                        or name == "env" and option in {"-u", "--unset", "-C", "--chdir"}):
+                    tokens = tokens[1:]
+                if name == "env" and option in {"-S", "--split-string"}:
+                    # env splits argv; it does not execute shell punctuation.
+                    return bool(tokens) and _shell_starts_agent_launch(
+                        shlex.join(_normalize_tokens(tokens[0]) + tokens[1:]),
+                        _depth=_depth + 1, _allow_help=_allow_help)
+        else:
+            break
     if not tokens:
         return False
-    return os.path.basename(tokens[0]).lower() in AGENT_LAUNCH_NAMES
+    name = os.path.basename(tokens[0]).lower()
+    if name in {"sh", "bash", "zsh", "dash", "ksh"}:
+        for index, option in enumerate(tokens[1:], 1):
+            if not option.startswith("-") or option == "--":
+                break
+            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", option):
+                return index + 1 < len(tokens) and _shell_starts_agent_launch(
+                    tokens[index + 1], _depth=_depth + 1, _allow_help=_allow_help)
+    if name == "eval":
+        return _shell_starts_agent_launch(
+            " ".join(tokens[1:]), _depth=_depth + 1, _allow_help=_allow_help)
+    return (name in AGENT_LAUNCH_NAMES
+            and not (_allow_help and any(t in {"-h", "--help"} for t in tokens[1:])))
 
 
 def _python_document_data(command: str) -> str:
@@ -278,12 +306,134 @@ def _python_document_data(command: str) -> str:
     return pattern.sub(replace, command)
 
 
-def _shell_starts_agent_launch(command: str) -> bool:
-    """Detect a direct agent launch in any simple shell command segment."""
-    for segment in re.split(r"(?:^|\s*(?:&&|\|\||;|\n)\s*)", _python_document_data(command)):
-        if _text_starts_agent_launch(segment.strip()):
-            return True
-    return False
+def _shell_launch_segments(command: str, depth: int = 0) -> list[str]:
+    """Keep shell quotes/escapes intact; inspect executable substitutions too.
+
+    This is a bounded lexical scan, not a shell interpreter. Heredoc bodies keep
+    the existing conservative scan after _python_document_data masks known data.
+    Neither quote removal nor a split on punctuation may promote literal text
+    into a new command. No command or expansion is ever evaluated here.
+    """
+    if depth > 32:
+        raise ValueError("shell nesting limit")
+    segments: list[str] = []
+
+    def scan(pos: int, closing: str = "", level: int = depth, arithmetic: bool = False) -> int:
+        if level > 32:
+            raise ValueError("shell nesting limit")
+        current: list[str] = []
+        quote = ""
+        heredocs: list[tuple[str, bool]] = []
+
+        def flush() -> None:
+            if not arithmetic and "".join(current).strip():
+                segments.append("".join(current))
+            current.clear()
+
+        while pos < len(command):
+            char = command[pos]
+            if quote == "'":
+                current.append(char)
+                if char == quote:
+                    quote = ""
+            elif char == "\\":
+                following = command[pos + 1:pos + 2]
+                if following == "\n":
+                    pos += 2
+                    continue
+                if not quote or following in {'$', '`', '"', '\\'}:
+                    current.append(command[pos:pos + 2])
+                    pos += 2
+                    continue
+                current.append(char)
+            elif char == "`":
+                end = pos + 1
+                while end < len(command) and command[end] != "`":
+                    end += 2 if command[end] == "\\" else 1
+                if end >= len(command):
+                    raise ValueError("unclosed backtick substitution")
+                body = re.sub(r"\\([$`\\])", r"\1", command[pos + 1:end])
+                segments.extend(_shell_launch_segments(body, level + 1))
+                current.append("__expansion__")
+                pos = end + 1
+                continue
+            elif command.startswith("$((", pos) or (not quote and command.startswith("((", pos)):
+                # Arithmetic identifiers are data; nested substitutions still
+                # execute and are collected by their own recursive scan.
+                start = pos + (3 if command[pos] == "$" else 2)
+                current.append("__arithmetic__")
+                pos = scan(start, ")", level + 1, arithmetic=True)
+                if command[pos:pos + 1] != ")":
+                    raise ValueError("unclosed arithmetic expression")
+                pos += 1
+                continue
+            elif command.startswith("$(", pos) or (not quote and command[pos:pos + 2] in {"<(", ">("}):
+                current.append("__expansion__")
+                pos = scan(pos + 2, ")", level + 1)
+                continue
+            elif quote == '"':
+                current.append(char)
+                if char == quote:
+                    quote = ""
+            elif char in "'\"":
+                quote = char
+                current.append(char)
+            elif closing and char == closing:
+                flush()
+                return pos + 1
+            elif char == "#" and (not current or current[-1][-1:].isspace()):
+                end = command.find("\n", pos)
+                pos = len(command) if end < 0 else end
+                continue
+            elif char == "(":
+                flush()
+                pos = scan(pos + 1, ")", level + 1, arithmetic=arithmetic)
+                continue
+            elif command.startswith("<<", pos) and not command.startswith("<<<", pos):
+                match = re.match(r"<<(-?)[ \t]*('[^']*'|\"[^\"]*\"|[\w\\]+)", command[pos:])
+                if match:
+                    heredocs.append((shlex.split(match[2])[0], bool(match[1])))
+                    current.append(match[0])
+                    pos += len(match[0])
+                    continue
+                current.append(char)
+            elif char in ";&|\n)":
+                flush()
+                if char == "\n":
+                    pos += 1
+                    for delimiter, strip_tabs in heredocs:
+                        pattern = r"(?m)^" + (r"\t*" if strip_tabs else "") + re.escape(delimiter) + r"\r?$"
+                        end = re.search(pattern, command[pos:])
+                        body = command[pos:pos + end.start()] if end else command[pos:]
+                        segments.extend(re.split(r"\s*(?:&&|\|\||;|\n)\s*", body))
+                        pos = pos + end.end() if end else len(command)
+                        if command[pos:pos + 1] == "\n":
+                            pos += 1
+                    heredocs.clear()
+                    continue
+            else:
+                current.append(char)
+            pos += 1
+        if quote or closing:
+            raise ValueError("unclosed shell quote or substitution")
+        flush()
+        return pos
+
+    scan(0)
+    return segments
+
+
+def _shell_starts_agent_launch(command: str, *, _depth: int = 0, _allow_help: bool = False) -> bool:
+    """Detect agent command heads without reinterpreting literal arguments."""
+    command = _python_document_data(command)
+    try:
+        segments = _shell_launch_segments(command, _depth)
+    except (ValueError, RecursionError):
+        # Unresolved syntax never gains a literal-data exemption.
+        return any(re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", command, re.I)
+                   for name in AGENT_LAUNCH_NAMES)
+    return any(_text_starts_agent_launch(segment.strip(), _depth=_depth,
+                                        _allow_help=_allow_help) for segment in segments)
 
 
 def _cmux_send_starts_agent_launch(command: str) -> bool:
@@ -589,10 +739,6 @@ def validate_command(command: str) -> tuple[bool, str]:
     if not ok:
         return False, message
 
-    # Help queries never create a panel; always allow.
-    if _has_help_flag(command):
-        return True, "help query allowed"
-
     # A vanished surface may be recovered only by resuming its exact persisted
     # session under a one-time, history-pinned authorization. This is session
     # reuse, not replacement-session creation.
@@ -602,13 +748,18 @@ def validate_command(command: str) -> tuple[bool, str]:
 
     # Check launches before panel operations so a compound create-and-launch
     # command cannot bypass executor reuse.
-    if _shell_starts_agent_launch(command) or _cmux_send_starts_agent_launch(command):
+    if _shell_starts_agent_launch(command, _allow_help=True) or _cmux_send_starts_agent_launch(command):
         return False, (
             "Blocked: direct agent CLI launch would bypass existing-session reuse. "
             "Reuse the already handshaken, context-bearing executor with `cmux-agent ask/read`. "
             "A genuinely new executor is allowed only after the user explicitly confirms that no "
             "reusable executor can satisfy the task, using the harness double-authorization path."
         )
+
+    # Help belongs to its own invocation; it cannot exempt an adjacent launch,
+    # an executable substitution or a shell -c/eval argument.
+    if _has_help_flag(command):
+        return True, "help query allowed"
 
     if _raw_cmux_task_dispatch(command):
         return False, (

@@ -5,8 +5,9 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 import uuid
 
 import executor_ready as ready
@@ -142,13 +143,103 @@ class SchedulerTests(unittest.TestCase):
     def test_cli_persists_authenticated_uuid_instead_of_surface_alias(self):
         self.transport.side_effect = None
         self.transport.return_value.pin_workspace.return_value = self.live()
-        with patch.object(reask, 'tick', side_effect=lambda caller: reask.load(caller)), \
+        with patch.object(reask, 'tick', side_effect=lambda caller, **kwargs: reask.load(caller)) as tick, \
                 patch.object(reask.sys, 'stdout', io.StringIO()):
             self.assertEqual(reask.main(['start', '--supervisor', 'surface:28',
                                          '--caller-uuid', CALLER, '--task', 'next']), 0)
         state = reask.load(CALLER)
+        tick.assert_called_once_with(CALLER, file_only=False)
         self.assertEqual((state['supervisor'], state['workspace_uuid']), (SUP, WORKSPACE))
         self.assertEqual(ready.read_json(scheduler.enrollment_path(CALLER))['status'], 'ENROLLED')
+
+    def test_cli_file_only_posts_and_schedules_without_transcript_or_transport(self):
+        self.transport.side_effect = None
+        self.transport.return_value.pin_workspace.return_value = self.live()
+        with patch.object(reask, 'idle_binding', side_effect=AssertionError('no idle binding')), \
+                patch.object(ready, 'Tail', side_effect=AssertionError('no transcript')), \
+                patch.object(reask.sys, 'stdout', io.StringIO()):
+            self.assertEqual(reask.main(['start', '--supervisor', SUP, '--caller-uuid', CALLER,
+                                         '--task', 'next', '--file-only']), 0)
+            state = reask.load(CALLER)
+            self.assertEqual(state['asks'][-1]['outcome'], 'FILE_ONLY_SCHEDULED')
+            self.assertEqual((state['ask_count'], state['file_posts']), (1, 1))
+            self.assertIsNone(state['continuation'])
+            self.assertEqual((state['terminal_attempts'], state['native_receipts']), (0, 0))
+            self.assertIsNone(state['terminal_pending'])
+            self.assertEqual(scheduler.sweep(now=state['next_due_epoch'])['file_posts'], 1)
+        # Resolve initially and recheck under the registration lock; no input.
+        self.assertEqual(self.transport.call_args_list, [call(), call()])
+        self.assertEqual(self.transport.return_value.mock_calls,
+                         [call.pin_workspace(SUP, caller_uuid=CALLER)] * 2)
+        self.assertEqual(reask.load(CALLER)['episode_id'], state['episode_id'])
+
+    def test_cli_file_only_continuation_still_requires_explicit_authorization(self):
+        self.transport.side_effect = None
+        self.transport.return_value.pin_workspace.return_value = self.live()
+        args = ['start', '--supervisor', SUP, '--caller-uuid', CALLER, '--task', 'next',
+                '--file-only', '--continuing', '--overall-task', 'overall']
+        with patch.object(reask.sys, 'stdout', io.StringIO()), self.assertRaises(ValueError):
+            reask.main(args)
+        self.assertIsNone(reask.load(CALLER))
+        auth = self.home / 'explicit-authorization.txt'
+        auth.write_text('Continue file inquiries for the overall task.')
+        with patch.object(reask.sys, 'stdout', io.StringIO()):
+            self.assertEqual(reask.main(args + ['--authorization-file', str(auth)]), 0)
+        state = reask.load(CALLER)
+        self.assertEqual(state['continuation']['overall_task'], 'overall')
+        self.assertEqual(state['asks'][-1]['outcome'], 'FILE_ONLY_SCHEDULED')
+        self.assertEqual(self.transport.return_value.mock_calls,
+                         [call.pin_workspace(SUP, caller_uuid=CALLER)] * 4)
+
+    def test_cli_file_only_rejects_transcript_before_registration(self):
+        with patch.object(reask.sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit) as exc:
+            reask.main(['start', '--supervisor', SUP, '--caller-uuid', CALLER,
+                        '--file-only', '--transcript', '/must-not-read'])
+        self.assertEqual(exc.exception.code, 2)
+        self.assertIsNone(reask.load(CALLER))
+        self.transport.assert_not_called()
+
+    def test_cli_start_rejects_same_owner_reservation_created_before_episode(self):
+        import mac_harness as harness
+        active = self.home / 'formal-task-markers'
+        self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', active))
+        auth = self.home / 'continuing-authorization.txt'
+        auth.write_text('Continue inquiries for the overall task after formal release.')
+        self.transport.side_effect = None
+        for continuing in (False, True):
+            for file_only in (False, True):
+                with self.subTest(continuing=continuing, file_only=file_only):
+                    caller = str(uuid.uuid4()).upper()
+                    marker = dict(collaboration_id='prior-reservation', task_id='business-task',
+                                  workspace_uuid=WORKSPACE, armed_at='1970-01-01T00:00:01+00:00',
+                                  participants=[dict(role='supervisor', surface_uuid=SUP),
+                                                dict(role='executor', surface_uuid=caller)])
+                    marker_path = active / WORKSPACE / (caller + '.json')
+                    ready.write_json(marker_path, marker)
+                    original_marker = marker_path.read_bytes()
+                    self.assertIsNone(reask.load(caller))
+                    self.transport.reset_mock()
+                    self.transport.return_value.pin_workspace.return_value = self.live(caller)
+                    args = ['start', '--supervisor', SUP, '--caller-uuid', caller, '--task', 'next']
+                    if file_only:
+                        args.append('--file-only')
+                    if continuing:
+                        args += ['--continuing', '--overall-task', 'overall',
+                                 '--authorization-file', str(auth)]
+                    with patch.object(reask.sys, 'stdout', io.StringIO()), \
+                            patch.object(reask, 'idle_binding', side_effect=AssertionError('reserved')), \
+                            patch.object(ready, 'Tail', side_effect=AssertionError('reserved')), \
+                            patch.object(reask, 'tick', side_effect=AssertionError('reserved')) as tick:
+                        with self.assertRaisesRegex(ValueError, 'formal task owns the executor'):
+                            reask.main(args)
+                        tick.assert_not_called()
+                        self.assertIsNone(reask.load(caller))
+                        self.assertFalse(reask.state_path(caller).exists())
+                        self.assertFalse(scheduler.enrollment_path(caller).exists())
+                        self.assertEqual(scheduler.sweep()['file_posts'], 0)
+                        self.assertEqual(marker_path.read_bytes(), original_marker)
+                    self.assertEqual(self.transport.return_value.mock_calls,
+                                     [call.pin_workspace(SUP, caller_uuid=caller)] * 2)
 
     def test_capacity_enumeration_is_bounded(self):
         visited = []
@@ -175,6 +266,75 @@ class SchedulerTests(unittest.TestCase):
                 self.assertEqual(scheduler.sweep(now=1001.)['status'], 'SWEEP_BUDGET_EXHAUSTED')
         self.assertEqual(len(set(visited)), 3)
         self.assertTrue(ready.read_json(scheduler.root() / 'STATUS.json')['last_enrollment'])
+
+    def test_release_deadline_preserves_prior_rotation_and_next_caller_progresses(self):
+        for _ in range(3):
+            self.enroll(str(uuid.uuid4()).upper())
+        visited = []
+        def deadline(caller, *_args, **_kwargs):
+            visited.append(caller)
+            raise ready.WaitBudgetExpired()
+        with patch.object(reask, 'tick_locked', side_effect=deadline):
+            first = scheduler.sweep(now=1001.)
+            self.approved.side_effect = ready.WaitBudgetExpired()
+            failed = scheduler.sweep(now=1001.)
+            self.assertEqual(failed['phase'], 'VERIFY_RELEASE')
+            self.assertEqual(failed['last_enrollment'], first['last_enrollment'])
+            self.assertEqual(failed['episodes'], [])
+            self.approved.side_effect = None
+            scheduler.sweep(now=1001.)
+        self.assertEqual(len(set(visited)), 2)
+        self.transport.assert_not_called()
+
+    def test_cursor_read_deadline_preserves_exact_status_and_records_error_separately(self):
+        self.enroll()
+        scheduler.sweep(now=1001.)
+        path = scheduler.root() / 'STATUS.json'
+        before = path.read_bytes()
+        read = ready.read_json
+        def slow_read(candidate):
+            if candidate == path:
+                raise ready.WaitBudgetExpired()
+            return read(candidate)
+        self.approved.reset_mock()
+        with patch.object(ready, 'read_json', side_effect=slow_read):
+            failed = scheduler.sweep(now=1062.)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertTrue(failed['status_record_unchanged'])
+        self.assertEqual(failed['phase'], 'LOAD_CURSOR')
+        self.assertEqual(ready.read_json(scheduler.root() / 'LAST-ERROR.json'), failed)
+        self.approved.assert_not_called()
+
+    def test_real_release_io_deadline_identifies_phase_without_episode_work(self):
+        self.enroll()
+        def slow_release(*_args):
+            time.sleep(0.2)
+            return self.current
+        self.approved.side_effect = slow_release
+        with patch.object(scheduler, 'MAX_SWEEP_SECONDS', 0.02):
+            failed = scheduler.sweep(now=1001.)
+        self.assertEqual(failed['status'], 'SWEEP_BUDGET_EXHAUSTED')
+        self.assertEqual(failed['phase'], 'VERIFY_RELEASE')
+        self.assertIn('VERIFY_RELEASE', failed['phase_seconds'])
+        self.assertEqual(reask.load(CALLER)['ask_count'], 0)
+        self.assertFalse(failed['file_posts_complete'])
+        self.transport.assert_not_called()
+
+    def test_interrupted_committed_tick_reports_partial_counters(self):
+        self.enroll()
+        tick = reask.tick_locked
+        def interrupted(*args, **kwargs):
+            tick(*args, **kwargs)
+            raise ready.WaitBudgetExpired()
+        with patch.object(reask, 'tick_locked', side_effect=interrupted):
+            failed = scheduler.sweep(now=1001.)
+        self.assertEqual(failed['status'], 'SWEEP_BUDGET_EXHAUSTED')
+        self.assertEqual(failed['phase'], 'EPISODE')
+        self.assertFalse(failed['file_posts_complete'])
+        self.assertTrue(failed['pending_enrollment'])
+        self.assertEqual(failed['file_posts'], 0)
+        self.assertEqual(reask.load(CALLER)['file_posts'], 1)
+        self.transport.assert_not_called()
 
     def test_release_failure_is_observed_without_any_episode_work(self):
         self.enroll()

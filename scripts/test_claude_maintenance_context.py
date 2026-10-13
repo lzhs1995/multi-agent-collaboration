@@ -1,5 +1,6 @@
 """The real queued-body reader, including wrong sessions and failed output."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -182,6 +183,145 @@ class ClaudeMaintenanceContextTests(unittest.TestCase):
                 self.assertIn(self.body.read_text(), obj['hookSpecificOutput']['additionalContext'])
             else:
                 self.assertEqual(out.getvalue(), '')
+
+    def completed_reply(self):
+        reply = dict(offer_id=self.offer['offer_id'], session_id=self.SESSION,
+                     marker='maintenance', body_sha256=context.pin(self.body)['sha256'], body_read=True)
+        self.reply.write_text(json.dumps(reply))
+        return reply
+
+    def next_notice(self, change_binding=None):
+        body = self.home / 'next-body.txt'
+        body.write_text('The prior task is accepted. Await the separately dispatched next task.\n新通知。')
+        wire = 'STATUS: MESSAGE_REFERENCE_V2 next SHA=' + context.pin(body)['sha256']
+        binding = json.loads(json.dumps(self.binding))
+        binding['transcript'] = native._pin_file(self.log, 'claude', self.SESSION)
+        binding['payload_sha256'] = context.digest(wire.encode())
+        if change_binding:
+            change_binding(binding)
+        queue = (json.dumps(dict(type='attachment', sessionId=self.SESSION, isSidechain=False,
+                    attachment=dict(type='queued_command', prompt=wire))) + '\n').encode()
+        with self.log.open('ab') as stream:
+            stream.write(queue)
+        attempt = json.loads(self.attempt.read_text())
+        attempt.update(marker='next', native_binding=binding, wire=wire,
+                       wire_sha256=context.digest(wire.encode()), body=body.read_text(),
+                       body_reference=context.pin(body), body_sha256=context.pin(body)['sha256'])
+        path = self.home / 'next-attempt.json'
+        path.write_text(json.dumps(attempt))
+        return (path, binding['transcript']['offset'], len(queue), self.request, self.home / 'next-reply.json')
+
+    def test_completed_offer_advances_atomically_and_preserves_original_evidence(self):
+        self.invoke(now=100)
+        self.completed_reply()
+        args = self.next_notice()
+        cursor = context.root() / (self.SESSION + '.cursor.json')
+        preserved = {p: p.read_bytes() for p in (self.offer_path, self.reply, cursor, self.attempt, self.log)}
+        inode = cursor.stat().st_ino
+        _, new = context.enroll(*args, replace_completed=self.offer['offer_id'])
+        archive = context.root() / 'history' / self.SESSION / self.offer['offer_id'] / new['offer_id']
+        for name, original in [('offer.json', self.offer_path), ('reply.json', self.reply), ('cursor.json', cursor)]:
+            self.assertEqual((archive / name).read_bytes(), preserved[original])
+        for original in (self.reply, cursor, self.attempt, self.log):
+            self.assertEqual(original.read_bytes(), preserved[original])
+        self.assertEqual(cursor.stat().st_ino, inode)
+        self.assertEqual(json.loads(self.offer_path.read_text())['offer_id'], new['offer_id'])
+        self.assertFalse(args[-1].exists())
+        output = self.invoke(now=101)
+        self.assertEqual(len(output), 1)
+        self.assertIn('新通知', output[0])
+        self.assertEqual(json.loads(cursor.read_text())['exposures'], 1)
+
+    def test_pending_or_wrong_read_reply_cannot_be_replaced(self):
+        args = self.next_notice()
+        before = self.offer_path.read_bytes()
+        with self.assertRaises(OSError):
+            context.enroll(*args, replace_completed=self.offer['offer_id'])
+        reply = self.completed_reply()
+        for field in reply:
+            with self.subTest(field=field):
+                self.reply.write_text(json.dumps(dict(reply, **{field: 'wrong'})))
+                with self.assertRaisesRegex(ValueError, 'no exact executor body-read'):
+                    context.enroll(*args, replace_completed=self.offer['offer_id'])
+                self.assertEqual(self.offer_path.read_bytes(), before)
+
+    def test_default_remains_exclusive_even_after_a_reply(self):
+        self.completed_reply()
+        with self.assertRaises(FileExistsError):
+            context.enroll(*self.next_notice())
+
+    def test_wrong_expected_offer_never_replaces_registry(self):
+        self.completed_reply()
+        args = self.next_notice()
+        before = self.offer_path.read_bytes()
+        for wrong in ['0' * 64, '../../outside', None]:
+            with self.subTest(wrong=wrong), self.assertRaises((ValueError, FileExistsError)):
+                context.enroll(*args, replace_completed=wrong)
+            self.assertEqual(self.offer_path.read_bytes(), before)
+
+    def test_same_attempt_cannot_be_reenrolled_with_a_fresh_reply(self):
+        self.completed_reply()
+        with self.assertRaisesRegex(ValueError, 'already enrolled'):
+            context.enroll(self.attempt, self.transcript['offset'], len(self.queue), self.request,
+                           self.home / 'another-reply.json', replace_completed=self.offer['offer_id'])
+
+    def test_completed_rotation_requires_same_executor_process(self):
+        self.completed_reply()
+        args = self.next_notice(lambda b: b['process'].update(birth=[2, 3]))
+        with self.assertRaisesRegex(ValueError, 'original executor session and process'):
+            context.enroll(*args, replace_completed=self.offer['offer_id'])
+
+    def test_authorized_new_supervisor_does_not_require_old_supervisor_approval(self):
+        self.completed_reply()
+        args = self.next_notice(lambda b: b['identity'].update(caller_surface_uuid=self.SESSION))
+        _, new = context.enroll(*args, replace_completed=self.offer['offer_id'])
+        self.assertNotEqual(new['offer_id'], self.offer['offer_id'])
+
+    def test_cursor_lock_contention_is_bounded_and_keeps_old_offer(self):
+        self.completed_reply()
+        args = self.next_notice()
+        before = self.offer_path.read_bytes()
+        cursor = context.root() / (self.SESSION + '.cursor.json')
+        with cursor.open('a+b') as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(BlockingIOError):
+                context.enroll(*args, replace_completed=self.offer['offer_id'])
+        self.assertEqual(self.offer_path.read_bytes(), before)
+
+    def test_failed_publication_preserves_old_offer_and_retry_reuses_archive(self):
+        self.completed_reply()
+        args = self.next_notice()
+        before = self.offer_path.read_bytes()
+        with patch.object(context.os, 'replace', side_effect=OSError('disk unavailable')):
+            with self.assertRaises(OSError):
+                context.enroll(*args, replace_completed=self.offer['offer_id'])
+        self.assertEqual(self.offer_path.read_bytes(), before)
+        _, new = context.enroll(*args, replace_completed=self.offer['offer_id'])
+        self.assertEqual(json.loads(self.offer_path.read_text())['offer_id'], new['offer_id'])
+
+    def test_changed_reply_during_archiving_does_not_publish_new_offer(self):
+        self.completed_reply()
+        args = self.next_notice()
+        before = self.offer_path.read_bytes()
+        archive = context._archive_bytes
+        def changed(path, raw):
+            archive(path, raw)
+            if path.name == 'next-offer.json':
+                self.reply.write_text('{}')
+        with patch.object(context, '_archive_bytes', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, 'evidence changed'):
+                context.enroll(*args, replace_completed=self.offer['offer_id'])
+        self.assertEqual(self.offer_path.read_bytes(), before)
+
+    def test_archive_symlink_does_not_replace_or_write_outside_registry(self):
+        self.completed_reply()
+        args = self.next_notice()
+        outside = self.home / 'outside'
+        outside.mkdir()
+        (context.root() / 'history').symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'archive must be private'):
+            context.enroll(*args, replace_completed=self.offer['offer_id'])
+        self.assertEqual(list(outside.iterdir()), [])
 
 
 if __name__ == '__main__':

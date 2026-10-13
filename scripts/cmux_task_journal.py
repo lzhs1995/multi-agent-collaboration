@@ -164,7 +164,9 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
             if old and old.get('phase') != 'NO_INPUT':
                 raise bridge.TaskPackContractError('DISPATCH_ATTEMPT_EXISTS: use --reconcile-only')
             if len(attempts) >= 2:
-                raise bridge.TaskPackContractError('DISPATCH_RETRY_BUDGET_EXHAUSTED')
+                raise bridge.TaskPackContractError(
+                    'DISPATCH_ZERO_INPUT_RECOVERY_REQUIRED: preserve all attempts; '
+                    'use resume_task_no_input.py with the original controller, pack and text')
             attempt_path = journal / ('attempt-%04d.json' % (len(attempts) + 1))
             attempt = dict(binding=binding, phase='PREPARED', events=[], started_at_epoch=time.time(),
                            delivery_lock_identity=delivery_lock_identity)

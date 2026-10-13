@@ -1,4 +1,29 @@
-Current release: **0.4.31**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+Current source: **0.4.32**. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
+
+Version **0.4.32** adds CURRENT's reviewed cross-release v2 file interpreter,
+recoverable registration transactions and explicit registration of an existing
+episode using its original enrollment SHA. The file scheduler preserves original
+controllers, UNKNOWN and pending evidence without loading old release code or
+sending input. Formal reservations pause same-supervisor inquiries; a valid
+newer reservation by the legitimate new supervisor ends the old supervisor's
+inquiry, even for an unsupported old producer. Only exact RELEASE clears a
+same-supervisor pause. That pause blocks new requests while retaining discovery
+of an already-bound reply; only the original authenticated executor and its
+original controller may consume it. Explicit `start --file-only` rejects
+transcript channels.
+This version also fixes a single-quoted `; Codex alone` launch false positive
+while retaining checks on executable shell code. A separate explicit zero-input
+recovery entrypoint defaults to a read-only history plan; applying it pins the
+complete history SHA and appends one attempt through the original controller
+only when every earlier attempt proves no input. See [SKILL.md](SKILL.md) for
+the exact evidence and readiness checks. The full offline suite passed 1,846
+tests with zero failures or errors. Installation and active-client adoption need
+their own evidence. See the [cross-release file contract](references/configuration-and-reasks.md#cross-release-file-contract).
+
+The bounded handshake observer preserves the original timeout and send attempt
+while reporting a late ACK without input. Validate registration, real scheduler
+execution, automatic hooks, full body reading and two real continuing rounds
+separately; offline tests and file ticks do not establish those live outcomes.
 
 Caller discovery now distinguishes a validated optional foreground file from an
 earlier use of the same PID. It preserves current-process, required-observer and
@@ -84,6 +109,15 @@ Replace the example surface with a freshly verified binding. Do not paste task
 prompts manually: use the finalized task-pack and callback entrypoints described
 in [SKILL.md](SKILL.md). Public defaults preserve the current model and refuse
 unknown compose text. Machine-specific preferences belong in local task settings.
+
+The next-task chain is callback → independent acceptance/exact disarm → prepare
+the next authorized pack → fresh live preflight → guarded dispatch. Explicit
+60-second reasks are a fallback; file timers cannot wake an idle model.
+ANSWERED awaiting consumption does not authorize repeated dispatch or a replacement
+episode. Track accepted unique coverage, verified issue closure and actual stage
+latency p50/p95, with sample counts and pending observations; ask_count is only a
+diagnostic. Reply-detected-to-consumed time alone proves neither business idle time
+nor its cause. See [dispatch cadence and metrics](references/configuration-and-reasks.md#dispatch-cadence-and-metrics).
 
 ## Verification And Boundaries
 

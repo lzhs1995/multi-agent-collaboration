@@ -5,6 +5,11 @@ skills and global CLAUDE.md link here; they do not implement another sender or
 copy hook code. Pin one complete immutable release for each new task. An
 in-flight task keeps its original controller, task pack, journal and receipts.
 
+This reference describes **0.4.32** behavior. See [CHANGELOG](../CHANGELOG.md)
+for the final offline validation. Installation, actual scheduler
+execution, automatic hooks and original-client adoption require separate live
+evidence; offline results do not establish them.
+
 ## Task scope is explicit session enrollment
 
 Installing this skill or its hooks globally does not enroll every conversation.
@@ -125,6 +130,17 @@ WAITING_DEPENDENCY, SOLO and BLOCKED require a concrete `trigger`; replace the
 template placeholder. `queued:true` or `received:false` never ends the episode.
 Late replies to issued markers remain valid after history rollover.
 
+The offered `REQUEST` path is a rotating current file, not an immutable archive.
+Read the complete bounded regular file once (the `supervisor_inbox.request_bytes`
+helper hashes and parses one stable file-descriptor read), verify the offered SHA,
+and save those exact bytes in an exclusive task-local snapshot before a long
+review. Build the reply from that snapshot's template and original mailbox; do
+not reopen the rotating current file to reconstruct the old reply. If the file
+changed before the first verified read, make no reply from the mismatched bytes
+and read a newly observed request. A later marker does not invalidate an earlier
+issued marker in the same unconsumed episode. The observer does not automatically
+archive every request or supply a separate reply-writing CLI.
+
 Before fresh dispatch to a reasking executor, the bound supervisor first writes
 the exact issued mailbox reply. The explicit runner then observes it and returns;
 perform a fresh live preflight before the formal pack. A TASK reply does not
@@ -133,6 +149,44 @@ runner itself prevents. An exited original receiver process does not authorize
 forging a new original binding or deleting terminal_pending. Independently
 validated historical native reception remains separate from official live
 reconciliation; answer the original episode by its mailbox without replaying it.
+
+## Dispatch cadence and metrics
+
+Drive the next task through callback → independent acceptance/exact disarm →
+prepare the next authorized pack → fresh live preflight → guarded dispatch.
+The supervisor owns this chain. The explicitly authorized 60-second reask is a
+fallback for missed coordination; its cadence is neither a dispatch target nor a
+latency guarantee. A file timer cannot wake an idle model. Hook exposure still
+requires a real tool event and does not prove reading, consumption or acceptance.
+
+ANSWERED records detection, not consumption. Preserve the current business
+episode and original pack while the original authenticated executor consumes the
+exact reply; pending consumption does not authorize repeated dispatch. A TASK
+reply remains separate from a formal task pack. A same-supervisor reservation
+keeps inquiries paused until its exact RELEASE. Neither more asks nor a missing
+marker justifies releasing that reservation or reopening a terminal episode.
+
+Report useful outcomes and observed delays separately:
+
+- Effective coverage: distinct independently accepted items against an explicit
+  eligible scope. State the denominator and remaining gaps; executed test counts,
+  repeated checks and duplicate dispatches do not by themselves prove coverage.
+- Issue closure: distinct problems with verified resolution evidence. Preserve
+  unresolved and reopened issues; ask_count, file_posts and attempts are diagnostics,
+  never activity targets or substitutes for accepted work.
+- Latency: use actual matched timestamps and publish stage-specific p50/p95 with
+  the sample count, observation window and pending/missing samples. Keep
+  reply_detected → consumed, callback receipt → acceptance/disarm, and next-pack
+  readiness → exact native reception separate. Do not infer missing timestamps
+  from scheduler cadence or treat unfinished observations as zero.
+
+Two historical 0.4.31 observations measured reply_detected → consumed at
+746.844425 s and 2486.045887 s. At observation time, one continuing inquiry was
+paused by a formal reservation; the other was CONSUMED with continuation=null.
+These intervals do not measure pure business idle time or establish a cause;
+activity and ownership evidence must be assessed separately. Two cases do not
+establish representative p50/p95, and these observations are not 0.4.32 live
+validation. Keep existing business episodes unchanged when collecting metrics.
 
 ## Queues and per-session acceptance
 
@@ -238,8 +292,19 @@ The launchd job runs at 60-second intervals with a 256-enrollment cap and a
 scan fairly. It only updates file requests and reads their bound file replies.
 It never reads a transcript or legacy idle binding, sends native/terminal input,
 reconciles a pending send, reopens operator stop or supplies a foreground identity.
-Only genuine episode changes are archived; UNKNOWN and terminal_pending are
-preserved. A bound reply ends the episode; a TASK reply still requires a formal pack.
+UNKNOWN and terminal_pending are preserved, including when new file markers are
+issued. A bound reply ends an ordinary episode; continuing replies await explicit
+consumption. A TASK reply still requires a formal pack.
+
+The scheduler reads its previous rotation cursor before full-release verification.
+If reading that cursor times out, it preserves the original STATUS bytes and
+writes LAST-ERROR.json separately. Later budget failures preserve the last
+visited enrollment, so the next sweep can continue after it. `phase`,
+`phase_seconds`, per-episode `duration_seconds` and `pending_enrollment` identify
+where a sweep stopped. `file_posts_complete=false` means returned counts are
+partial: a tick may have committed files before its return was interrupted.
+Do not interpret zero partial posts as proof of no execution. Source checks,
+the 10-second budget and original controller ownership remain unchanged.
 
 Check `executor-reask-scheduler-v1/STATUS.json` and the exact enrollment's
 last_execution separately from job registration. A file-only inquiry does not
@@ -247,6 +312,128 @@ wake an idle supervisor. Supported PostToolUse context exposes it at a real tool
 boundary, and the supervisor must read the body and reply. Distinguish job
 installation, enrollment, execution, file exposure, body reading, native input
 and business acceptance. Ordinary tools and Stop remain available on every error.
+
+<a id="candidate-cross-release-file-contract"></a>
+
+### Cross-release file contract
+
+In 0.4.32, the approved CURRENT scheduler uses its own
+`executor_reask_protocol.py` interpreter. Cross-release support covers only the
+reviewed v2 producers `0.4.28-ae66245771d0`, `0.4.30-ff75100795a9` and
+`0.4.31-79ae83e9d5da`. Verify the trusted read-only original MANIFEST bytes and
+every actual member's hash, size, executable mode and read-only status, plus all
+six original controller members and the issuer scheduler pin as a complete
+combination. A version string, descriptor or canonical path
+alone is insufficient. Read old pins only; never import or execute old modules.
+CURRENT's own state format remains supported behind its full approval gate;
+unknown historical v3 producers are not supported by a matching descriptor.
+
+Match the complete enrollment binding and registration token to the live state;
+legacy tokenless states match only tokenless records. An existing continuation
+must be structurally valid and contain the exactly equal complete original
+controller. A v2 state may lack a top-level controller only when consistent
+original enrollment/continuation evidence supplies it. Compatibility never
+substitutes for authentication, authorization, stop or formal ownership checks.
+
+Before the first cross-release write, retain one complete snapshot of the raw
+original state and enrollment, including absence. Keep original controllers,
+UNKNOWN, terminal_pending, ask evidence and old journals; ordinary bounded file
+history can continue without erasing that snapshot. File ticks cannot transport,
+read Tail/transcripts or legacy idle bindings, consume replies, reconcile pending
+input, or create/update terminal_pending. No background terminal/native input or
+idle-model wakeup is authorized.
+
+### Registration commit and recovery
+
+`start` checks CURRENT approval, the authenticated live pair, capacity, exact
+binding, authorization and formal occupancy before changing active state or
+channels. Authorization/boundary previews use `publish=False` on deep copies.
+Registry operations take the registry lock before the caller lock and reread
+their inputs under those locks.
+
+A same-supervisor formal reservation created before a new episode also rejects
+`start`, for both ordinary and continuing inquiries, including `--file-only`.
+Rejection leaves the original marker and any existing state or enrollment intact
+and performs no initial tick. Existing enrolled episodes instead follow the
+pause and bound-reply rules below; creating a replacement is not pause recovery.
+
+A PREPARING envelope retains the original active record and proposed enrollment,
+with a pinned intent and complete preimages. The single commit point is live
+state replacement with the matching `registration.token`; PREPARING alone is not
+an enrolled WAITING episode. Recovery verifies the envelope's original INDEX
+byte hash and all five snapshot members: `intent.json`, `previous-state.json`,
+`previous-enrollment.json`, `previous-stop.json` and `prepared-state.json`.
+Declared absent members must still be absent. Changed intent, INDEX, preimages or
+member sets are rejected; recomputing an INDEX's own bytes/SHA fields is no proof.
+
+- Before the live token commit, failure reports `REGISTRATION_UNCOMMITTED` and
+  does not tick or replace the old state/channel. A sweep verifies the original
+  intent and restores the exact old enrollment. For a failed first registration,
+  it restores ABSENT enrollment without creating a state or sending anything.
+- If state replacement succeeded before fsync or postcommit work failed, report
+  `COMMITTED_RECOVERY_REQUIRED`. Complete that same transaction idempotently;
+  never roll back visible committed state or create another episode as recovery.
+  Retiring an old episode's channel must not overwrite a newer episode's channel.
+
+Only a record selected by the state's token can authorize scheduling. A FINISHED
+record can support terminal-state evidence; it cannot restore WAITING. A missing
+or failed registration is visible failure, not permission to send or claim that a
+background runner is active.
+
+Explicit `start --file-only` and transcript channels are mutually exclusive.
+File registration, a scheduler tick and an actual automatic hook invocation
+are separate observations. The original model must still read the complete
+bound reply and consume its exact SHA; no file-only operation wakes it.
+
+### Explicit registration of an existing episode
+
+The original executor may use `executor_reask.py enroll-existing --episode ID
+--enrollment-sha256 SHA` after foreground authentication. ID is the exact existing
+episode; SHA is the hash of the original raw enrollment bytes, or literal
+`ABSENT` only when no enrollment exists. Preserve old records before replacing
+the enrollment. This operation keeps the original controller, UNKNOWN and
+pending/history, and does not create an episode, tick, consume or send.
+
+A new 0.4.30 episode beside a stale 0.4.28 enrollment for a different supervisor
+is not a matching pair and must not auto-migrate. Explicit replacement requires
+the original executor's authenticated intended binding and the exact old SHA.
+Changed SHA, invalid authorization, formal occupancy, STOPPED or finished work
+rejects enrollment; compatibility cannot grant successor ownership.
+
+## Formal reservation boundary
+
+Version 0.4.32 applies this boundary before file compatibility checks, both to
+continuing inquiries and ordinary WAITING, including old 0.4.27 episodes that
+CURRENT cannot file-tick. A valid reservation must bind the original caller and
+workspace. Same-supervisor reservations pause inquiries. A legitimate different
+supervisor's reservation must be newer than the episode to end the old inquiry
+with persistent `STOPPED / FORMAL_OWNER_CHANGED`. It does not migrate the old
+controller, settle a callback or grant the successor old task scope.
+
+A same-supervisor pause blocks new requests, not discovery of the already-bound
+reply. The reply may become ANSWERED while the reservation remains. Only the
+authenticated original executor through its original controller may consume it;
+consumption does not clear the pause or issue a request before matching RELEASE.
+The same rule applies to reviewed cross-release file scheduling. Validate it
+separately from registration, actual scheduler execution, automatic hooks and
+two real continuing rounds in the original sessions.
+
+Only the matching supervisor/caller/workspace and exact collaboration/task
+RELEASE removes its reservation; remaining reservations or ended authorization
+still prevent resumption. Marker disappearance, TTL expiry and heartbeat do not
+release or confer takeover authority. Unrelated, malformed or older foreign
+reservations have no effect. Noncontinuing ANSWERED/CONSUMED and STOPPED episodes
+are never revived. Preserve original controller, UNKNOWN and pending evidence.
+
+CURRENT harness arm and disarm serialize marker/reservation changes under the
+shared caller locks; disarm verifies the exact marker before RELEASE and unlink.
+Heartbeat takes nonblocking locks, rereads the marker and never recreates it after
+disarm. Marker writers take caller locks only; registry users keep registry →
+caller order. Old writers that do not take these locks remain outside this race
+guarantee. Ordinary tools and workflow hooks remain nonblocking.
+
+Reservation is not native dispatch evidence or business acceptance.
+TASK/DISPATCHED/ACK mailbox text alone does not dispatch or reserve work.
 
 ## Continuing authorization (0.4.28)
 
@@ -266,16 +453,33 @@ body and calls `consume --reply-sha256 SHA`. This authenticated foreground act
 records `detected_epoch` and `consumed_epoch` in a durable receipt. A timer, file
 mtime, manual test or supervisor write is never labeled body consumption.
 
+The current `consume` CLI also returns an invocation-specific `consume_result`.
+`REPLY_CONSUMED` has `consumed=true`, the receipt path, original marker, body SHA
+and consumed time; a continuing episode may already be `WAITING_REPLY` again.
+`NOT_ANSWERED`, `NO_EPISODE`, `STOPPED` and `ORIGINAL_CONTROLLER_REQUIRED` have
+`consumed=false` and exit code 2. A reservation is reported separately because
+an already detected reply can be consumed while requests remain paused. This
+result is not persisted in the episode or reused by a later status/tick. A
+repeated call after consumption cannot claim a new acknowledgement. Old pinned
+controllers retain their original output; verify their actual receipt and
+consumption fields instead of treating exit code 0 as proof.
+
+File compatibility does not let CURRENT consume an old controller's reply.
+Except for operator stop, a controller mismatch returns
+`ORIGINAL_CONTROLLER_REQUIRED` before authorization, receipt or state writes.
+Consumption requires the authenticated original executor and original controller.
+
 After consumption the same authorized episode resumes, no earlier than the
 existing 60-second cadence and the reply's next due time. Each new inquiry has a
 new marker. Previously consumed rounds cannot close it again. An elapsed deadline
 allows a new inquiry; it never proves a dependency completed. No catch-up burst
-occurs after a delayed sweep. This does not promise model response within60seconds.
+occurs after a delayed sweep. This does not promise model response within 60 seconds.
 
-Formal harness task reservations pause inquiries before input; reservation is
-not native dispatch evidence. Releasing that exact child reservation resumes the
-still-authorized overall lifecycle. TASK/DISPATCHED/ACK mailbox text alone does
-not dispatch or pause work. Foreign/mismatched reservations have no effect.
+The [formal reservation boundary](#formal-reservation-boundary) pauses on the
+same supervisor's reservation and ends old inquiries on a legitimate newer
+supervisor's reservation. Only exact release can resume a still-authorized paused
+lifecycle; the former blanket rule that all foreign reservations are ineffective
+does not apply to a valid new formal owner.
 For overall completion, explicit stop or authorization withdrawal, use
 `stop --reason OVERALL_TASK_COMPLETE` (or the applicable operator reason). Stop
 works even while a reply awaits consumption. An expired/revoked authorization
