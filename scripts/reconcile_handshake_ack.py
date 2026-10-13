@@ -3,7 +3,7 @@
 
 Default: bounded, read-only observation. --apply is restricted to the original
 supervisor by the original controller's live identity gate. It archives the
-expired receipt, updates only the original handshake ACK, and runs the original
+terminal receipt, updates only the original handshake ACK, and runs the original
 validator. Native notice reception and business acceptance remain separate.
 """
 import argparse
@@ -208,6 +208,33 @@ def aggregate_rows(rows):
     return receipt
 
 
+STRANDED_DRAFT_ERROR = 'DRAFT_NOT_READY: original paste preserved; no submission key sent'
+
+
+def is_stranded_draft_row(row):
+    return (row.get('lifecycle') == 'REJECTED'
+            and row.get('submission_state') == 'STRANDED_IN_COMPOSE'
+            and row.get('error') == STRANDED_DRAFT_ERROR
+            and row.get('dispatch_error') == STRANDED_DRAFT_ERROR
+            and 'dispatch_submitted_at' in row
+            and row['dispatch_submitted_at'] is None)
+
+
+def require_stranded_draft_attempt(row, attempt):
+    if row.get('lifecycle') != 'REJECTED':
+        return
+    events = attempt.get('events')
+    phases = ([event.get('phase') if isinstance(event, dict) else None
+               for event in events] if isinstance(events, list) else [])
+    if (not is_stranded_draft_row(row)
+            or attempt.get('phase') != 'DRAFT_OBSERVATION'
+            or attempt.get('error') != STRANDED_DRAFT_ERROR
+            or phases[:2] != ['PASTE_INTENT', 'PASTED']
+            or not phases[2:]
+            or any(phase != 'DRAFT_OBSERVATION' for phase in phases[2:])):
+        raise ValueError('ACK_ORIGINAL_STRANDED_DRAFT_HISTORY_REQUIRED')
+
+
 def validate_panel(harness, native, receipt, gate, binding):
     rows = receipt.get('executors')
     members = harness._gate_executors(gate)
@@ -238,7 +265,7 @@ def validate_panel(harness, native, receipt, gate, binding):
                     or row.get('ack_response_marker') is not True):
                 raise ValueError('ACK_ORIGINAL_PANEL_ACK_INVALID')
         elif (row.get('executor_ack') is not False or row.get('status') != 'FAIL'
-              or row.get('lifecycle') != 'EXPIRED'
+              or not (row.get('lifecycle') == 'EXPIRED' or is_stranded_draft_row(row))
               or native._timestamp(row.get('terminal_error_at')) is None):
             raise ValueError('ACK_RECONCILE_REQUIRES_COMPLETE_TERMINAL_PANEL')
     if receipt != aggregate_rows(rows):
@@ -526,6 +553,7 @@ def reconcile(args, modules=None):
                 if observation.digest(originals[receipt_path][0]) != args.receipt_sha256:
                     raise ValueError('ACK_ORIGINAL_RECEIPT_CHANGED')
                 rows, selected = validate_panel(harness, native, receipt, gate, binding)
+                require_stranded_draft_attempt(selected, attempt)
                 observed = observation.observe(args, (bridge, native, evidence, journal))
                 ack = scan_ack(native, binding, text, selected['ack_line_expected'], intent_at, fence)
                 result.update(observation=observed, ack=ack)
@@ -667,7 +695,7 @@ def main(argv=None):
     parser.add_argument('--lines', type=observation.bounded_integer(1, 2000), default=200)
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--original-harness-exited', action='store_true',
-                        help='original supervisor attests its timed-out harness has exited; required for apply')
+                        help='original supervisor attests its terminal harness has exited; required for apply')
     args = parser.parse_args(argv)
     try:
         result = reconcile(args)

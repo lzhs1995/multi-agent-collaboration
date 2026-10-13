@@ -25,26 +25,32 @@ class LegacyPausedReplyTests(unittest.TestCase):
     make_release = protocol_fixtures.ProtocolTests.make_release
     write_pin = protocol_fixtures.ProtocolTests.write_pin
 
-    def legacy_paused(self, *, continuing=True):
+    def legacy_paused(self, *, continuing=True, modern=False):
         state, body, mailbox = self.paused_wait(continuing=continuing)
-        name = '0.4.31-79ae83e9d5da'
+        name = '0.4.32-c7338a400bf4' if modern else '0.4.31-79ae83e9d5da'
         self.base = self.home / '.local/share/multi-agent-collaboration/releases'
         source, pins, raw = self.make_release(name)
         self.stack.enter_context(patch.dict(protocol.LEGACY, {
             name: {key: pins[key]['sha256'] for key in (*protocol.FILES, protocol.SCHEDULER)}}))
         self.stack.enter_context(patch.dict(protocol.LEGACY_MANIFESTS, {name: digest(raw)}))
         original = identity(source, pins)
-        state['version'] = 2
-        for key in ('controller', 'file_protocol', 'registration'):
-            state.pop(key, None)
+        state['version'] = 3 if modern else 2
+        if modern:
+            state['controller'] = copy.deepcopy(original)
+        else:
+            for key in ('controller', 'file_protocol', 'registration'):
+                state.pop(key, None)
         if continuing:
             state['continuation']['controller'] = copy.deepcopy(original)
         path = scheduler.enrollment_path(CALLER)
         state['file_schedule'] = dict(enrollment=str(path), registered_epoch=1000.)
-        record = dict(schema=scheduler.LEGACY_SCHEMA, status='ENROLLED',
+        record = dict(schema=scheduler.SCHEMA if modern else scheduler.LEGACY_SCHEMA, status='ENROLLED',
                       authorization='EXPLICIT_REASK_START', uid=os.getuid(),
                       binding=scheduler.binding(state), live_binding=self.live(),
                       controller=original, scheduler=issuer(source, pins), enrolled_epoch=1000.)
+        if modern:
+            record.update(registration=copy.deepcopy(state['registration']),
+                          file_protocol=protocol.descriptor())
         reask.save(state)
         ready.write_json(path, record)
         self.state_bytes = reask.state_path(CALLER).read_bytes()
@@ -58,19 +64,25 @@ class LegacyPausedReplyTests(unittest.TestCase):
                     'transcript', 'tail_position', 'continuation', 'file_schedule'):
             self.assertEqual(after[key], before[key], key)
         for key in ('controller', 'registration', 'file_protocol'):
-            self.assertNotIn(key, after)
+            if key in before:
+                self.assertEqual(after[key], before[key], key)
+            else:
+                self.assertNotIn(key, after)
         current = ready.read_json(scheduler.enrollment_path(CALLER))
         for key in ('schema', 'authorization', 'binding', 'live_binding', 'controller',
                     'scheduler', 'enrolled_epoch'):
             self.assertEqual(current[key], record[key], key)
+        for key in ('registration', 'file_protocol'):
+            if key in record:
+                self.assertEqual(current[key], record[key], key)
         snapshot = (reask.root() / 'legacy-snapshots' / ready.digest(CALLER)
                     / ready.digest(before['episode_id']))
         self.assertEqual((snapshot / 'state.json').read_bytes(), self.state_bytes)
         self.assertEqual((snapshot / 'enrollment.json').read_bytes(), self.enrollment_bytes)
         self.transport.assert_not_called()
 
-    def test_reviewed_031_paused_reply_is_discovered_without_code_execution_or_consume(self):
-        original, record, body, _mailbox = self.legacy_paused()
+    def check_paused_discovery(self, *, modern=False):
+        original, record, body, _mailbox = self.legacy_paused(modern=modern)
         with patch('importlib.util.spec_from_file_location', side_effect=AssertionError('old import')), \
                 patch('subprocess.run', side_effect=AssertionError('old process')):
             result = scheduler.sweep(now=1002.)
@@ -88,6 +100,12 @@ class LegacyPausedReplyTests(unittest.TestCase):
         self.assertEqual(scheduler.sweep(now=2000.)['file_posts'], 0)
         self.assert_original_preserved(original, record, reask.load(CALLER))
         self.assertEqual(ready.read_json(scheduler.enrollment_path(CALLER))['status'], 'ENROLLED')
+
+    def test_reviewed_031_paused_reply_is_discovered_without_code_execution_or_consume(self):
+        self.check_paused_discovery()
+
+    def test_reviewed_032_paused_v3_reply_keeps_original_registration_and_consumer(self):
+        self.check_paused_discovery(modern=True)
 
     def test_reviewed_031_paused_reply_keeps_exact_binding(self):
         original, record, body, mailbox = self.legacy_paused()
