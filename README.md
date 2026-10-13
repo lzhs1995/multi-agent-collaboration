@@ -4,7 +4,11 @@ Version **0.4.33** also retains file scheduling for the fully verified 0.4.32
 v3 producer and v2 issuer, including its original registrations of reviewed
 older controllers. Complete manifest and descriptor checks preserve the
 original controller and pending evidence; consumption remains executor-owned.
-The full 0.4.33 offline suite passed 1,899 tests with zero failures or errors.
+It also provides original-supervisor ACK reconciliation for a handshake rejected
+after pasting without submission. Exact native ACK proof and the original
+controller remain required; see [late ACK reconciliation](references/late-handshake-ack.md).
+The 35 ACK behavior tests pass locally and through the original 0.4.32 controller;
+the final combined offline suite passed 1,906 tests with zero failures or errors.
 
 Version **0.4.32** adds CURRENT's reviewed cross-release v2 file interpreter,
 recoverable registration transactions and explicit registration of an existing

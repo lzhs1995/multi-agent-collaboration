@@ -10,6 +10,16 @@ identity gates, receipt writer and validator. It does not modify or migrate the
 original controller. Compatibility is tested against the complete 0.4.31 release;
 an unsupported original release is refused rather than silently upgraded.
 
+Version 0.4.33 also supports the measured 0.4.32 terminal row
+`REJECTED / DRAFT_NOT_READY / STRANDED_IN_COMPOSE`. The original attempt must
+contain one `PASTE_INTENT`, one `PASTED` and only subsequent `DRAFT_OBSERVATION`
+events, with the matching draft error and no submitted timestamp. It still needs
+the exact later assistant ACK in the bound original session after the original
+fence. A screen ACK alone cannot qualify. Other rejection states remain refused.
+The original supervisor runs the new coordinator with `--controller` pointing
+to the complete original release; it must not edit that release or rewrite the
+failed receipt to `EXPIRED` to use this route.
+
 Pass `--controller`, `--receipt`, `--receipt-sha256`, `--attempt`,
 `--attempt-sha256` and `--text-file`. The last file contains the exact original
 wire bytes, not the long referenced body. A reconstructed reference notice is
@@ -20,7 +30,7 @@ substitute for the original supervisor.
 
 Apply requires preview `READY_ZERO_INPUT_ACK_RECONCILIATION`, the same pinned
 inputs and `--apply --original-harness-exited`. The original supervisor must
-verify that its timed-out harness has actually exited. The new directory lock
+verify that its terminal harness has actually exited. The new directory lock
 cannot coordinate an old harness that never used it. The apply path checks the
 original supervisor's authenticated foreground thread, original delivery lock,
 receipt directory, full executor panel and original ACK record after its fence.
@@ -42,7 +52,7 @@ user record. Validation PASS does not dispatch or accept business work; the
 original supervisor must finalize the original pack and use its dedicated
 `TASK_PACK_V2` route under the same controller.
 
-The 28 behavior cases cover wrong sessions/nonces/roles/fences, missing native
+The behavior cases cover wrong sessions/nonces/roles/fences, missing native
 ACKs, preview without writes, original owner identity, multi-executor aggregation,
 locks, symlinks, concurrent changes, partial archives, writer failures, repeated
 calls and marker heartbeat effects. Their real file/journal/parser/writer behavior

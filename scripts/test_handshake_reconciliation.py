@@ -196,6 +196,109 @@ class HandshakeReconciliationTests(unittest.TestCase):
         self.assertTrue(result['observation']['native_message']['confirmed'])
         self.assertTrue(result['ack']['observed'])
 
+    def prepare_stranded_draft(self):
+        error = 'DRAFT_NOT_READY: original paste preserved; no submission key sent'
+        self.rows[0].update(lifecycle='REJECTED', submission_state='STRANDED_IN_COMPOSE',
+                            dispatch_submitted_at=None, error=error, dispatch_error=error)
+        self.attempt.update(phase='DRAFT_OBSERVATION', error=error)
+        self.attempt['events'].extend([
+            dict(phase='PASTED', at_epoch=time.time()),
+            dict(phase='DRAFT_OBSERVATION', at_epoch=time.time())])
+        self.save()
+
+    def test_stranded_draft_preview_with_late_ack_is_read_only(self):
+        self.prepare_stranded_draft()
+        self.fixture.append_queued(self.text)
+        self.append_ack()
+        before = self.files()
+        result = self.run_reconcile()
+        self.assertEqual(result['status'], 'READY_ZERO_INPUT_ACK_RECONCILIATION', result)
+        self.assertFalse(result['observation']['native_message']['confirmed'])
+        self.assertEqual(result['observation']['original_receipt_lifecycle'], 'REJECTED')
+        self.assertEqual(before, self.files())
+
+    def test_stranded_draft_apply_preserves_submission_and_original_attempt(self):
+        self.prepare_stranded_draft()
+        self.append_ack()
+        original = self.receipt_path.read_bytes()
+        attempt = self.attempt_path.read_bytes()
+        result = self.run_reconcile(apply=True)
+        self.assertEqual(result['status'], 'ACK_RECONCILED', result)
+        self.assertEqual(result['validation']['status'], 'PASS')
+        receipt = json.loads(self.receipt_path.read_bytes())
+        self.assertTrue(receipt['executor_ack'])
+        self.assertEqual(receipt['submission_state'], 'STRANDED_IN_COMPOSE')
+        self.assertIsNone(receipt['dispatch_submitted_at'])
+        self.assertEqual(receipt['dispatch_error'], self.rows[0]['dispatch_error'])
+        self.assertEqual(receipt['late_ack_reconciliation']['previous']['lifecycle'], 'REJECTED')
+        self.assertFalse(receipt['late_ack_reconciliation']['native_notice']['confirmed'])
+        self.assertEqual(receipt['late_ack_reconciliation']['business_acceptance'], 'NOT_EVALUATED')
+        self.assertEqual((Path(result['archive']) / 'handshake-receipt.json.original').read_bytes(), original)
+        self.assertEqual(self.attempt_path.read_bytes(), attempt)
+        self.assertEqual(result['receipt_writes'], 1)
+
+    def test_stranded_draft_screen_ack_alone_does_not_write(self):
+        self.prepare_stranded_draft()
+        before = self.files()
+        result = self.run_reconcile(apply=True)
+        self.assertEqual(result['status'], 'ACK_NOT_VISIBLE', result)
+        self.assertEqual(result['receipt_write_attempts'], 0)
+        self.assertEqual(before, self.files())
+
+    def test_other_rejected_states_cannot_use_stranded_draft_reconciliation(self):
+        self.prepare_stranded_draft()
+        self.append_ack()
+        original = copy.deepcopy(self.rows[0])
+        for change in [dict(error='another rejection'), dict(dispatch_error='changed'),
+                       dict(submission_state='UNKNOWN'), dict(lifecycle='PENDING'),
+                       dict(dispatch_submitted_at=datetime.now(timezone.utc).isoformat())]:
+            with self.subTest(change=change):
+                self.rows[0] = dict(original, **change)
+                self.save()
+                self.assert_unavailable('COMPLETE_TERMINAL_PANEL')
+
+    def test_stranded_draft_requires_original_paste_history_without_submit(self):
+        self.prepare_stranded_draft()
+        self.append_ack()
+        original = copy.deepcopy(self.attempt)
+        for phase in ['SUBMIT_INTENT', 'SUBMITTED', 'RECOVERY_SUBMIT_INTENT',
+                      'PASTE_INTENT', 'PASTED', None]:
+            with self.subTest(phase=phase):
+                self.attempt = copy.deepcopy(original)
+                self.attempt['events'].append(dict(phase=phase, at_epoch=time.time()))
+                self.save()
+                self.assert_unavailable()
+        for change in [dict(phase='PASTED'), dict(error='another error'),
+                       dict(events=original['events'][:1])]:
+            with self.subTest(change=change):
+                self.attempt = dict(copy.deepcopy(original), **change)
+                self.save()
+                self.assert_unavailable('STRANDED_DRAFT_HISTORY_REQUIRED')
+
+    def test_stranded_draft_still_requires_original_supervisor(self):
+        self.prepare_stranded_draft()
+        self.append_ack()
+        snapshot = copy.deepcopy(self.caller.return_value)
+        snapshot[3]['foreground']['thread_id'] = 'maintenance-successor'
+        self.caller.return_value = snapshot
+        self.assert_unavailable('SUPERVISOR_THREAD_CHANGED')
+
+    def test_other_rejected_panel_member_remains_failed_after_selected_ack(self):
+        self.prepare_stranded_draft()
+        self.append_ack()
+        other = dict(self.rows[0], ordinal=2, executor='other-target', ack_nonce='12345678',
+            ack_line_expected=f'PREFLIGHT_ACK|{self.task}|claude:identity|READY|INLINE|12345678')
+        self.rows.append(other)
+        self.gate['executors'].append(dict(surface_uuid='other-target', surface_ref='other-target',
+            provider='claude', pane_ref='pane:3'))
+        self.save()
+        result = self.run_reconcile(apply=True)
+        self.assertEqual(result['status'], 'ACK_RECONCILED', result)
+        self.assertEqual(result['validation']['status'], 'FAIL')
+        receipt = json.loads(self.receipt_path.read_bytes())
+        self.assertEqual(receipt['executors'][1], other)
+        self.assertFalse(receipt['all_executors_acked'])
+
     def test_screen_ack_without_bound_assistant_record_cannot_apply(self):
         before = self.files()
         result = self.run_reconcile(apply=True)

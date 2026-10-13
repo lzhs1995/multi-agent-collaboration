@@ -8,7 +8,15 @@
   suffixes, units and incomplete borders still refuse input; recognizing
   the footer does not permit ordinary messages during compaction or reconnect.
 - Add a synthetic observed-layout fixture and offline parser/delivery tests.
-- Final offline validation: 1,899 tests passed with zero failures or errors.
+- Reconcile a genuine late ACK after the original handshake ended in
+  `REJECTED / DRAFT_NOT_READY / STRANDED_IN_COMPOSE`. Require the exact
+  original paste/observation history with no submission, the original
+  supervisor and a matching native assistant ACK after the original fence.
+  Preserve original evidence, submission state and controller; do not send input
+  or promote a queued notice to native reception.
+- Targeted ACK validation: all 35 behavior tests pass both locally and through
+  the complete original 0.4.32 controller. Final combined offline validation:
+  1,906 tests passed with zero failures or errors.
 - Preserve file scheduling for the fully verified 0.4.32 v3 producer and v2
   issuer after CURRENT advances. Pin its complete manifest, controller and
   scheduler combination and reviewed descriptor. Historical re-enrollment

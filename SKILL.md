@@ -14,7 +14,8 @@ only below complete composer borders, preserving drafts and ordinary-input
 refusal during compaction. Retains file scheduling across reviewed releases, recoverable
 registration, formal reservation boundaries, a quoted-launch classification fix,
 recovery after proven zero-input preflight exhaustion and original-controller
-late ACK reconciliation. Final source validation is recorded in CHANGELOG. Installation and
+late ACK reconciliation, including a proven stranded draft with no submission.
+Final source validation is recorded in CHANGELOG. Installation and
 active-client adoption require separate live evidence. The 0.4.31 maintenance
 notice recovery contract is retained.
 
@@ -444,11 +445,14 @@ client; running a hook manually proves only the invoked test.
 
 ## Consume pending supervisor requests and repair zero-input notices
 
-For an expired original handshake whose genuine ACK arrived later, use
+For an expired original handshake, or the exact supported stranded-draft
+rejection whose genuine ACK arrived later, use
 [zero-input ACK reconciliation](references/late-handshake-ack.md). Preview is
 read-only; only the original authenticated supervisor may apply it after the
-original harness exits. It retains the complete original controller, timeout
-and dispatch evidence. An ACK never manufactures native notice reception.
+original harness exits. It retains the complete original controller and terminal
+receipt and dispatch evidence. A rejected draft additionally requires the original
+paste/observation history without submission. An ACK never manufactures native
+notice reception.
 
 At a major tool boundary, before a new long batch, and before reporting progress,
 inspect the current supervisor surface for queued follow-up inputs. Verify each
