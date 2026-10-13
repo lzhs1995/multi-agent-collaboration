@@ -1,0 +1,50 @@
+# Reconcile a late handshake ACK
+
+An expired observation window does not invalidate a genuine later ACK. Do not
+rerun preflight or handshake: those operations can create a different nonce.
+Keep the original session, task, provider, receipt, dispatch attempt and payload.
+
+`scripts/reconcile_handshake_ack.py` is an explicit coordinator. It verifies the
+complete immutable original release and imports that release's native reader,
+identity gates, receipt writer and validator. It does not modify or migrate the
+original controller. Compatibility is tested against the complete 0.4.31 release;
+an unsupported original release is refused rather than silently upgraded.
+
+Pass `--controller`, `--receipt`, `--receipt-sha256`, `--attempt`,
+`--attempt-sha256` and `--text-file`. The last file contains the exact original
+wire bytes, not the long referenced body. A reconstructed reference notice is
+usable only when its complete SHA matches the original receipt and attempt.
+Default preview is bounded and read-only. Both live observation and apply must
+pass the original controller's caller rules; a maintenance coordinator is not a
+substitute for the original supervisor.
+
+Apply requires preview `READY_ZERO_INPUT_ACK_RECONCILIATION`, the same pinned
+inputs and `--apply --original-harness-exited`. The original supervisor must
+verify that its timed-out harness has actually exited. The new directory lock
+cannot coordinate an old harness that never used it. The apply path checks the
+original supervisor's authenticated foreground thread, original delivery lock,
+receipt directory, full executor panel and original ACK record after its fence.
+It archives the original receipt and supporting evidence before calling the
+original writer and validator. A matching active marker can receive the original
+writer's heartbeat side effect; the result records that separately.
+
+Retain a partial archive or interrupted write. Do not delete it to retry. A
+repeat call can report an already reconciled result only when the original pins,
+archive and current result all agree. Changed pins, incomplete evidence or
+uncertain concurrent writes require inspection, not a replacement attempt.
+
+Queued command attachments, body reading, an exact assistant ACK and a complete
+native user receipt are different observations. Original 0.4.31 handshake
+semantics permit a valid bound ACK while retaining an unconfirmed dispatch. This
+entrypoint preserves that distinction and does not upgrade the notice receipt.
+An observed attachment is not proof that the client will never emit a native
+user record. Validation PASS does not dispatch or accept business work; the
+original supervisor must finalize the original pack and use its dedicated
+`TASK_PACK_V2` route under the same controller.
+
+The 28 behavior cases cover wrong sessions/nonces/roles/fences, missing native
+ACKs, preview without writes, original owner identity, multi-executor aggregation,
+locks, symlinks, concurrent changes, partial archives, writer failures, repeated
+calls and marker heartbeat effects. Their real file/journal/parser/writer behavior
+is also run with the complete original controller; external process and terminal
+observations remain fixtures, not claims of live receiver adoption.

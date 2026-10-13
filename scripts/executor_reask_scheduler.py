@@ -593,7 +593,19 @@ def sweep(*, manifest=None, now=None):
     result = dict(status='SWEPT', label=LABEL, at_epoch=time.time() if now is None else now,
                   input_operations=0, file_posts=0, episodes=[],
                   hook_exposure_proven=False, model_reading_proven=False,
-                  native_reception_proven=False)
+                  native_reception_proven=False, phase='LOCK', phase_seconds={})
+    phase_started = started
+    cursor_loaded = False
+
+    def phase(name):
+        nonlocal phase_started
+        current = time.monotonic()
+        previous = result['phase']
+        result['phase_seconds'][previous] = (
+            result['phase_seconds'].get(previous, 0) + max(0, current - phase_started))
+        result['phase'] = name
+        phase_started = current
+
     secure_directory(root())
     fd = os.open(root() / 'sweep.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+') as lock:
@@ -603,15 +615,21 @@ def sweep(*, manifest=None, now=None):
             return dict(result, status='SCHEDULER_BUSY')
         try:
             with ready.runtime_limit(MAX_SWEEP_SECONDS):
-                current = approved_release(manifest)
-                result['source'] = current['source']
-                execution = dict(at_epoch=result['at_epoch'], source=current['source'],
-                                 scheduler=provenance())
+                # Preserve rotation before potentially slow full-release I/O.
+                # An early verification deadline must not reset a prior cursor.
+                phase('LOAD_CURSOR')
                 previous = ready.read_json(root() / 'STATUS.json') or {}
                 last = previous.get('last_enrollment', '')
                 if not isinstance(last, str):
                     last = ''
                 result['last_enrollment'] = last
+                cursor_loaded = True
+                phase('VERIFY_RELEASE')
+                current = approved_release(manifest)
+                result['source'] = current['source']
+                execution = dict(at_epoch=result['at_epoch'], source=current['source'],
+                                 scheduler=provenance())
+                phase('ENUMERATE')
                 directory = root() / 'enrolled'
                 paths = []
                 if directory.exists():
@@ -628,15 +646,29 @@ def sweep(*, manifest=None, now=None):
                     # Advance before work. A deadline inside a busy/slow caller
                     # must not starve everyone behind it on the next sweep.
                     result['last_enrollment'] = path.name
+                    result['pending_enrollment'] = path.name
+                    phase('EPISODE')
+                    row_started = time.monotonic()
                     row = _sweep_one(path, now, execution)
+                    row['duration_seconds'] = max(0, time.monotonic() - row_started)
                     result['file_posts'] += row['file_posts']
                     result['episodes'].append(row)
+                    result.pop('pending_enrollment', None)
+                phase('COMPLETE')
         except ready.WaitBudgetExpired:
             result['status'] = 'SWEEP_BUDGET_EXHAUSTED'
         except Exception as exc:
             result.update(status='SCHEDULER_FAILED', error_type=type(exc).__name__)
+        phase(result['phase'])
         result['duration_seconds'] = max(0, time.monotonic() - started)
-        ready.write_json(root() / 'STATUS.json', result)
+        # A tick may have committed files before the budget interrupted its
+        # return. Partial counters must never be presented as exact zero work.
+        result['file_posts_complete'] = result['status'] == 'SWEPT'
+        result['status_record_unchanged'] = not cursor_loaded
+        # If reading the legacy cursor itself timed out, retain its exact
+        # source bytes and publish failure separately for the next sweep.
+        target = 'STATUS.json' if cursor_loaded else 'LAST-ERROR.json'
+        ready.write_json(root() / target, result)
     return result
 
 

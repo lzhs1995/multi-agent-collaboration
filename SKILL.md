@@ -10,9 +10,9 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
 **Version: 0.4.32.** Adds file scheduling across reviewed releases, recoverable
-registration, formal reservation boundaries, a quoted-launch classification fix
-and explicit recovery after proven zero-input preflight exhaustion. The full
-offline suite passed 1,846 tests with zero failures or errors. Installation and
+registration, formal reservation boundaries, a quoted-launch classification fix,
+recovery after proven zero-input preflight exhaustion and original-controller
+late ACK reconciliation. Final source validation is recorded in CHANGELOG. Installation and
 active-client adoption require separate live evidence. The 0.4.31 maintenance
 notice recovery contract is retained.
 
@@ -440,6 +440,12 @@ acceptance records the callback and automatic hook invocation in the actual
 client; running a hook manually proves only the invoked test.
 
 ## Consume pending supervisor requests and repair zero-input notices
+
+For an expired original handshake whose genuine ACK arrived later, use
+[zero-input ACK reconciliation](references/late-handshake-ack.md). Preview is
+read-only; only the original authenticated supervisor may apply it after the
+original harness exits. It retains the complete original controller, timeout
+and dispatch evidence. An ACK never manufactures native notice reception.
 
 At a major tool boundary, before a new long batch, and before reporting progress,
 inspect the current supervisor surface for queued follow-up inputs. Verify each

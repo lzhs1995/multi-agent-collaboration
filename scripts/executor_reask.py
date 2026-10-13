@@ -898,7 +898,8 @@ def summary(state):
                 reply_consumed_epoch=state.get('reply_consumed_epoch'),
                 next_ask_epoch=state.get('next_due_epoch'), last_poll=state.get('last_poll'),
                 state_file=str(state_path(state['caller_surface_uuid'])))
-    for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent'):
+    for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent',
+                'consume_result'):
         if key in state:
             result[key] = state[key]
     return result
@@ -995,6 +996,8 @@ def main(argv=None):
                 state = dict(state, registration_observation=observation, input_operations=0)
     result = summary(state)
     print(json.dumps(result, ensure_ascii=False, indent=1))
+    if args.cmd == 'consume' and result.get('consume_result', {}).get('consumed') is not True:
+        return 2
     return 2 if result.get('outcome') in {
         'REGISTRATION_UNCOMMITTED', 'COMMITTED_RECOVERY_REQUIRED',
         'ORIGINAL_CONTROLLER_REQUIRED', 'UNSUPPORTED_FILE_PROTOCOL', 'EPISODE_BUSY',

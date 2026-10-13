@@ -68,6 +68,33 @@ class InboxTest(unittest.TestCase):
         ready.write_json(path, body)
         self.assertEqual(len(self.discover()), 1)
 
+    def test_frozen_full_request_can_reply_after_current_path_and_history_rotate(self):
+        import mac_harness as harness
+        with mock.patch.object(harness, '_ACTIVE_DIR', self.home / 'formal-task-markers'), \
+                mock.patch.object(ready, '_bridge', side_effect=AssertionError('no transport')):
+            reask.start(CALLER, SUP, 'slow-review', now=1., workspace=WORKSPACE)
+            state = reask.tick(CALLER, 2., file_only=True)
+            path = reask.inbox_path(state)
+            notice = self.discover(now=3.)[0]
+            raw, body = inbox.request_bytes(path)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), notice['request_sha256'])
+            frozen = self.home / 'request-read-once.json'
+            with frozen.open('xb') as handle:
+                handle.write(raw)
+            for index in range(1, reask.HISTORY + 5):
+                state = reask.tick(CALLER, 2. + index * reask.INTERVAL, file_only=True)
+            self.assertNotIn(body['marker'], [ask['marker'] for ask in state['asks']])
+            self.assertNotEqual(hashlib.sha256(path.read_bytes()).hexdigest(), notice['request_sha256'])
+            self.assertEqual(frozen.read_bytes(), raw)
+            reply = dict(json.loads(frozen.read_bytes())['reply_template'],
+                         trigger='The original complete request has been reviewed.')
+            ready.write_json(Path(body['reply_mailbox']), reply)
+            state = reask.tick(CALLER, state['next_due_epoch'], file_only=True)
+            self.assertEqual(state['state'], reask.ANSWERED)
+            self.assertEqual(state['reply']['marker'], body['marker'])
+            self.assertEqual(state['reply']['body'], reply)
+            self.assertEqual(state['terminal_attempts'], 0)
+
     def test_complete_reply_skips_notice_placeholder_is_not_a_reply(self):
         state, path = self.request()
         body = ready.read_json(path)

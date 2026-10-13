@@ -5,8 +5,8 @@ skills and global CLAUDE.md link here; they do not implement another sender or
 copy hook code. Pin one complete immutable release for each new task. An
 in-flight task keeps its original controller, task pack, journal and receipts.
 
-This reference describes **0.4.32** behavior. The full offline suite passed
-1,846 tests with zero failures or errors. Installation, actual scheduler
+This reference describes **0.4.32** behavior. See [CHANGELOG](../CHANGELOG.md)
+for the final offline validation. Installation, actual scheduler
 execution, automatic hooks and original-client adoption require separate live
 evidence; offline results do not establish them.
 
@@ -129,6 +129,17 @@ answer to the inquiry; dispatch still requires the formal task-pack contract.
 WAITING_DEPENDENCY, SOLO and BLOCKED require a concrete `trigger`; replace the
 template placeholder. `queued:true` or `received:false` never ends the episode.
 Late replies to issued markers remain valid after history rollover.
+
+The offered `REQUEST` path is a rotating current file, not an immutable archive.
+Read the complete bounded regular file once (the `supervisor_inbox.request_bytes`
+helper hashes and parses one stable file-descriptor read), verify the offered SHA,
+and save those exact bytes in an exclusive task-local snapshot before a long
+review. Build the reply from that snapshot's template and original mailbox; do
+not reopen the rotating current file to reconstruct the old reply. If the file
+changed before the first verified read, make no reply from the mismatched bytes
+and read a newly observed request. A later marker does not invalidate an earlier
+issued marker in the same unconsumed episode. The observer does not automatically
+archive every request or supply a separate reply-writing CLI.
 
 Before fresh dispatch to a reasking executor, the bound supervisor first writes
 the exact issued mailbox reply. The explicit runner then observes it and returns;
@@ -285,6 +296,16 @@ UNKNOWN and terminal_pending are preserved, including when new file markers are
 issued. A bound reply ends an ordinary episode; continuing replies await explicit
 consumption. A TASK reply still requires a formal pack.
 
+The scheduler reads its previous rotation cursor before full-release verification.
+If reading that cursor times out, it preserves the original STATUS bytes and
+writes LAST-ERROR.json separately. Later budget failures preserve the last
+visited enrollment, so the next sweep can continue after it. `phase`,
+`phase_seconds`, per-episode `duration_seconds` and `pending_enrollment` identify
+where a sweep stopped. `file_posts_complete=false` means returned counts are
+partial: a tick may have committed files before its return was interrupted.
+Do not interpret zero partial posts as proof of no execution. Source checks,
+the 10-second budget and original controller ownership remain unchanged.
+
 Check `executor-reask-scheduler-v1/STATUS.json` and the exact enrollment's
 last_execution separately from job registration. A file-only inquiry does not
 wake an idle supervisor. Supported PostToolUse context exposes it at a real tool
@@ -329,6 +350,12 @@ binding, authorization and formal occupancy before changing active state or
 channels. Authorization/boundary previews use `publish=False` on deep copies.
 Registry operations take the registry lock before the caller lock and reread
 their inputs under those locks.
+
+A same-supervisor formal reservation created before a new episode also rejects
+`start`, for both ordinary and continuing inquiries, including `--file-only`.
+Rejection leaves the original marker and any existing state or enrollment intact
+and performs no initial tick. Existing enrolled episodes instead follow the
+pause and bound-reply rules below; creating a replacement is not pause recovery.
 
 A PREPARING envelope retains the original active record and proposed enrollment,
 with a pinned intent and complete preimages. The single commit point is live
@@ -426,6 +453,17 @@ body and calls `consume --reply-sha256 SHA`. This authenticated foreground act
 records `detected_epoch` and `consumed_epoch` in a durable receipt. A timer, file
 mtime, manual test or supervisor write is never labeled body consumption.
 
+The current `consume` CLI also returns an invocation-specific `consume_result`.
+`REPLY_CONSUMED` has `consumed=true`, the receipt path, original marker, body SHA
+and consumed time; a continuing episode may already be `WAITING_REPLY` again.
+`NOT_ANSWERED`, `NO_EPISODE`, `STOPPED` and `ORIGINAL_CONTROLLER_REQUIRED` have
+`consumed=false` and exit code 2. A reservation is reported separately because
+an already detected reply can be consumed while requests remain paused. This
+result is not persisted in the episode or reused by a later status/tick. A
+repeated call after consumption cannot claim a new acknowledgement. Old pinned
+controllers retain their original output; verify their actual receipt and
+consumption fields instead of treating exit code 0 as proof.
+
 File compatibility does not let CURRENT consume an old controller's reply.
 Except for operator stop, a controller mismatch returns
 `ORIGINAL_CONTROLLER_REQUIRED` before authorization, receipt or state writes.
@@ -435,7 +473,7 @@ After consumption the same authorized episode resumes, no earlier than the
 existing 60-second cadence and the reply's next due time. Each new inquiry has a
 new marker. Previously consumed rounds cannot close it again. An elapsed deadline
 allows a new inquiry; it never proves a dependency completed. No catch-up burst
-occurs after a delayed sweep. This does not promise model response within60seconds.
+occurs after a delayed sweep. This does not promise model response within 60 seconds.
 
 The [formal reservation boundary](#formal-reservation-boundary) pauses on the
 same supervisor's reservation and ends old inquiries on a legitimate newer

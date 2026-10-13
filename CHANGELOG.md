@@ -1,5 +1,29 @@
 ## 0.4.32
 
+- Preserve the scheduler's rotation cursor before full-release verification.
+  A timeout while reading the cursor leaves the original STATUS bytes intact
+  and records LAST-ERROR separately. Report phase and per-episode durations,
+  the interrupted enrollment and incomplete file-post counts without weakening
+  the 10-second budget or source verification. Four targeted deadline and
+  partial-commit cases pass; live latency still requires separate evidence.
+- Distinguish each foreground consume call from the continuing episode state.
+  Return an explicit consumed result with receipt/body/time evidence on success;
+  unanswered, stopped, missing and foreign-controller attempts exit 2 without
+  claiming consumption. Preserve formal pauses and old controller semantics.
+- Treat Claude queue removal and queued-command attachments as pending client
+  evidence with no promise of a later native user record. Avoid competing
+  self-wakeups during a live dispatch; native Goal, loop and advisory evidence
+  remain separate.
+- Add explicit late ACK reconciliation through the complete original controller.
+  Only the original supervisor can apply after the expired harness exits; retain
+  timeout archives, dispatch uncertainty, locks and native ACK proof, and run the
+  original writer/validator without input. Test 28 behavior cases both locally
+  and with the complete original 0.4.31 controller.
+- Bound review work to its fixed question and adequate checks. Deliver a report
+  at the task boundary; do not reopen accepted work or repeat full regressions
+  while waiting for unrelated closeout. Measure consumption latency separately
+  from two successful continuing request/reply/consume/rearm rounds.
+
 - Interpret reviewed legacy v2 inquiry files in CURRENT's own code after full
   original manifest, controller-member and issuer-scheduler verification. Never
   load old modules; preserve controller, UNKNOWN, terminal_pending, journals and
@@ -47,7 +71,7 @@
   ask_count is no productivity score. Historical detected-to-consumed intervals
   establish neither pure idle time nor causation or live adoption.
 
-Validation: the full offline suite passed 1,846 tests with zero failures or
+Validation: the full offline suite passed 1,885 tests with zero failures or
 errors. Registration, actual scheduler execution, automatic hooks, full body
 reading and two real continuing request/reply/consume/rearm rounds each require
 separate live evidence. Native delivery, nonblocking hooks, no-resend behavior

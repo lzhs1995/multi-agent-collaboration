@@ -507,7 +507,11 @@ class ConsumeControllerTests(unittest.TestCase):
                 stack.enter_context(patch.object(
                     module, name, side_effect=AssertionError(f'rejected consume called {name}')))
             result = self.consume(CALLER, state['reply']['body_sha256'], now=1003.)
-        self.assertEqual(result, dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0))
+        self.assertEqual(result, dict(
+            outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0,
+            consume_result=dict(status='ORIGINAL_CONTROLLER_REQUIRED', consumed=False,
+                                episode_state=None, reservation_paused=False,
+                                input_operations=0)))
         self.assertEqual(self.files(), before)
         self.assertEqual(self.channels.call_count, channel_calls)
 

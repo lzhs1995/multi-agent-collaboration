@@ -1,7 +1,10 @@
 """Continuing file requests preserve authority, consumption and task boundaries."""
 import copy
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
@@ -232,6 +235,103 @@ class PausedReplyTests(unittest.TestCase):
                     'transcript', 'tail_position'):
             self.assertEqual(after[key], before[key], key)
         self.transport.assert_not_called()
+
+    def consume_cli(self, digest=''):
+        output = io.StringIO()
+        bridge = SimpleNamespace(pin_workspace=lambda *_args, **_kwargs: self.live())
+        with patch.object(ready, '_bridge', return_value=bridge), \
+                patch.object(lifecycle.time, 'time', return_value=2001.), \
+                redirect_stdout(output):
+            rc = reask.main(['consume', '--caller-uuid', CALLER, '--reply-sha256', digest])
+        return rc, json.loads(output.getvalue())
+
+    def test_consume_cli_distinguishes_no_ack_from_consumption_while_reserved(self):
+        original, body, _path = self.paused_wait()
+        # A mailbox exists, but it has not yet been authenticated as ANSWERED.
+        digest = reask.reply_record(body, 'file')['body_sha256']
+        rc, pending = self.consume_cli(digest)
+        self.assertEqual(rc, 2)
+        self.assertEqual(pending['outcome'], reask.WAITING)
+        self.assertEqual(pending['consume_result']['status'], 'NOT_ANSWERED')
+        self.assertFalse(pending['consume_result']['consumed'])
+        self.assertTrue(pending['consume_result']['reservation_paused'])
+        self.assertIsNone(pending['reply_consumed_epoch'])
+        self.assert_preserved_inquiry(original, reask.load(CALLER))
+        self.assertNotIn('consume_result', reask.load(CALLER))
+        answered = reask.tick(CALLER, now=2000.)
+        rc, consumed = self.consume_cli(answered['reply']['body_sha256'])
+        self.assertEqual(rc, 0)
+        self.assertEqual(consumed['outcome'], reask.WAITING)
+        observation = consumed['consume_result']
+        self.assertEqual(observation['status'], 'REPLY_CONSUMED')
+        self.assertTrue(observation['consumed'])
+        self.assertTrue(observation['reservation_paused'])
+        receipt = ready.read_json(Path(observation['receipt']))
+        self.assertEqual(receipt['body'], body)
+        for key in ('marker', 'body_sha256', 'consumed_epoch'):
+            self.assertEqual(observation[key], receipt[key])
+        self.assertEqual(consumed['rearm_count'], 1)
+        self.assertNotIn('consume_result', reask.load(CALLER))
+        # Repeating the same invocation cannot claim another consumption.
+        before_repeat = reask.state_path(CALLER).read_bytes()
+        rc, repeated = self.consume_cli(digest)
+        self.assertEqual(rc, 2)
+        self.assertFalse(repeated['consume_result']['consumed'])
+        self.assertEqual(repeated['consume_result']['status'], 'NOT_ANSWERED')
+        self.assertEqual(repeated['reply_consumed_epoch'], consumed['reply_consumed_epoch'])
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before_repeat)
+        self.assertEqual(scheduler.sweep(now=3000.)['file_posts'], 0)
+        self.assert_preserved_inquiry(original, reask.load(CALLER))
+
+    def test_consume_cli_no_episode_and_operator_stop_are_not_success(self):
+        rc, missing = self.consume_cli()
+        self.assertEqual(rc, 2)
+        self.assertEqual(missing['consume_result']['status'], 'NO_EPISODE')
+        self.assertFalse(missing['consume_result']['consumed'])
+        self.paused_wait()
+        state = reask.tick(CALLER, now=2000.)
+        ready.write_json(reask.stop_file(CALLER), dict(reason='OPERATOR'))
+        rc, stopped = self.consume_cli(state['reply']['body_sha256'])
+        self.assertEqual(rc, 2)
+        self.assertEqual(stopped['consume_result']['status'], 'STOPPED')
+        self.assertFalse(stopped['consume_result']['consumed'])
+        self.assertIsNone(stopped['reply_consumed_epoch'])
+        self.assertEqual(stopped['rearm_count'], 0)
+
+    def test_consume_cli_foreign_controller_refusal_preserves_original_bytes(self):
+        original, _body, _path = self.paused_wait()
+        original['controller']['source'] = str(self.home / 'original-foreign-controller')
+        original['continuation']['controller'] = copy.deepcopy(original['controller'])
+        reask.save(original)
+        before = reask.state_path(CALLER).read_bytes()
+        rc, refused = self.consume_cli()
+        self.assertEqual(rc, 2)
+        self.assertEqual(refused['consume_result']['status'], 'ORIGINAL_CONTROLLER_REQUIRED')
+        self.assertFalse(refused['consume_result']['consumed'])
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+
+    def test_consume_cli_revoked_authorization_does_not_acknowledge_reply(self):
+        self.paused_wait()
+        state = reask.tick(CALLER, now=2000.)
+        (self.home / 'explicit-user-authorization.txt').write_text('Authorization revoked.')
+        rc, revoked = self.consume_cli(state['reply']['body_sha256'])
+        self.assertEqual(rc, 2)
+        self.assertFalse(revoked['consume_result']['consumed'])
+        self.assertEqual(revoked['consume_result']['reason'], 'AUTHORIZATION_CHANGED')
+        self.assertEqual(revoked['rearm_count'], 0)
+        self.assertIsNone(revoked['reply_consumed_epoch'])
+        self.assertTrue(revoked['paused_tasks'])
+
+    def test_consume_cli_foreign_executor_cannot_acknowledge_reply(self):
+        self.paused_wait()
+        state = reask.tick(CALLER, now=2000.)
+        before = reask.state_path(CALLER).read_bytes()
+        foreign = dict(self.live(), caller_surface_uuid=SUP)
+        bridge = SimpleNamespace(pin_workspace=lambda *_args, **_kwargs: foreign)
+        with patch.object(ready, '_bridge', return_value=bridge), self.assertRaises(ValueError):
+            reask.main(['consume', '--caller-uuid', CALLER,
+                        '--reply-sha256', state['reply']['body_sha256']])
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
 
     def test_paused_reply_is_detected_consumed_and_stays_paused_until_exact_release(self):
         original, body, _path = self.paused_wait()

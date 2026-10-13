@@ -124,6 +124,23 @@ def _consume_controller(state):
         return None
 
 
+def _consume_result(state, status, *, receipt=None, receipt_path=None):
+    """Report this invocation separately from the durable inquiry state."""
+    result = dict(status=status, consumed=status == 'REPLY_CONSUMED',
+                  episode_state=state.get('state'),
+                  reservation_paused=bool(state.get('paused_tasks')),
+                  input_operations=0)
+    if receipt is not None:
+        result.update(receipt=str(receipt_path), marker=receipt['marker'],
+                      body_sha256=receipt['body_sha256'],
+                      consumed_epoch=receipt['consumed_epoch'])
+    if state.get('exit_reason'):
+        result['reason'] = state['exit_reason']
+    # Never persist this response: a later status/tick must not look like a
+    # fresh acknowledgement of a previously consumed reply.
+    return dict(state, consume_result=result)
+
+
 def consume(caller, reply_sha256='', *, now=None):
     """The foreground executor acknowledges the complete pinned reply body.
 
@@ -135,15 +152,19 @@ def consume(caller, reply_sha256='', *, now=None):
     with reask.episode_lock(caller):
         state = reask.load(caller) or {}
         if not state:
-            return dict(outcome='NO_EPISODE')
+            return _consume_result(dict(outcome='NO_EPISODE'), 'NO_EPISODE')
         if reask.stop_file(caller).exists():
-            return reask.tick_locked(caller, now, file_only=True)
+            stopped = reask.tick_locked(caller, now, file_only=True)
+            return _consume_result(stopped, 'STOPPED')
         if _consume_controller(state) != reask.controller():
-            return dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0)
+            return _consume_result(
+                dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0),
+                'ORIGINAL_CONTROLLER_REQUIRED')
         poll_authorization(state, now)
         if state.get('state') != reask.ANSWERED:
             reask.save(state)
-            return state
+            return _consume_result(state, 'STOPPED' if state.get('state') == reask.STOPPED
+                                   else 'NOT_ANSWERED')
         reply = state['reply']
         continuing = bool(state.get('continuation'))
         if continuing and (not reply_sha256 or reply_sha256 != reply.get('body_sha256')):
@@ -184,7 +205,7 @@ def consume(caller, reply_sha256='', *, now=None):
             state['reply'] = None
         reask.write_channels(state, marker, 'reply explicitly consumed', now, status=reask.CONSUMED)
         reask.save(state)
-        return state
+        return _consume_result(state, 'REPLY_CONSUMED', receipt=receipt, receipt_path=path)
 
 
 def marker_callers(marker):
