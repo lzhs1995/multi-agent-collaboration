@@ -45,7 +45,9 @@ class Base(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         # Formal markers use an absolute /tmp root, independent of Path.home().
         # Never let real task ownership affect an isolated episode fixture.
-        self.enterContext(mock.patch.object(harness, '_ACTIVE_DIR', self.home / 'active'))
+        active_patcher = mock.patch.object(harness, '_ACTIVE_DIR', self.home / 'active')
+        active_patcher.start()
+        self.addCleanup(active_patcher.stop)
         self.channel = self.home / 'channel'
         self.channel.mkdir()
         self.transcript = self.home / 't.jsonl'
