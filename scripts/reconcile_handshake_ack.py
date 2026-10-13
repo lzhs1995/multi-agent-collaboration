@@ -36,6 +36,32 @@ def original_modules(controller):
     return (*modules, harness)
 
 
+def exact_ack_content(content, expected):
+    """Match the sole text block; validated reasoning blocks remain opaque."""
+    if isinstance(content, str):
+        return content == expected
+    if not isinstance(content, list):
+        return False
+    text_count = 0
+    for block in content:
+        if not isinstance(block, dict):
+            return False
+        if block == dict(type='text', text=expected):
+            text_count += 1
+        elif (set(block) == {'type', 'thinking', 'signature'}
+              and block['type'] == 'thinking'
+              and isinstance(block['thinking'], str)
+              and isinstance(block['signature'], str)):
+            continue
+        elif (set(block) == {'type', 'data'}
+              and block['type'] == 'redacted_thinking'
+              and isinstance(block['data'], str)):
+            continue
+        else:
+            return False
+    return text_count == 1
+
+
 def exact_ack_record(native, raw, binding, expected, intent_at):
     try:
         record = json.loads(raw)
@@ -43,14 +69,15 @@ def exact_ack_record(native, raw, binding, expected, intent_at):
         return None
     if (not isinstance(record, dict) or record.get('type') != 'assistant'
             or record.get('sessionId') != binding['session_id']
-            or record.get('isSidechain') is True or record.get('isMeta') is True
+            or record.get('isSidechain', False) is not False
+            or record.get('isMeta', False) is not False
             or not isinstance(record.get('uuid'), str) or not record['uuid']):
         return None
     message = record.get('message')
     if not isinstance(message, dict) or message.get('role') != 'assistant':
         return None
     content = message.get('content')
-    if content != expected and content != [dict(type='text', text=expected)]:
+    if not exact_ack_content(content, expected):
         return None
     stamp = native._timestamp(record.get('timestamp'))
     # Native Claude journals use millisecond timestamps.

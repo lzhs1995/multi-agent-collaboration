@@ -24,6 +24,7 @@ LEGACY_MANIFESTS = {
     '0.4.30-ff75100795a9': '80f925fb74964f2cc0d72d7464f418e23ab637d504f78c79e4dd47fb26fe815f',
     '0.4.31-79ae83e9d5da': 'bc369ef7c81e7a4c34c4001736df61a99b634350248a2299def68e92efa098f5',
     '0.4.32-c7338a400bf4': '682e2215a09381c2e565eb73b142f360ec506c4a428a776423f64ff22cdd77d5',
+    '0.4.33-09de16ceb823': 'fd89bd0508862f30271c6201346f8f85472c47bfeaba45635f868c4d7d8ee08a',
 }
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
@@ -63,6 +64,15 @@ LEGACY = {
         "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
         "scripts/executor_reask_lifecycle.py": "65328f881c2397d1f1e079d7bc129c109b1f4fb7385dfe54fd43a6813030660d",
         "scripts/executor_reask_scheduler.py": "4376f237d8f15652f195bc856cd6ebc17ddfb447387783c1f58cb6b69cd4c901"
+    },
+    "0.4.33-09de16ceb823": {
+        "VERSION": "031f6065d669b8af39b130b3fa5ac7c3fe7683424294c3db1486f8efa21a6585",
+        "scripts/executor_reask.py": "f7782ae273d5cf2c2944b2372447bae8e85aa93b2da2f0ca5a1944acb39e1e24",
+        "scripts/executor_ready.py": "39e297b4ef4b2a1c5977570a81f050482156fd088d6a9cab364acb2e8510af62",
+        "scripts/cmux_bridge.py": "27a8bfac62c21be3910ccf81b50d2d77bbbcb870951e5f367fe846a020ea9b8a",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reask_lifecycle.py": "65328f881c2397d1f1e079d7bc129c109b1f4fb7385dfe54fd43a6813030660d",
+        "scripts/executor_reask_scheduler.py": "4376f237d8f15652f195bc856cd6ebc17ddfb447387783c1f58cb6b69cd4c901"
     }
 }
 # Reviewed v3 state/v2 enrollment producers, after full immutable verification.
@@ -74,6 +84,13 @@ LEGACY_FILE_PROTOCOL = {
                        'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
         'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
                         '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4'),
+    },
+    '0.4.33-09de16ceb823': {
+        'descriptor': {'id': 'executor-reask-file-v1',
+                       'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+        'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+                        '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+                        '0.4.33-09de16ceb823'),
     },
 }
 CONTRACT = dict(id='executor-reask-file-v1', version=1,

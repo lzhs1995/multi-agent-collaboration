@@ -196,6 +196,102 @@ class HandshakeReconciliationTests(unittest.TestCase):
         self.assertTrue(result['observation']['native_message']['confirmed'])
         self.assertTrue(result['ack']['observed'])
 
+    def reasoned_content(self):
+        return [dict(type='thinking', thinking='private synthetic reasoning',
+                     signature='synthetic-signature'),
+                dict(type='text', text=self.expected)]
+
+    def test_reasoned_ack_preview_is_read_only_and_keeps_reasoning_private(self):
+        self.fixture.append_queued(self.text)
+        self.append_ack(message=dict(role='assistant', content=self.reasoned_content()))
+        before = self.files()
+        result = self.run_reconcile()
+        self.assertEqual(result['status'], 'READY_ZERO_INPUT_ACK_RECONCILIATION', result)
+        self.assertFalse(result['observation']['native_message']['confirmed'])
+        self.assertEqual(result['ack']['proof']['ack_line'], self.expected)
+        self.assertNotIn('private synthetic reasoning', json.dumps(result))
+        self.assertNotIn('synthetic-signature', json.dumps(result))
+        self.assertEqual(before, self.files())
+
+    def test_reasoned_stranded_ack_apply_uses_original_writer_without_notice_promotion(self):
+        self.prepare_stranded_draft()
+        self.append_ack(message=dict(role='assistant', content=self.reasoned_content()))
+        original = self.receipt_path.read_bytes()
+        attempt = self.attempt_path.read_bytes()
+        result = self.run_reconcile(apply=True)
+        self.assertEqual(result['status'], 'ACK_RECONCILED', result)
+        self.assertEqual(result['validation']['status'], 'PASS')
+        receipt = json.loads(self.receipt_path.read_bytes())
+        self.assertTrue(receipt['executor_ack'])
+        self.assertEqual(receipt['submission_state'], 'STRANDED_IN_COMPOSE')
+        self.assertFalse(receipt['late_ack_reconciliation']['native_notice']['confirmed'])
+        self.assertEqual(receipt['late_ack_reconciliation']['business_acceptance'], 'NOT_EVALUATED')
+        self.assertEqual((Path(result['archive']) / 'handshake-receipt.json.original').read_bytes(), original)
+        self.assertEqual(self.attempt_path.read_bytes(), attempt)
+        for path in self.root.rglob('*'):
+            if path.is_file():
+                self.assertNotIn(b'private synthetic reasoning', path.read_bytes())
+                self.assertNotIn(b'synthetic-signature', path.read_bytes())
+
+    def test_redacted_reasoning_with_one_exact_text_is_observed(self):
+        content = [dict(type='redacted_thinking', data='opaque-synthetic-data'),
+                   dict(type='text', text=self.expected)]
+        self.append_ack(message=dict(role='assistant', content=content))
+        result = self.run_reconcile()
+        self.assertEqual(result['status'], 'READY_ZERO_INPUT_ACK_RECONCILIATION', result)
+        self.assertNotIn('opaque-synthetic-data', json.dumps(result))
+
+    def test_reasoning_cannot_hide_extra_text_tools_or_malformed_blocks(self):
+        valid = self.reasoned_content()
+        variants = [
+            valid + [dict(type='text', text='')],
+            valid + [dict(type='text', text=self.expected)],
+            valid + [dict(type='text', text='additional response')],
+            valid + [dict(type='tool_use', id='tool1', name='tool', input={})],
+            valid + [dict(type='tool_result', content='result')],
+            valid + [dict(type='image', source={})],
+            [valid[0]],
+            [dict(type='thinking', thinking=self.expected, signature='sig')],
+            [dict(type='thinking', thinking='private'), valid[1]],
+            [dict(type='thinking', thinking=[], signature='sig'), valid[1]],
+            [dict(type='thinking', thinking='private', signature=None), valid[1]],
+            [dict(valid[0], text='hidden text'), valid[1]],
+            [dict(type='redacted_thinking', data=None), valid[1]],
+            [dict(type='redacted_thinking', data='opaque', text='hidden'), valid[1]],
+            [valid[0], dict(valid[1], extra='hidden')],
+            [valid[0], dict(type='text', text=self.expected + '\n')],
+            [valid[0], dict(type='text', text=' ' + self.expected)],
+            [valid[0], dict(type='text', text=self.expected[:-1] + '0')],
+            [valid[0], None, valid[1]],
+        ]
+        for index, content in enumerate(variants):
+            with self.subTest(case=index):
+                self.append_ack(message=dict(role='assistant', content=content))
+                before = self.files()
+                result = self.run_reconcile(apply=True)
+                self.assertEqual(result['status'], 'ACK_NOT_VISIBLE', result)
+                self.assertEqual(result['receipt_write_attempts'], 0)
+                self.assertEqual(before, self.files())
+
+    def test_reasoned_ack_retains_session_role_metadata_and_time_gates(self):
+        variants = [dict(sessionId='other-session'), dict(isSidechain=True),
+                    dict(isSidechain='false'), dict(isSidechain=0),
+                    dict(isMeta=True), dict(isMeta=None), dict(isMeta='false'),
+                    dict(type='user'), dict(uuid=''),
+                    dict(timestamp='2000-01-01T00:00:00Z'),
+                    dict(timestamp='2999-01-01T00:00:00Z'),
+                    dict(message=dict(role='user', content=self.reasoned_content()))]
+        for index, changes in enumerate(variants):
+            with self.subTest(case=index):
+                record = dict(message=dict(role='assistant', content=self.reasoned_content()))
+                record.update(changes)
+                self.append_ack(**record)
+                before = self.files()
+                result = self.run_reconcile(apply=True)
+                self.assertEqual(result['status'], 'ACK_NOT_VISIBLE', result)
+                self.assertEqual(result['receipt_write_attempts'], 0)
+                self.assertEqual(before, self.files())
+
     def prepare_stranded_draft(self):
         error = 'DRAFT_NOT_READY: original paste preserved; no submission key sent'
         self.rows[0].update(lifecycle='REJECTED', submission_state='STRANDED_IN_COMPOSE',

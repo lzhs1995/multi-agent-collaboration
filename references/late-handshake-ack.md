@@ -7,7 +7,7 @@ Keep the original session, task, provider, receipt, dispatch attempt and payload
 `scripts/reconcile_handshake_ack.py` is an explicit coordinator. It verifies the
 complete immutable original release and imports that release's native reader,
 identity gates, receipt writer and validator. It does not modify or migrate the
-original controller. Compatibility is tested against the complete 0.4.31 release;
+original controller. Compatibility is tested against the complete 0.4.32 release;
 an unsupported original release is refused rather than silently upgraded.
 
 Version 0.4.33 also supports the measured 0.4.32 terminal row
@@ -19,6 +19,16 @@ fence. A screen ACK alone cannot qualify. Other rejection states remain refused.
 The original supervisor runs the new coordinator with `--controller` pointing
 to the complete original release; it must not edit that release or rewrite the
 failed receipt to `EXPIRED` to use this route.
+
+Version 0.4.34 accepts the exact ACK as a native assistant string or as the sole
+text block accompanied by structurally valid `thinking` / `redacted_thinking`
+blocks. Reasoning contents remain opaque and are never copied into proof or
+archive output. The text block must equal the complete expected ACK byte for
+byte; duplicate/extra text blocks, tool blocks, unexpected fields and malformed
+reasoning blocks fail. Sidechain/meta flags must be absent or boolean false.
+The original session, role, record UUID, time and post-intent fence checks still
+apply. This recognizes a real ACK; it does not infer notice reception, repair
+the composer, send input or bypass the original supervisor's apply authority.
 
 Pass `--controller`, `--receipt`, `--receipt-sha256`, `--attempt`,
 `--attempt-sha256` and `--text-file`. The last file contains the exact original

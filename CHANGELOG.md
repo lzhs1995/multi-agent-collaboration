@@ -1,3 +1,19 @@
+## 0.4.34
+
+- Accept one exact native ACK text block alongside structurally valid Claude
+  `thinking` or `redacted_thinking` blocks. Keep those contents opaque and out of
+  result/archive output; reject additional text, tool blocks, malformed blocks,
+  altered whitespace/nonces and non-boolean sidechain/meta flags. Preserve the
+  original caller, session, fence, controller, receipt and dispatch checks.
+- Preserve cross-release file scheduling for the fully verified 0.4.33 v3
+  producer/v2 issuer. Its historical range includes the 0.4.32 controller;
+  0.4.32 cannot claim a future 0.4.33 or CURRENT controller. Compatibility never
+  consumes replies, moves registrations or executes historical release code.
+- Targeted ACK validation: 40 behavior tests pass both locally and through the
+  complete original 0.4.32 controller. The final offline suite passes all 1,912
+  tests with no failures or errors. Installation and active-client adoption
+  require separate evidence.
+
 ## 0.4.33
 
 - Recognize the measured Claude HUD context token breakdown, such as

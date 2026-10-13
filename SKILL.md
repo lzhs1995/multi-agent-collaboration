@@ -9,7 +9,12 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.33.** Recognizes the measured Claude HUD input/cache breakdown
+**Version: 0.4.34.** Reconciles one exact native ACK text block accompanied by
+structurally valid reasoning blocks without emitting their contents. Extra text,
+tools, malformed blocks or metadata, and changed whitespace/nonces remain refused.
+Retains fully verified 0.4.33 file producers/issuers and their historical
+controller range, without granting old issuers future support or consumption
+authority. Recognizes the measured Claude HUD input/cache breakdown
 only below complete composer borders, preserving drafts and ordinary-input
 refusal during compaction. Retains file scheduling across reviewed releases, recoverable
 registration, formal reservation boundaries, a quoted-launch classification fix,
@@ -273,8 +278,10 @@ separate launchd file scheduler was introduced in 0.4.27. Explicit authenticated
 merely installing the job does not enroll anyone. Each 60-second sweep updates
 files only, with a 256-enrollment cap and a 10-second budget.
 
-Version 0.4.33 lets approved CURRENT interpret reviewed 0.4.28/30/31 v2 producers
-and the reviewed 0.4.32 v3 producer/v2 issuer for cross-release file scheduling.
+Version 0.4.34 lets approved CURRENT interpret reviewed 0.4.28/30/31 v2 producers
+and the reviewed 0.4.32/33 v3 producers/v2 issuers for cross-release file scheduling.
+Each historical issuer retains only the controller range supported when issued:
+0.4.33 may enroll 0.4.32, while 0.4.32 cannot claim 0.4.33 or future CURRENT.
 It verifies the complete original manifest,
 controller and issuer scheduler pins without importing or executing old code.
 Original controller, UNKNOWN, terminal_pending and journals remain intact; a
