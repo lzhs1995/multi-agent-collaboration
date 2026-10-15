@@ -41,6 +41,12 @@ def _looks_like_task_dispatch(text):
     return bool(re.match(r"^(?:(?:TASK|TASK_PACK|TASK PACK)\s*[:=]|TASK_PACK_V2(?:\s|$))", first, re.I))
 
 
+_TASK_PACK_NOTICE_SUFFIX = (
+    " READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; "
+    "write report then call cmux_bridge.submit_completion_callback(pack)."
+)
+
+
 def _task_pack_notice(path, pack, raw):
     """Exact single-line wire contract; all scope and callback bytes stay in pack."""
     from cmux_prompt_reference import require_inline
@@ -48,8 +54,7 @@ def _task_pack_notice(path, pack, raw):
         "TASK_PACK_V2 TASK=" + json.dumps(pack["task_id"], ensure_ascii=False)
         + " PACK=" + json.dumps(str(path), ensure_ascii=False)
         + " SHA256=" + hashlib.sha256(raw).hexdigest()
-        + " READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; "
-          "write report then call cmux_bridge.submit_completion_callback(pack)."
+        + _TASK_PACK_NOTICE_SUFFIX
     )
     require_inline(notice)
     return notice
@@ -751,6 +756,17 @@ _COMPOSE_CHROME_RE = re.compile(
 
 _CLAUDE_BORDER_RE = re.compile(r"─{8,}")
 _CLAUDE_DURATION = r"(?:\d+h(?:\s+\d+m)?|\d+m(?:\s+\d+s)?|\d+s)"
+
+_CLAUDE_GOAL_DURATION = rf"(?:\d+d|{_CLAUDE_DURATION})"
+
+_CLAUDE_GOAL_ROW_RE = re.compile(rf"\s*◎ /goal active \({_CLAUDE_GOAL_DURATION}\)\s*")
+
+_CLAUDE_BYPASS_ROW_RE = re.compile(
+    r"⏵⏵\s+bypass permissions on(?:"
+    r" \(shift\+tab to cycle\)(?:\s*·\s*← for agents)?"
+    # Measured 2026-10-13/14: Monitor or one shell replaces the shift+tab
+    # hint. Recognize only the complete footer below matching borders.
+    r"| · (?:1 (?:monitor|shell)|[2-9][0-9]* monitors|1[0-9]+ monitors) · ← for agents)")
 _CLAUDE_TOOL = r"[A-Za-z][\w.:-]*"
 _CLAUDE_COUNTS = (rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
                   r"(?:\s*\|\s*\+[1-9]\d* more)?")
@@ -770,6 +786,16 @@ _CLAUDE_CONTEXT_ROW_RE = re.compile(
     rf"(?: \(输入: {_CLAUDE_HUD_TOKENS}, 缓存: {_CLAUDE_HUD_TOKENS}\))?")
 
 
+def _claude_framed_prompt(screen):
+    """A Claude frame is present, even when its footer cannot be parsed."""
+    rows = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen).splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    return bool(start is not None and rows[start].lstrip().startswith("❯")
+                and any(_CLAUDE_BORDER_RE.fullmatch(row.strip())
+                        for row in rows[max(0, start - 1):]))
+
+
 def _claude_bordered_compose(screen):
     """仅解析完整 Claude 边框；正文绝不参与 footer 正则过滤。"""
     rows = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen).splitlines()
@@ -782,12 +808,19 @@ def _claude_bordered_compose(screen):
                 if rows[i].strip() == rows[start - 1].strip()), None)
     if end is None:
         return None
+    before = rows[:start - 1]
+    current = next((row for row in reversed(before) if row.strip()), "")
+    if (re.match(r"\s*◎\s+/goal\b", current)
+            and not _CLAUDE_GOAL_ROW_RE.fullmatch(current)):
+        # Unknown Goal chrome must not hide an active spinner from the
+        # clearing/submission guards. Preserve the whole frame as unparsed.
+        return None
     footer_rows = [row for row in rows[end + 1:] if row.strip()]
     footer = [row.strip() for row in footer_rows]
     if not footer:
         return None
     # 当前实屏的 model/cwd/time/goal 同行；cwd 可以没有 git 信息。
-    model_row = re.sub(rf"\s+◎\s+/goal active\s+\({_CLAUDE_DURATION}\)$", "", footer[0])
+    model_row = re.sub(rf"\s+◎\s+/goal active\s+\({_CLAUDE_GOAL_DURATION}\)$", "", footer[0])
     fields = [part.strip() for part in model_row.split("│")]
     if (not 1 <= len(fields) <= 3 or not re.fullmatch(
             r"(?:\[claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
@@ -838,7 +871,7 @@ def _claude_bordered_compose(screen):
         # arbitrary text after the normal bypass row.
         if rest and re.fullmatch(
                 r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens"
-                rf"(?: · ◎ /goal active \({_CLAUDE_DURATION}\))?",
+                rf"(?: · ◎ /goal active \({_CLAUDE_GOAL_DURATION}\))?",
                 rest[-1]):
             rest = rest[:-1]
         if rest and re.fullmatch(elapsed, rest[0]):
@@ -848,7 +881,7 @@ def _claude_bordered_compose(screen):
                 or not re.fullmatch(
                     r"\d+\s+CLAUDE\.md\s*\|\s*(?:\d+\s+规则\s*\|\s*)?"
                     r"\d+\s+MCPs\s*\|\s*\d+\s+(?:钩子|hooks)", rest[1])
-                or not re.fullmatch(r"⏵⏵\s+bypass permissions on \(shift\+tab to cycle\)(?:\s*·\s*← for agents)?", rest[-1])
+                or not _CLAUDE_BYPASS_ROW_RE.fullmatch(rest[-1])
                 or not all(_CLAUDE_SUMMARY_RE.fullmatch(row)
                            or _CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in rest[2:-1])):
             return None
@@ -857,7 +890,7 @@ def _claude_bordered_compose(screen):
         return None
     first = re.sub(r"^\s*❯[ \u00a0]?", "", rows[start], count=1)
     return {"body": "\n".join([first, *rows[start + 1:end]]),
-            "footer": footer, "before": rows[:start - 1], "start": start, "end": end}
+            "footer": footer, "before": before, "start": start, "end": end}
 
 
 def compose_block_text(screen):
@@ -1090,6 +1123,75 @@ def _display_cells(value):
                for c in value)
 
 
+def _claude_task_pack_padding_candidate(content, text, border_cells):
+    """Measured 118-cell PACK continuation, without reading or altering a pack.
+
+    B0015/B0016 wrap the PACK token at 114 display cells, then add exactly
+    44/52 ASCII cells after its closing quote (at display cell 96). B0018
+    has a 45-cell suffix and 27 ASCII cells, ending at cell 72. Restrict
+    equivalence to those observed shapes. The caller still checks the entire
+    notice and wrap geometry; draft stability retains every original cell.
+    """
+    if border_cells != 118 or len(content) != 5:
+        return None
+    prefix = "TASK_PACK_V2 TASK="
+    header, separator, rest = text.partition(" PACK=")
+    if not separator or not header.startswith(prefix) or content[0] != header:
+        return None
+    try:
+        task_id = json.loads(header[len(prefix):])
+        path, end = json.JSONDecoder().raw_decode(rest)
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(task_id, str) or not task_id
+            or header != prefix + json.dumps(task_id, ensure_ascii=False)
+            or not isinstance(path, str) or not path.startswith("/")
+            or rest[:end] != json.dumps(path, ensure_ascii=False)
+            or not re.fullmatch(r" SHA256=[0-9a-f]{64}" +
+                                re.escape(_TASK_PACK_NOTICE_SUFFIX), rest[end:])):
+        return None
+    token = "PACK=" + rest[:end]
+    if (not content[1].startswith("PACK=") or not token.startswith(content[1])
+            or _display_cells(content[1]) != 114
+            or not any(unicodedata.east_asian_width(c) in "WF" for c in token)):
+        return None
+    suffix = token[len(content[1]):]
+    suffix_cells = _display_cells(suffix)
+    padding = {44: 52, 52: 44, 45: 27}.get(suffix_cells)
+    sha_token = rest[end + 1:].split(" ", 1)[0]
+    if (padding is None or content[2] != suffix + " " * padding
+            or not content[3].startswith(sha_token + " ")):
+        return None
+    return [content[0], content[1], suffix, *content[3:]]
+
+def _claude_reference_padding_candidate(content, text, border_cells):
+    """One measured V2 BODY-row rendering; never trim arbitrary draft text.
+
+    A/B's 183-cell bordered editor adds 16/17 ASCII cells after the complete
+    BODY token when the next SHA256 word wraps. This is display equivalence,
+    not native editor-byte proof. The caller still checks every other character
+    and both wrap boundaries. _draft_structure retains the original raw rows.
+    """
+    if border_cells == 118:
+        return _claude_task_pack_padding_candidate(content, text, border_cells)
+    if border_cells != 183 or len(content) < 3:
+        return None
+    from cmux_prompt_reference import SINGLE_LINE_FORMAT, wire_reference
+    try:
+        ref = wire_reference(text)
+    except ValueError:
+        return None
+    if not ref or ref['format'] != SINGLE_LINE_FORMAT:
+        return None
+    token = 'BODY=' + json.dumps(ref['path'], ensure_ascii=False)
+    header, separator, _ = text.partition(' ' + token + ' ')
+    if (not separator or content[0] != header
+            or content[1] not in (token + ' ' * 16, token + ' ' * 17)
+            or not content[2].startswith(f"SHA256={ref['sha256']} BYTES={ref['bytes']} ")):
+        return None
+    return [content[0], token, *content[2:]]
+
+
 def _require_exact_composer_without_cursor_cell(screen, surface, text):
     """Require the expected visible draft, allowing known bordered hard wrapping.
 
@@ -1190,10 +1292,15 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
                            for c in value)
             if not any(unicodedata.category(c).startswith("C")
                        for row in content for c in row):
-                for width in (len(rows[start-1]) - 4, len(rows[start-1]) - 2):
+                layouts = [content]
+                candidate = _claude_reference_padding_candidate(content, text, len(rows[start-1]))
+                if candidate is not None:
+                    layouts.append(candidate)
+                for layout, width in ((layout, width) for layout in layouts
+                                      for width in (len(rows[start-1]) - 4, len(rows[start-1]) - 2)):
                     positions = {0}
                     previous = ""
-                    for number, part in enumerate(content):
+                    for number, part in enumerate(layout):
                         if cells(part) > width:
                             positions = set()
                             break
@@ -1417,6 +1524,11 @@ def _new_activity_after_submit(before, after):
 def _queued_or_active_input(screen):
     """Do not issue a blind second Enter while a queued/active task owns the TUI."""
     claude = _claude_bordered_compose(screen)
+    if claude is None and _claude_framed_prompt(screen):
+        # require_agent_input reports COMPOSE_UNPARSED. Do not attribute an
+        # unknown current UI to a historical completed summary containing
+        # words such as "1 monitor still running".
+        return False
     queue_region = "\n".join(claude["before"]) if claude is not None else screen
     if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", queue_region, re.I | re.M):
         return True
@@ -1424,9 +1536,17 @@ def _queued_or_active_input(screen):
         if any(_CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in claude["footer"]):
             return True
         # 活动只读当前边框前的状态，防止历史 spinner 或输入正文冒充活动。
-        screen = next((row for row in reversed(claude["before"]) if row.strip()), "")
-        if re.fullmatch(r"\s*[✻✢✳✶✽◐◑◒◓]\s+[^\n]+(?:…|\.\.\.)\s*\([^\n]+\)\s*", screen):
+        before = list(claude["before"])
+        while before and (not before[-1].strip()
+                          or _CLAUDE_GOAL_ROW_RE.fullmatch(before[-1])):
+            before.pop()
+        screen = before[-1] if before else ""
+        if re.fullmatch(r"\s*[·✻✢✳✶✽◐◑◒◓]\s+[^\n]+(?:…|\.\.\.)\s*\([^\n]+\)\s*", screen):
             return True
+        return bool(re.match(
+            r"\s*[✻✢✳✶✽◐◑◒◓]\s+(?:thinking|running|waiting|retrying|"
+            r"recording|checking|working|processing|executing|loading|tool|bash:|api error)\b",
+            screen, re.I))
     if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):
         return True
     # Claude uses the same glyph for active and completed summaries. Restrict
