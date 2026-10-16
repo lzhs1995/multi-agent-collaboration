@@ -209,6 +209,40 @@ class HelperEntrypointTests(unittest.TestCase):
         self.assertEqual(len(self.events("submit")), 1)
         self.assertTrue(all(Path(p).read_bytes() == content for p, content in files.items()))
 
+    def test_verified_other_caller_pending_is_diagnosed_without_adopting_or_bypassing(self):
+        self.data['state'] = 'queued'
+        self.save()
+        self.assert_exit(self.call('ask', 'surface:2', 'STATUS: original supervisor'), 75)
+        paths = self.state_paths('targets/*/intents/*.json') + self.state_paths('targets/*/pending.json')
+        before = {p: (p.stat().st_ino, p.read_bytes()) for p in paths}
+        self.data['caller']['surface_id'] = '99999999-9999-4999-8999-999999999999'
+        self.save()
+        operations = self.events()
+        for arguments in [('ask', 'surface:2', 'STATUS: current supervisor'), ('reconcile', 'surface:2')]:
+            result = self.assert_exit(self.call(*arguments), 75)
+            self.assertIn('HELPER_PENDING_OTHER_CALLER', result['error'])
+            self.assertEqual(result['details']['original_caller_surface_uuid'], CALLER)
+            self.assertEqual(result['details']['input_operations'], 0)
+            self.assertIn('successor-rebind-v2', result['recovery'])
+            self.assertEqual(self.events(), operations)
+            self.assertEqual({p: (p.stat().st_ino, p.read_bytes()) for p in paths}, before)
+
+    def test_other_caller_diagnostic_requires_intact_original_intent(self):
+        self.data['state'] = 'queued'
+        self.save()
+        self.assert_exit(self.call('ask', 'surface:2', 'STATUS: original supervisor'), 75)
+        intent = self.state_paths('targets/*/intents/*.json')[0]
+        value = json.loads(intent.read_text())
+        value['payload'] += ' changed'
+        intent.write_text(json.dumps(value))
+        self.data['caller']['surface_id'] = '99999999-9999-4999-8999-999999999999'
+        self.save()
+        before = self.events()
+        result = self.assert_exit(self.call('ask', 'surface:2', 'STATUS: new'), 75)
+        self.assertNotIn('HELPER_PENDING_OTHER_CALLER', result['error'])
+        self.assertIn('HELPER_REQUEST_CHANGED', result['error'])
+        self.assertEqual(self.events(), before)
+
     def test_legacy_pending_is_preserved_and_never_replaced(self):
         directory = self.root / "state-home/.local/state/cmux-agent"
         directory.mkdir(parents=True)

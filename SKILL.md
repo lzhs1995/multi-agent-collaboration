@@ -9,20 +9,21 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.34.** Reconciles one exact native ACK text block accompanied by
-structurally valid reasoning blocks without emitting their contents. Extra text,
-tools, malformed blocks or metadata, and changed whitespace/nonces remain refused.
-Retains fully verified 0.4.33 file producers/issuers and their historical
-controller range, without granting old issuers future support or consumption
-authority. Recognizes the measured Claude HUD input/cache breakdown
-only below complete composer borders, preserving drafts and ordinary-input
-refusal during compaction. Retains file scheduling across reviewed releases, recoverable
-registration, formal reservation boundaries, a quoted-launch classification fix,
-recovery after proven zero-input preflight exhaustion and original-controller
-late ACK reconciliation, including a proven stranded draft with no submission.
-Final source validation is recorded in CHANGELOG. Installation and
-active-client adoption require separate live evidence. The 0.4.31 maintenance
-notice recovery contract is retained.
+**Version: 0.4.35.** New input observes the original native receipt for 30 seconds
+by default; `--wait-seconds` accepts only finite values in [0, 60]. Read-only
+`--reconcile-only` defaults to one observation, preserves the original controller
+and RPC diagnostics, and never resends. A turn abort does not prove message loss.
+Nonblocking PostToolUse context exposes exact unconsumed replies, pending handshake
+work and verified callback settlement separately. Read the complete referenced
+body before using its original consume/ACK entrypoint; exposure is not acceptance.
+Exact reservations are reused, exact RELEASE cleanup preserves terminal episodes,
+and reviewed 0.4.34 file producers retain their historical authority only.
+The reask scheduler uses Standard launchd scheduling and bounded, fair discovery;
+the configuration guardian remains Background. Measured Claude Monitor/Goal and
+wrapped-path padding are recognized without stripping or clearing real drafts.
+See [0.4.35 behavior and evidence boundaries](references/release-0.4.35.md).
+Source validation is recorded in CHANGELOG; installation, actual automatic hooks,
+full body reading and live native receipts require separate evidence.
 
 The released baseline retains the removal of session-wide workflow blocks and recognizes
 the measured wrapped Claude footer, split cwd/elapsed footer rows and tool-count overflow. Ordinary document
@@ -271,6 +272,9 @@ Explicit `executor_ready.py persist` is read-only and bounded to 300 seconds.
 An explicitly authorized `executor_reask.py run` checks every five seconds,
 issues a new marker no more often than every 60 seconds, with a polling budget
 of at most 540 seconds per invocation. Synchronous I/O can extend wall time.
+For terminal inquiries, count those 60 seconds from the previous message's native
+confirmation; while it is unconfirmed, observe that attempt only. File inquiries
+retain their independent cadence. No timer implies that a model has read the body.
 After the command returns, its durable episode may remain WAITING_REPLY;
 that state does not prove a runner is active or registration succeeded. The
 separate launchd file scheduler was introduced in 0.4.27. Explicit authenticated
@@ -278,10 +282,11 @@ separate launchd file scheduler was introduced in 0.4.27. Explicit authenticated
 merely installing the job does not enroll anyone. Each 60-second sweep updates
 files only, with a 256-enrollment cap and a 10-second budget.
 
-Version 0.4.34 lets approved CURRENT interpret reviewed 0.4.28/30/31 v2 producers
-and the reviewed 0.4.32/33 v3 producers/v2 issuers for cross-release file scheduling.
+Version 0.4.35 lets approved CURRENT interpret reviewed 0.4.28/30/31 v2 producers
+and the reviewed 0.4.32/33/34 v3 producers/v2 issuers for cross-release file scheduling.
 Each historical issuer retains only the controller range supported when issued:
-0.4.33 may enroll 0.4.32, while 0.4.32 cannot claim 0.4.33 or future CURRENT.
+0.4.34 may retain 0.4.32/33, while neither older issuer can claim 0.4.34 or future
+CURRENT. 0.4.33's existing support for 0.4.32 remains unchanged.
 It verifies the complete original manifest,
 controller and issuer scheduler pins without importing or executing old code.
 Original controller, UNKNOWN, terminal_pending and journals remain intact; a

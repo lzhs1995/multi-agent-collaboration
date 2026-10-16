@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -652,6 +653,34 @@ def detach_unrelated_pending(state, pending):
     return True
 
 
+def _terminal_cadence(bridge, state):
+    """Revalidate the last native receipt; file rounds have their own clock.
+
+    Keep this original marker outside the rolling ask history. A cached epoch
+    alone never authorizes another input, even after a restart or late receipt.
+    """
+    last = state.get('terminal_last_confirmed')
+    if not last:
+        last = next((ask for ask in reversed(state.get('asks', []))
+                     if ask.get('outcome') == 'CONFIRMED'), None)
+    if not last:
+        return None
+    caller, supervisor = state['caller_surface_uuid'], state['supervisor']
+    if not origin_matches(last, caller, supervisor):
+        return 'ORIGINAL_CONTROLLER_REQUIRED'
+    if (not _advance_original(bridge, supervisor, caller, last)
+            or last.get('outcome') != 'CONFIRMED'):
+        return 'UNVERIFIED'
+    received_at = (last.get('receipt') or {}).get('native_received_at_epoch')
+    if type(received_at) not in (int, float) or not math.isfinite(received_at):
+        return 'NATIVE_RECEIPT_TIME_REQUIRED'
+    state['terminal_last_confirmed'] = dict(last)
+    state['terminal_next_due_epoch'] = received_at + INTERVAL
+    if time.time() < state['terminal_next_due_epoch']:
+        return 'NATIVE_RECEIPT_INTERVAL'
+    return None
+
+
 def default_send(state, marker, text):
     """一次 journaled 发送；结果按 executor_ready 原样保留，不重试。"""
     bridge = ready._bridge()
@@ -667,6 +696,7 @@ def default_send(state, marker, text):
             return dict(outcome='SKIPPED_UNVERIFIED', terminal=False)
         state['terminal_pending'] = None
         if pending.get('outcome') == 'CONFIRMED':
+            state['terminal_last_confirmed'] = dict(pending)
             state['native_receipts'] = state.get('native_receipts', 0) + 1
     from cmux_native_delivery import bind_target
     provider = bind_target(bridge, state['supervisor'], text)['provider']
@@ -674,6 +704,10 @@ def default_send(state, marker, text):
                           state['caller_surface_uuid'], provider=provider)
     if held:
         return dict(outcome='SKIPPED_' + held, terminal=False)
+    cadence = _terminal_cadence(bridge, state)
+    if cadence:
+        return dict(outcome='SKIPPED_' + cadence, terminal=False, input_operations=0,
+                    terminal_next_due_epoch=state.get('terminal_next_due_epoch'))
     owner = origin(state)
     state['terminal_pending'] = dict(marker=marker, terminal=True, outcome='INTENT_UNRESOLVED', origin=owner)
     save(state)
@@ -685,6 +719,11 @@ def default_send(state, marker, text):
                        allow_send=True)
     if ask.get('outcome') != 'CONFIRMED':
         _original_no_input(bridge, state['supervisor'], state['caller_surface_uuid'], ask)
+    else:
+        state['terminal_last_confirmed'] = dict(ask)
+        received_at = (ask.get('receipt') or {}).get('native_received_at_epoch')
+        if type(received_at) in (int, float) and math.isfinite(received_at):
+            state['terminal_next_due_epoch'] = received_at + INTERVAL
     journal = ready.state_root() / 'message-dispatch-v1' / ready.request_key(state['caller_surface_uuid'], marker)
     from cmux_evidence_io import attempt_paths
     phases = []
@@ -698,7 +737,7 @@ def default_send(state, marker, text):
                   transport='codex-native-input-v1' if provider == 'codex' else 'terminal',
                   paste_intent='PASTE_INTENT' in phases,
                   native_received=ask.get('outcome') == 'CONFIRMED')
-    for key in ('confirmation_scope', 'body_read_confirmed'):
+    for key in ('confirmation_scope', 'body_read_confirmed', 'receipt'):
         if key in ask:
             result[key] = ask[key]
     if ask.get('zero_input_verified') is True:
@@ -869,10 +908,24 @@ def run(caller, max_seconds=MAX_RUN_SECONDS, poll=POLL, send=default_send,
     deadline = clock() + max(1.0, min(float(max_seconds), MAX_RUN_SECONDS))
     state = tick(caller, clock(), send)
     while (state.get('state') == WAITING and not state.get('outcome')
+           and not state.get('paused_tasks')
            and not state.get('registration_observation') and clock() + poll < deadline):
         sleep(poll)
         state = tick(caller, clock(), send)
-    return state
+    # A formal reservation owns the next action. Keeping the model in a polling
+    # tool makes a fresh preflight observe a busy executor forever. Return the
+    # invocation without stopping/rearming the durable episode or its scheduler.
+    # This is not an assertion that the terminal is idle or a task is accepted.
+    reason = ('REPLY_REQUIRES_ORIGINAL_CONSUME' if state.get('state') == ANSWERED
+              else 'FORMAL_RESERVATION_WAIT' if state.get('paused_tasks')
+              else 'OBSERVATION_DEADLINE' if state.get('state') == WAITING
+              and not state.get('outcome') and not state.get('registration_observation')
+              else 'EPISODE_RETURNED')
+    return dict(state, runner_returned=True, run_return_reason=reason,
+                wait_boundary=dict(when='ONLY_SUPERVISOR_ACTION_REMAINS',
+                                   next_action='END_WAITING_TURN_NORMALLY',
+                                   idle_observed=False, goal_state_changed=False,
+                                   fresh_preflight_required=True))
 
 
 def stop(caller, reason='OPERATOR'):
@@ -893,13 +946,16 @@ def summary(state):
                 terminal_sends=state.get('terminal_sends', 0), last_ask=last,
                 reply=state.get('reply'), supervisor=state.get('supervisor'),
                 continuation=state.get('continuation'), paused_tasks=state.get('paused_tasks', []),
+                exit_reason=state.get('exit_reason'),
+                reservation_paused=bool(state.get('paused_tasks')),
                 rearm_count=state.get('rearm_count', 0),
                 reply_detected_epoch=state.get('reply_detected_epoch'),
                 reply_consumed_epoch=state.get('reply_consumed_epoch'),
                 next_ask_epoch=state.get('next_due_epoch'), last_poll=state.get('last_poll'),
+                next_terminal_ask_epoch=state.get('terminal_next_due_epoch'),
                 state_file=str(state_path(state['caller_surface_uuid'])))
     for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent',
-                'consume_result'):
+                'consume_result', 'runner_returned', 'run_return_reason', 'wait_boundary'):
         if key in state:
             result[key] = state[key]
     return result
@@ -921,7 +977,7 @@ def main(argv=None):
     s.add_argument('--authorization-until', type=float)
     s.add_argument('--resume-stopped', action='store_true', help='explicit operator resume only')
     s.add_argument('--file-only', action='store_true',
-                   help='register and issue the first request through files only; no transcript or input')
+                   help='register and issue through files; pin own identity for advisory, no input')
     r = sub.add_parser('run')
     r.add_argument('--max-seconds', type=float, default=MAX_RUN_SECONDS)
     for name in ('tick', 'status'):
@@ -958,6 +1014,7 @@ def main(argv=None):
                                 owner=supervisor, until_epoch=args.authorization_until)
         import executor_reask_scheduler as scheduler
         state = scheduler.start(live, task_id=args.task, transcript=args.transcript,
+                                authenticate_executor=True,
                                 channels=args.channel, executor_ref=caller,
                                 own_prefixes=args.own_prefix, purpose=args.purpose,
                                 resume_stopped=args.resume_stopped,

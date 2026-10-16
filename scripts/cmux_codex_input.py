@@ -5,6 +5,7 @@ without changing any settings. One durable intent authorizes one RPC request.
 An ambiguous return is observed, never retried or converted to paste/Tab/Enter.
 Only the original native transcript can prove reception.
 """
+import contextlib
 import hashlib
 import json
 from pathlib import Path
@@ -12,7 +13,8 @@ import time
 import uuid
 
 import cmux_native_delivery as native
-from cmux_codex_rpc import DaemonRPC
+from cmux_codex_rpc import DaemonRPC, RPCError
+from cmux_confirmation import annotate_error, observe_receipt, wait_budget
 
 TRANSPORT = "codex-native-input-v1"
 INPUT_PHASE = "NATIVE_INPUT_INTENT"
@@ -32,38 +34,123 @@ def _turn_id(value):
     return value
 
 
-def prepare(client, binding, text):
-    """Bounded metadata only: never hydrate histories or resume another thread."""
+def _bounded(value, depth=0):
+    """Keep structured error fields bounded without inferring HTTP from prose."""
+    if depth > 5:
+        return "METADATA_DEPTH_LIMIT"
+    if isinstance(value, dict):
+        return {str(k)[:120]: _bounded(v, depth + 1) for k, v in list(value.items())[:24]}
+    if isinstance(value, list):
+        return [_bounded(v, depth + 1) for v in value[:24]]
+    if isinstance(value, str):
+        return value[:1500]
+    return value if value is None or type(value) in (bool, int, float) else type(value).__name__
+
+
+def rpc_error_details(exc):
+    value = dict(error_type=type(exc).__name__, error=str(exc)[:1500])
+    if isinstance(exc, RPCError):
+        value.update(method=exc.method, rpc_error=_bounded(exc.error))
+    return value
+
+
+@contextlib.contextmanager
+def _metadata_client():
+    """Connection failure precedes any input; later failures keep their phase."""
+    with contextlib.ExitStack() as stack:
+        try:
+            client = stack.enter_context(DaemonRPC(timeout=8))
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            raise annotate_error(exc, transport=TRANSPORT, input_operations=0,
+                terminal_input_operations=0, native_metadata=dict(
+                    metadata_rpc_status="UNAVAILABLE",
+                    metadata_rpc_error=rpc_error_details(exc)))
+        yield client
+
+
+def read_metadata(client, binding, text):
+    """Two metadata RPCs only; no composer, historical hydration or mutation."""
     native._validate_binding(binding, text)
     if binding["provider"] != "codex":
         raise native.NativeDeliveryError("CODEX_NATIVE_PROVIDER_REQUIRED")
     thread_id = binding["session_id"]
     thread = client.request("thread/read", {"threadId": thread_id, "includeTurns": False})["thread"]
-    if (thread.get("id") != thread_id or thread.get("path") != binding["transcript"]["path"]
-            or thread.get("canAcceptDirectInput") is not True):
+    if not isinstance(thread, dict) or (thread.get("id") != thread_id
+            or thread.get("path") != binding["transcript"]["path"]):
         raise native.NativeDeliveryError("CODEX_NATIVE_THREAD_NOT_ACCEPTING: no terminal fallback")
     # Re-read the latest turn instead of inferring activity from a TUI spinner.
     turns = client.request("thread/turns/list", {"threadId": thread_id, "limit": 1,
         "sortDirection": "desc", "itemsView": "notLoaded"})["data"]
-    if not isinstance(turns, list) or len(turns) > 1:
+    if not isinstance(turns, list) or len(turns) > 1 or any(not isinstance(t, dict) for t in turns):
         raise native.NativeDeliveryError("CODEX_NATIVE_TURNS_INVALID")
-    status = thread.get("status", {}).get("type")
-    params = {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
+    status_value = thread.get("status")
+    status = status_value.get("type") if isinstance(status_value, dict) else None
     latest = turns[0] if turns else None
+    metadata = dict(thread_id=thread_id, thread_status=status,
+        can_accept_direct_input=thread.get("canAcceptDirectInput"),
+        latest_turn_id=latest.get("id") if latest else None,
+        latest_turn_status=latest.get("status") if latest else None,
+        latest_turn_interrupted=latest.get("status") == "interrupted" if latest else False,
+        latest_turn_error=_bounded(latest.get("error")) if latest else None,
+        provider_error_source="latest_turn.error" if latest and latest.get("error") else None,
+        metadata_rpc_status="AVAILABLE", observed_at_epoch=time.time())
     if status == "active" and latest and latest.get("status") == "inProgress":
         method = "turn/steer"
-        params["expectedTurnId"] = _turn_id(latest.get("id"))
     elif status == "idle" and (latest is None or latest.get("status") in
                                ("completed", "interrupted", "failed")):
-        # The native API also steers if another turn starts in this narrow race.
-        # It is still ONE same-thread request with no setting overrides.
         method = "turn/start"
     else:
-        raise native.NativeDeliveryError("CODEX_NATIVE_TURN_CHANGED_OR_UNAVAILABLE: zero input")
+        method = None
+    metadata["available_input_method"] = method if thread.get("canAcceptDirectInput") is True else None
+    if metadata["available_input_method"] is None:
+        metadata["resume_guidance"] = (
+            "Input is unavailable in the observed native state. If the original client "
+            "shows 'Goal stalled (/goal resume)', the user must resume that Goal in "
+            "the original session; this probe neither resumes nor sends input. "
+            "Unknown metadata alone does not establish Goal or provider failure.")
+    return metadata
+
+
+def prepare(client, binding, text):
+    """Bounded metadata only: never hydrate histories or resume another thread."""
+    try:
+        metadata = read_metadata(client, binding, text)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise annotate_error(exc, native_metadata=dict(metadata_rpc_status="UNAVAILABLE",
+            metadata_rpc_error=rpc_error_details(exc)), input_operations=0)
+    method = metadata["available_input_method"]
+    if method is None:
+        reason = ("CODEX_NATIVE_THREAD_NOT_ACCEPTING" if metadata["can_accept_direct_input"] is not True
+                  else "CODEX_NATIVE_TURN_CHANGED_OR_UNAVAILABLE")
+        raise annotate_error(native.NativeDeliveryError(reason + ": zero input; no terminal fallback"),
+                             native_metadata=metadata, input_operations=0)
+    params = {"threadId": binding["session_id"], "input": [{"type": "text", "text": text}]}
+    if method == "turn/steer":
+        params["expectedTurnId"] = _turn_id(metadata["latest_turn_id"])
+    # One same-thread start also handles a new active turn in the narrow race;
+    # no settings overrides and no second request are ever allowed.
     return dict(transport=TRANSPORT, method=method, params=params,
-                socket=dict(client.socket_identity), observed_status=status,
-                observed_turn_id=latest.get("id") if latest else None,
+                socket=dict(client.socket_identity), observed_status=metadata["thread_status"],
+                observed_turn_id=metadata["latest_turn_id"], native_metadata=metadata,
                 observed_at_epoch=time.time())
+
+
+def probe_target(bridge, surface):
+    """No-attempt read-only diagnostic for an authenticated existing receiver."""
+    text = "CODEX_METADATA_PROBE_ONLY_NO_INPUT"
+    binding = native.bind_target(bridge, surface, text)
+    native.require_bound(bridge, surface, binding, text)
+    if binding["provider"] != "codex":
+        raise native.NativeDeliveryError("CODEX_NATIVE_PROVIDER_REQUIRED")
+    try:
+        with DaemonRPC(timeout=8) as client:
+            metadata = read_metadata(client, binding, text)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        metadata = dict(metadata_rpc_status="UNAVAILABLE", metadata_rpc_error=rpc_error_details(exc))
+    native.require_bound(bridge, surface, binding, text)
+    return dict(state="READ_ONLY_NATIVE_PROBE", native_metadata=metadata,
+                receiver_session_id=binding["session_id"], receiver_identity=binding["identity"],
+                input_operations=0, journal_created=False, native_receipt_established=False)
 
 
 def validate_request(value, binding, text):
@@ -88,14 +175,15 @@ def validate_request(value, binding, text):
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
-def send_once(binding, text, *, recheck, emit, observe, wait_seconds=3):
+def send_once(binding, text, *, recheck, emit, observe, wait_seconds=None):
     """Callers hold their existing journal locks and fsync emit() before input."""
+    seconds = wait_budget(wait_seconds)
     recheck()
     started = time.monotonic()
     outcome = "UNKNOWN"
     returned_turn = None
     journal_error = None
-    with DaemonRPC(timeout=8) as client:
+    with _metadata_client() as client:
         request = prepare(client, binding, text)
         validate_request(request, binding, text)
         recheck()
@@ -117,22 +205,20 @@ def send_once(binding, text, *, recheck, emit, observe, wait_seconds=3):
             # Even a timeout may have delivered input. No second mutation,
             # new nonce, key, or queue fallback is authorized by this error.
             outcome = "RPC_ERROR_OR_UNKNOWN"
-            diagnostic = {"method": request["method"], "rpc_outcome": outcome,
-                          "error_type": type(exc).__name__, "error": str(exc)[:1500]}
+            diagnostic = dict(rpc_error_details(exc), method=request["method"], rpc_outcome=outcome)
         # The durable original intent remains the authority. A diagnostic
         # write failure must neither retry input nor skip receipt observation.
         try:
             emit("NATIVE_INPUT_RESULT", evidence=diagnostic)
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
             journal_error = {"error_type": type(exc).__name__, "error": str(exc)[:1500]}
-    deadline = time.monotonic() + max(0, min(float(wait_seconds), 10))
-    while True:
-        proof = observe()
-        if proof.get("confirmed") is True or time.monotonic() >= deadline:
-            return dict(proof, transport=TRANSPORT, native_method=request["method"],
-                        native_rpc_outcome=outcome, native_turn_id=returned_turn,
-                        native_result_journal_error=journal_error,
-                        terminal_input_operations=0, input_operations=1,
-                        submission_key=None, retries=0,
-                        elapsed_ms=round((time.monotonic() - started) * 1000, 3))
-        time.sleep(0.25)
+    fields = dict(transport=TRANSPORT, native_method=request["method"],
+        native_rpc_outcome=outcome, native_rpc_diagnostic=diagnostic,
+        native_metadata=request["native_metadata"], native_turn_id=returned_turn,
+        native_result_journal_error=journal_error, terminal_input_operations=0,
+        input_operations=1, submission_key=None, retries=0)
+    try:
+        proof = observe_receipt(observe, seconds)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise annotate_error(exc, **fields)
+    return dict(proof, **fields, elapsed_ms=round((time.monotonic() - started) * 1000, 3))

@@ -1230,7 +1230,7 @@ class HandshakePreconditionTests(OfflineWorkspaceFixture):
 
     def _run(self, root):
         with (
-            mock.patch.object(HARNESS.cmux, "submit_text"),
+            mock.patch.object(HARNESS.cmux, "submit_text", return_value={}),
             mock.patch.object(
                 HARNESS.cmux, "wait_for_ack",
                 return_value="PREFLIGHT_ACK|r3-test|claude:identity|READY|INLINE|n"),
@@ -1283,7 +1283,7 @@ class BudgetProvenanceTests(OfflineWorkspaceFixture):
         gate(root)
         bridge_evidence(root)
         with (
-            mock.patch.object(HARNESS.cmux, "submit_text"),
+            mock.patch.object(HARNESS.cmux, "submit_text", return_value={}),
             mock.patch.object(HARNESS.cmux, "wait_for_ack",
                               side_effect=TimeoutError("no ack")),
             mock.patch.object(HARNESS.secrets, "token_hex", return_value="n"),
@@ -1477,7 +1477,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker="nonce-1234", confirm_lines=200,
-            force_compose=False, reconcile_only=False,
+            force_compose=False, reconcile_only=False, wait_seconds=None,
         )
         payload = json.loads(out.getvalue())
         self.assertEqual(payload["command"], "submit_text")
@@ -1512,7 +1512,7 @@ class BridgeCliDispatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         submit.assert_called_once_with(
             "surface:104", "callback", marker=None, confirm_lines=200,
-            force_compose=False, reconcile_only=False,
+            force_compose=False, reconcile_only=False, wait_seconds=None,
         )
 
     def test_module_cli_no_longer_defaults_to_diagnostic_only_output(self):
@@ -3812,7 +3812,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         ev["executors"] = [e for e in ev["executors"] if e["executor"] != "surface:3"]
         (self.root / "bridge-test-evidence.json").write_text(json.dumps(ev))
         with (
-            mock.patch.object(HARNESS.cmux, "submit_text") as submit,
+            mock.patch.object(HARNESS.cmux, "submit_text", return_value={}) as submit,
             mock.patch.object(HARNESS.cmux, "wait_for_ack",
                               return_value="PREFLIGHT_ACK|multi-exec|codex:identity|READY|INLINE|n"),
             mock.patch.object(HARNESS.secrets, "token_hex", return_value="n"),

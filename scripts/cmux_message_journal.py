@@ -77,14 +77,16 @@ def verified_receipt(bridge, surface, text, marker):
             if type(observation.get('input_operations')) is not int or observation['input_operations'] != 0:
                 return None
             pins.append((observation_path, observation_pin))
-        if not native.receipt_evidence(bridge, surface, text, attempt, receipt):
+        received_at = native.receipt_received_at(bridge, surface, text, attempt, receipt)
+        if received_at is None:
             return None
         if (attempt_paths(journal) != attempts or any(snapshot(p) != pin for p, pin in pins)
                 or bridge.pin_workspace(surface) != live
                 or original_body_pin(text, attempt) != body_pin):
             return None
         proof = dict(source='revalidated_message_dispatch_v1', identity=identity,
-                     attempt=attempt_pin, receipt=receipt_pin)
+                     attempt=attempt_pin, receipt=receipt_pin,
+                     native_received_at_epoch=received_at)
         if body_pin is not None:
             proof.update(body_pin=body_pin, confirmation_scope='reference_notice',
                          body_read_confirmed=False)
@@ -93,13 +95,16 @@ def verified_receipt(bridge, surface, text, marker):
         return None
 
 
-def verified_no_input(bridge, surface, text, marker):
+def verified_no_input(bridge, surface, text, marker, *, commit=None):
     """Prove an original message never reached input intent; never retry it.
 
     Absence of evidence is not NO_INPUT. Every original attempt must positively
     record NO_INPUT with no events, under the unchanged request binding. Hold the
     existing journal lock and recheck the complete evidence set before returning.
+    An optional adapter-bookkeeping commit runs under that same lock; a failed
+    commit propagates, rather than authorizing a new delivery attempt.
     """
+    committing = False
     try:
         if not isinstance(marker, str) or not marker or marker not in text:
             return None
@@ -134,7 +139,7 @@ def verified_no_input(bridge, surface, text, marker):
                 raw, pin = snapshot(path)
                 attempt = json.loads(raw)
                 if (attempt.get('binding') != binding or attempt.get('phase') != 'NO_INPUT'
-                        or attempt.get('events') != [] or attempt.get('result')):
+                        or attempt.get('events') != [] or 'result' in attempt):
                     return None
                 body_pins.append((attempt, original_body_pin(text, attempt)))
                 pins.append((path, raw, pin))
@@ -147,14 +152,23 @@ def verified_no_input(bridge, surface, text, marker):
                     or any(snapshot(path) != (raw, pin) for path, raw, pin in pins)
                     or any(original_body_pin(text, attempt) != pin for attempt, pin in body_pins)):
                 return None
-            return dict(source='revalidated_message_no_input_v1', binding=binding,
-                        attempts=proofs, input_operations=0)
+            proof = dict(source='revalidated_message_no_input_v1', binding=binding,
+                         attempts=proofs, input_operations=0)
+            if commit is not None:
+                committing = True
+                commit(proof)
+            return proof
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        if committing:
+            raise
         return None
 
 
 def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=False,
-            recover_stranded=False):
+            recover_stranded=False, wait_seconds=None):
+    from cmux_confirmation import (wait_budget, controller_provenance, attempt_details,
+                                   annotate_attempt_error, observe_attempt)
+    seconds = wait_budget(wait_seconds, reconcile_only=reconcile_only)
     if not isinstance(marker, str) or not marker or marker not in text:
         raise bridge.TaskPackContractError('MESSAGE_MARKER_REQUIRED')
     if bridge._looks_like_task_dispatch(text):
@@ -242,9 +256,12 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             try:
                 result = bridge.recover_stranded_once(surface, text, marker, paste['screen'],
                     confirm_lines=confirm_lines, delivery_observer=observe_recovery,
-                    native_binding=old.get('native_binding'), native_attempt=attempt_path)
+                    native_binding=old.get('native_binding'), native_attempt=attempt_path,
+                    wait_seconds=seconds)
             except BaseException as exc:
+                annotate_attempt_error(exc, attempt_path, attempt)
                 attempt['recovery_error'] = str(exc)
+                attempt['recovery_error_details'] = exc.details
                 write_json(attempt_path, attempt)
                 raise
             attempt['phase'] = 'CONFIRMED'
@@ -253,11 +270,13 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             if not old or old.get('phase') in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_MESSAGE')
             native._original_intent(old, old.get('native_binding'), text)
-            result = native.scan_original(bridge, surface, text, attempts[-1], old.get('native_binding'))
+            result = observe_attempt(lambda: native.scan_original(
+                bridge, surface, text, attempts[-1], old.get('native_binding')),
+                attempts[-1], old, seconds, reconcile_only=True)
             observation = journal / ('observation-' + str(time.time_ns()) + '.json')
             write_json(observation, dict(result, input_operations=0, at_epoch=time.time()))
             if result.get('confirmed') is not True:
-                raise bridge.DispatchUnconfirmed('MESSAGE_NOT_YET_CONFIRMED: no resend')
+                raise bridge.DispatchUnconfirmed('MESSAGE_NOT_YET_CONFIRMED: no resend', details=result)
             attempt_path = attempts[-1]
             result = dict(result, reconciled_read_only=True, observation=str(observation))
         else:
@@ -274,7 +293,8 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             except (OSError, ValueError) as exc:
                 raise bridge.TaskPackContractError(str(exc)) from exc
             attempt_path = journal / ('attempt-%04d.json' % (len(attempts) + 1))
-            attempt = dict(binding=binding, phase='PREPARED', events=[])
+            attempt = dict(binding=binding, phase='PREPARED', events=[],
+                           controller_provenance=controller_provenance(__file__))
             if body_reference is not None:
                 attempt.update(body_reference=body_reference, body_pin=body_pin)
             write_json(attempt_path, attempt)
@@ -300,20 +320,25 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                 write_json(attempt_path, attempt)
                 result = bridge._submit_text_once(surface, text, marker=marker,
                     confirm_lines=confirm_lines, force_compose=False, delivery_observer=observe,
-                    native_binding=attempt['native_binding'], native_attempt=attempt_path)
+                    native_binding=attempt['native_binding'], native_attempt=attempt_path,
+                    wait_seconds=seconds)
                 if result.get('confirmed') is not True:
-                    raise bridge.DispatchUnconfirmed('MESSAGE_NOT_CONFIRMED')
+                    raise bridge.DispatchUnconfirmed('MESSAGE_NOT_CONFIRMED', details=result)
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'
+                annotate_attempt_error(exc, attempt_path, attempt)
                 attempt['error'] = str(exc)
+                attempt['error_details'] = exc.details
                 write_json(attempt_path, attempt)
                 raise
             attempt['phase'] = 'CONFIRMED'
             write_json(attempt_path, attempt)
         recheck()
-        if not native.receipt_evidence(bridge, surface, text, json.loads(read_bytes(attempt_path)), result):
-            raise bridge.DispatchUnconfirmed('MESSAGE_NATIVE_PROOF_REQUIRED')
+        original = json.loads(read_bytes(attempt_path))
+        result = attempt_details(result, attempt_path, original, reconcile_only=reconcile_only)
+        if not native.receipt_evidence(bridge, surface, text, original, result):
+            raise bridge.DispatchUnconfirmed('MESSAGE_NATIVE_PROOF_REQUIRED', details=result)
         recheck()
         result = dict(result, binding=binding, attempt=str(attempt_path), at_epoch=time.time())
         if body_reference is not None:

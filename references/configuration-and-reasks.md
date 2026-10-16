@@ -5,8 +5,9 @@ skills and global CLAUDE.md link here; they do not implement another sender or
 copy hook code. Pin one complete immutable release for each new task. An
 in-flight task keeps its original controller, task pack, journal and receipts.
 
-This reference describes **0.4.32** behavior. See [CHANGELOG](../CHANGELOG.md)
-for the final offline validation. Installation, actual scheduler
+This reference describes **0.4.35** behavior. See the
+[release boundaries](release-0.4.35.md) and [CHANGELOG](../CHANGELOG.md)
+for validation status. Installation, actual scheduler
 execution, automatic hooks and original-client adoption require separate live
 evidence; offline results do not establish them.
 
@@ -90,6 +91,16 @@ operator stop ends the wait. `--executor-reask` registers its advisory observer 
 Stop never enrolls an episode or launches the loop. An API outage, killed process
 or paused client can prevent execution; expose that state instead of promising
 that software can never stop.
+
+In 0.4.35, terminal inquiries wait at least 60 seconds after the previous native
+confirmation, revalidating the original receipt before another input. Cached
+timestamps alone cannot authorize input. Pending attempts remain observation-only;
+file inquiries keep their independent cadence and formal ownership checks.
+The runner also returns when it observes a formal reservation or a reply needing
+original consumption. `runner_returned=true` is an invocation boundary, not an
+idle observation, episode stop or Goal change; fresh preflight is still required.
+Old controllers retain their original runner behavior. See
+[the return and confirmation contract](release-0.4.35.md#let-the-original-executor-read-and-return).
 
 The explicit CLI uses the nonblocking caller lock and an authenticated existing
 idle binding where needed. Do not reopen an operator stop or take another supervisor's
@@ -287,6 +298,12 @@ old episodes or authorize communication. A new explicitly authorized
 purpose, workspace, supervisor, episode, file channels and immutable controller.
 Preserve the original controller of every earlier attempt; do not migrate it.
 
+In 0.4.35 only this job uses `ProcessType=Standard`; the configuration guardian
+remains `Background`. Startup timing records module entry to sweep entry, not
+the interpreter's entire startup. Bounded directory pages and fair cursors limit
+discovery work; partial counts still require the phase evidence below. Job
+configuration alone does not establish improved execution under load.
+
 The launchd job runs at 60-second intervals with a 256-enrollment cap and a
 10-second sweep budget, uses nonblocking registry/episode locks and rotates its
 scan fairly. It only updates file requests and reads their bound file replies.
@@ -343,6 +360,13 @@ Its issuer can retain an explicit enrollment of 0.4.32 and the previously
 reviewed controllers. The 0.4.32 issuer's range stays fixed: it cannot claim a
 0.4.33 or future CURRENT controller. Both complete releases and all descriptors
 must still verify; original enrollment and controller bytes remain authoritative.
+
+Version 0.4.35 extends the same complete review to
+`0.4.34-d333557fb498`. Its original issuer may retain only its reviewed
+0.4.28/30/31/32/33/34 controllers; older issuers do not gain authority over
+0.4.34 or a future CURRENT. All actual members, modes, hashes, descriptors and
+the complete original issuer/controller combination must verify. This adds file
+interpretation, not old-code execution, migration or reply-consumption authority.
 
 Match the complete enrollment binding and registration token to the live state;
 legacy tokenless states match only tokenless records. An existing continuation
@@ -450,6 +474,27 @@ guarantee. Ordinary tools and workflow hooks remain nonblocking.
 
 Reservation is not native dispatch evidence or business acceptance.
 TASK/DISPATCHED/ACK mailbox text alone does not dispatch or reserve work.
+
+Version 0.4.35 reuses an exact reservation for the same task, artifact root,
+workspace and native participants under the existing participant/directory locks.
+It does not merge historical duplicate markers. Exact RELEASE cleanup may remove
+the matching stale pause on a terminal episode, but never restores its waiting
+state or authorization.
+
+### Reply and settlement context at actual tool boundaries
+
+An authenticated executor's PostToolUse may expose the exact ANSWERED body, SHA
+and original-controller consume command. Only the original executor reads and
+consumes that body. Reminder cursors advance after successful output flush;
+exposure, body reading and consumption have separate evidence.
+
+Independent `CALLBACK_SETTLEMENT` context reminds the original supervisor about
+a verified native callback still awaiting matching RELEASE. It is a file
+coordination request, not another next-task inquiry: it does not increase
+`ask_count`, send terminal input, accept a report or release a reservation.
+Pending handshake/timeout and explicitly authorized maintenance context likewise
+preserve the original nonce, controller, attempt and full body. They do not ACK,
+consume or turn queued notices into native receipts.
 
 ## Continuing authorization (0.4.28)
 

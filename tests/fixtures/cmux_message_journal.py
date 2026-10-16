@@ -2,6 +2,14 @@
 import json
 
 
+def verified_no_input(bridge, surface, text, marker, *, commit=None):
+    """This CLI double has no canonical journal and cannot prove zero input.
+
+    Real-journal settlement is covered by test_helper_no_input.py.
+    """
+    return None
+
+
 def verified_receipt(bridge, surface, text, marker):
     bridge.event(dict(op="verify", marker=marker))
     data = bridge.config()

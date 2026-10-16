@@ -1,5 +1,16 @@
 # 协作提效与任务收尾
 
+0.4.35在真实PostToolUse边界提示原ANSWERED全文和consume入口、待ACK握手、
+握手超时及独立CALLBACK_SETTLEMENT。提示成功flush后才提交游标；它不代
+正文读取、ACK、报告核收或RELEASE。结算提醒不增加下一任务ask_count，
+不绕过正式预留。主管读原报告并精确disarm后，接续原计划的独立未完范围。
+
+显式reask runner在预留、待消费回件或观察期限返回，仅释放本次调用；
+仍须新鲜preflight核实时空闲。终端求派从上一条原生确认后至少60秒起算，
+未确认只观察原次。新投递默认30秒确认窗，reconcile默认一次只读观察；
+同步I/O可能延长耗时，不以窗口耗尽归因执行者失联。详见
+[0.4.35行为及证据边界](release-0.4.35.md)。
+
 本页补充[双向投递操作规则](efficient-bidirectional-collaboration-20261004.md)，
 用于决定何时协作、如何归因等待、何时收尾。以完成用户任务的效率和质量为准；
 文档维护本身不要求启动 executor，也不授权更换原会话或修改在途控制器。

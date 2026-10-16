@@ -5,13 +5,11 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import manage_install as m
 import cmux_bridge
 import mac_harness
-import offline_test_hook
 
 
 class InstallationTests(unittest.TestCase):
@@ -20,26 +18,40 @@ class InstallationTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.active = Path(self.tmp.name) / 'active'
         self.active.mkdir()
-        self.env = dict(os.environ, CMUX_WORKSPACE_ID='offline-doctor',
-                        CMUX_SURFACE_ID='offline-doctor-surface')
 
-        def run_hook(argv, **kwargs):
-            # Manage's generated command and every hook's actual main remain
-            # under test. Only its subprocess receives private process/marker
-            # inputs; returning the real CompletedProcess preserves failures.
-            self.assertEqual(argv[:2], [sys.executable, '-B'])
-            if Path(argv[2]).name == 'cmux_workflow_advisory.py':
-                self.assertEqual(argv[3], '--hook')
-                self.assertIn(argv[4], m.WORKFLOW_HOOKS)
-            else:
-                self.assertEqual(len(argv), 3)
-                self.assertIn(Path(argv[2]).stem, m.GUARDS)
-            kwargs.setdefault('env', self.env)
-            return subprocess.run(offline_test_hook.command(argv[2], self.active, *argv[3:]), **kwargs)
+    def test_doctor_probe_isolates_paths_environment_and_cwd_in_real_subprocess(self):
+        # Exercise the actual bootstrap, not offline_test_hook's patched gates.
+        script = Path(self.tmp.name) / 'probe.py'
+        script.write_text('''import os
+from pathlib import Path
+import sys
+assert sys.stdin.read() == '{}'
+assert Path.home() == Path.cwd()
+assert Path.cwd().name.startswith('mac-doctor-')
+assert not any(key.startswith(('CMUX_', 'CODEX_', 'MULTI_AGENT_', 'PYTHON')) for key in os.environ)
+assert 'HOME' not in os.environ
+assert not (Path.home() / '.local/state/multi-agent-collaboration').exists()
+(Path.home() / 'probe-wrote-only-here').write_text('diagnostic')
+''')
+        before = dict(os.environ)
+        with patch.dict(os.environ, {'CMUX_WORKSPACE_ID': 'live-workspace',
+                                     'CODEX_THREAD_ID': 'live-thread',
+                                     'MULTI_AGENT_ROLE': 'executor',
+                                     'PYTHONPATH': str(self.active)}):
+            with patch.object(m, 'command', return_value=shlex.join([sys.executable, '-B', str(script)])):
+                result = m.doctor_probe('cmux_workspace_guard')
+        self.assertTrue(result['benignExitZero'], result)
+        self.assertFalse(result['liveInvocation'])
+        self.assertEqual(dict(os.environ), before)
+        self.assertFalse((Path(self.tmp.name) / 'probe-wrote-only-here').exists())
 
-        runner = patch.object(m, 'subprocess', SimpleNamespace(run=run_hook))
-        runner.start()
-        self.addCleanup(runner.stop)
+    def test_doctor_preserves_real_entrypoint_failure(self):
+        script = Path(self.tmp.name) / 'fail.py'
+        script.write_text('raise SystemExit(2)\n')
+        with patch.object(m, 'command', return_value=shlex.join([sys.executable, '-B', str(script)])):
+            result = m.doctor_probe('cmux_workspace_guard')
+        self.assertFalse(result['benignExitZero'])
+        self.assertEqual(result['returncode'], 2)
 
     def test_skill_path_is_portable_and_shared(self):
         self.assertEqual(cmux_bridge.COLLABORATION_SKILL_PATH, m.ROOT / "SKILL.md")

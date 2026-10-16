@@ -27,9 +27,50 @@ GUARDS = {
     "cmux_executor_idle_guard": "Stop",
     "cmux_native_delivery_guard": "PostToolUse",
     "cmux_supervisor_report_guard": "PostToolUse",
+    "executor_reply_advisory": "PostToolUse",
+    "callback_settlement_advisory": "PostToolUse",
+    "handshake_advisory": "PostToolUse",
 }
 RETIRED_GUARDS = {"cmux_submit_confirmation_guard", "cmux_send_proof_stop_guard"}
 OPTIONAL_GUARDS = {"cmux_executor_reask_stop_guard": "Stop"}
+
+# --home selects the configuration being inspected, never the runtime of a
+# diagnostic hook. Run each real entrypoint in its own disposable namespace.
+# In particular, do not inherit a live client's CMUX/Goal/agent selectors or
+# rewrite the operator's HOME to make an empty-payload probe pass.
+DOCTOR_BOOTSTRAP = """
+import os
+from pathlib import Path
+import runpy
+import sys
+diagnostic_root = Path(sys.argv[1]).resolve(strict=True)
+Path.home = staticmethod(lambda: diagnostic_root)
+os.chdir(diagnostic_root)
+script, *arguments = sys.argv[2:]
+sys.path.insert(0, str(Path(script).parent))
+sys.argv = [script, *arguments]
+runpy.run_path(script, run_name='__main__')
+"""
+
+
+def doctor_probe(name):
+    argv = shlex.split(command(name))
+    environment = {key: os.environ[key] for key in
+                   ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SYSTEMROOT')
+                   if key in os.environ}
+    result = dict(benignExitZero=False, probeScope='isolated-empty-payload',
+                  liveInvocation=False)
+    try:
+        with tempfile.TemporaryDirectory(prefix='mac-doctor-') as diagnostic_root:
+            run = subprocess.run(
+                [sys.executable, '-I', '-B', '-c', DOCTOR_BOOTSTRAP,
+                 diagnostic_root, *argv[2:]],
+                input='{}', text=True, capture_output=True, timeout=15,
+                cwd=diagnostic_root, env=environment)
+            result.update(benignExitZero=run.returncode == 0, returncode=run.returncode)
+    except (OSError, subprocess.SubprocessError) as exc:
+        result['error_type'] = type(exc).__name__
+    return result
 
 
 def command(name):
@@ -246,9 +287,7 @@ def manage(home, mode, apply=False, executor_reask=False):
                 checks[str(config)]['skillBackup'] = replace_skill(link, snapshot, uninstall=True)
     if mode == "doctor":
         for name in dict(GUARDS, **(OPTIONAL_GUARDS if executor_reask else {})):
-            run = subprocess.run(shlex.split(command(name)), input="{}", text=True,
-                                 capture_output=True, timeout=15)
-            checks[name] = {"benignExitZero": run.returncode == 0}
+            checks[name] = doctor_probe(name)
         ok = all(v.get("benignExitZero", v.get("linked") and v.get("configured")) for v in checks.values())
         # CURRENT-based releases have two independent launchd jobs. Checking
         # hooks alone missed a scheduler still pinned to the previous release.
@@ -260,7 +299,7 @@ def manage(home, mode, apply=False, executor_reask=False):
         ok = True
     return {"ok": bool(ok), "mode": mode, "applied": apply and mode != "doctor",
             "checkout": str(ROOT), "checks": checks,
-            "scope": "configuration and benign execution, not live client reload proof"}
+            "scope": "configuration and isolated benign execution, not live client reload proof"}
 
 
 if __name__ == "__main__":

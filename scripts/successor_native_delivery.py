@@ -18,6 +18,8 @@ import cmux_native_delivery as native
 import successor_rebind
 import cmux_prompt_reference as prompt_reference
 from cmux_evidence_io import open_regular_lock, read_bytes
+from cmux_confirmation import (wait_budget, observe_receipt, controller_provenance,
+                               attempt_details, annotate_attempt_error)
 
 
 SCHEMA = "native-successor-delivery-v1"
@@ -238,13 +240,54 @@ def _original(journal, artifact, text, marker):
     return attempt, intent, fence
 
 
+def _attempt_evidence(journal, attempt):
+    events = [json.loads(read_bytes(p)) for p in sorted(journal.glob("event-*.json"))]
+    return dict(attempt, events=events, phase=events[-1].get("phase", "UNKNOWN") if events else "NO_INPUT")
+
+
+def _scan_original(bridge, journal, artifact, attempt, intent, fence):
+    """Keep the cursor separate from the frozen attempt and original events."""
+    from cmux_callback_journal import write_json
+    binding, wire = attempt["native_binding"], attempt["wire"]
+    require_bound(bridge, artifact, binding, wire)
+    legacy = _legacy_binding(binding)
+    path = journal / "native-scan.json"
+    pins = dict(schema="successor-native-scan-v1", attempt=str(journal / "attempt.json"),
+                attempt_sha256=_hash(read_bytes(journal / "attempt.json")),
+                binding_sha256=_hash(_canonical(binding)),
+                intent_sha256=_hash(_canonical([intent, fence])))
+    old = json.loads(read_bytes(path)) if path.exists() else {}
+    if not isinstance(old, dict) or (old and any(old.get(k) != v for k, v in pins.items())):
+        raise native.NativeDeliveryError("SUCCESSOR_NATIVE_SCAN_BINDING_CHANGED")
+    if old.get("confirmed") is True:
+        if not native.validate_proof(legacy, wire, old.get("native_proof"),
+                                     paste_fence=fence, not_before=intent["at_epoch"]):
+            raise native.NativeDeliveryError("SUCCESSOR_NATIVE_PROOF_CHANGED")
+        result = old
+    else:
+        result = native.probe(legacy, wire, cursor=old.get("next_offset"),
+                              paste_fence=fence, not_before=intent["at_epoch"])
+        if not result.get("queued_proof") and old.get("queued_proof"):
+            result["queued_proof"] = old["queued_proof"]
+            if result.get("state") == "NATIVE_PENDING":
+                result["state"] = "NATIVE_QUEUED"
+        write_json(path, dict(result, **pins))
+    from cmux_turn_diagnostic import observe as observe_turn
+    events = _attempt_evidence(journal, attempt)['events']
+    diagnostic = observe_turn(legacy, wire, events, journal / 'attempt.json',
+                              journal / 'turn-scan.json', screen_hash_length=64)
+    require_bound(bridge, artifact, binding, wire)
+    return dict(result, observed_at=time.time(), binding=binding,
+                native_turn_diagnostic=diagnostic)
+
+
 def _observe(bridge, journal, artifact, text, marker):
     attempt, intent, fence = _original(journal, artifact, text, marker)
     if intent is None:
+        require_bound(bridge, artifact, attempt["native_binding"], attempt["wire"])
         result = dict(confirmed=False, state="NO_INPUT", input_operations=0)
     else:
-        result = scan_received(bridge, artifact, attempt["native_binding"], attempt["wire"],
-                               paste_fence=fence, not_before=intent["at_epoch"])
+        result = _scan_original(bridge, journal, artifact, attempt, intent, fence)
         if result.get("confirmed") is True and not native.validate_proof(
                 _legacy_binding(attempt["native_binding"]), attempt["wire"], result.get("native_proof"),
                 paste_fence=fence, not_before=intent["at_epoch"]):
@@ -255,6 +298,18 @@ def _observe(bridge, journal, artifact, text, marker):
                   input_operations=0, marker=marker)
     if attempt.get("body_reference"):
         result["body_reference"] = attempt["body_reference"]
+    return attempt_details(result, journal / "attempt.json", _attempt_evidence(journal, attempt),
+                           reconcile_only=True)
+
+
+def _publish_observation(bridge, journal, artifact, text, marker, result):
+    """Publish once after observation, including its complete RPC/window layers."""
+    attempt, intent, fence = _original(journal, artifact, text, marker)
+    require_bound(bridge, artifact, attempt["native_binding"], attempt["wire"])
+    if result.get("confirmed") is True and (intent is None or not native.validate_proof(
+            _legacy_binding(attempt["native_binding"]), attempt["wire"], result.get("native_proof"),
+            paste_fence=fence, not_before=intent["at_epoch"])):
+        raise native.NativeDeliveryError("SUCCESSOR_NATIVE_PROOF_CHANGED")
     observation = journal / ("observation-" + str(time.time_ns()) + ".json")
     _exclusive_json(observation, result)
     result["observation"] = str(observation)
@@ -275,21 +330,34 @@ def _observe(bridge, journal, artifact, text, marker):
     return result
 
 
-def reconcile(bridge, artifact, text, *, marker, state_root=None):
+def _observe_bounded(bridge, journal, artifact, text, marker, seconds):
+    try:
+        return observe_receipt(lambda: _observe(bridge, journal, artifact, text, marker),
+                               seconds, reconcile_only=True)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        attempt, _, _ = _original(journal, artifact, text, marker)
+        raise annotate_attempt_error(exc, journal / "attempt.json",
+                                     _attempt_evidence(journal, attempt), reconcile_only=True)
+
+
+def reconcile(bridge, artifact, text, *, marker, state_root=None, wait_seconds=None):
     """Zero terminal input, using only the original durable binding and fence."""
+    seconds = wait_budget(wait_seconds, reconcile_only=True)
     successor_rebind.validate_artifact(artifact)
     root, journal = _paths(artifact, marker, state_root)
     with _locked(root, journal, artifact):
-        return _observe(bridge, journal, artifact, text, marker)
+        result = _observe_bounded(bridge, journal, artifact, text, marker, seconds)
+        return _publish_observation(bridge, journal, artifact, text, marker, result)
 
 
-def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wait_seconds=3):
+def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wait_seconds=None):
     """Persist one native input (Codex) or paste (Claude); later calls reconcile.
 
     Old tasks, callbacks and attempts are never read or rewritten. A reference
     notice proves only receipt of that exact notice, not reading/acceptance of
     its body. The caller must supply a stable marker for long messages.
     """
+    seconds = wait_budget(wait_seconds)
     successor_rebind.validate_artifact(artifact)
     if not isinstance(text, str) or not text:
         raise native.NativeDeliveryError("NATIVE_EMPTY_PAYLOAD")
@@ -302,7 +370,9 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
     root, journal = _paths(artifact, marker, state_root)
     with _locked(root, journal, artifact):
         if (journal / "attempt.json").exists():
-            return _observe(bridge, journal, artifact, text, marker)
+            result = _observe_bounded(bridge, journal, artifact, text, marker,
+                                      wait_budget(wait_seconds, reconcile_only=True))
+            return _publish_observation(bridge, journal, artifact, text, marker, result)
         planned = prompt_reference.plan(text, marker, root / "message-bodies-v1")
         wire, reference = planned["text"], planned["reference"]
         body_pin = prompt_reference.persist(reference, text)
@@ -320,7 +390,8 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                        artifact_sha256=_hash(_canonical(artifact)), marker=marker,
                        body=text, body_sha256=_hash(text.encode()), wire=wire,
                        wire_sha256=_hash(wire.encode()), body_reference=reference,
-                       body_pin=body_pin, native_binding=binding, created_at_epoch=time.time())
+                       body_pin=body_pin, native_binding=binding, created_at_epoch=time.time(),
+                       controller_provenance=controller_provenance(__file__))
         _exclusive_json(journal / "attempt.json", attempt)
         operations = 0
         try:
@@ -340,8 +411,9 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                 result = send_once(_legacy_binding(binding), wire,
                     recheck=recheck_native, emit=emit_native,
                     observe=lambda: _observe(bridge, journal, artifact, text, marker),
-                    wait_seconds=wait_seconds)
-                return dict(result, reconciled_read_only=False)
+                    wait_seconds=seconds)
+                result["reconciled_read_only"] = False
+                return _publish_observation(bridge, journal, artifact, text, marker, result)
             require_bound(bridge, artifact, binding, wire)
             fence = native.capture_paste_fence(_legacy_binding(binding))
             _event(journal, "PASTE_INTENT", screen=before, screen_sha256=_hash(before.encode()),
@@ -383,13 +455,13 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
             bridge._run_successor("send-key", "--surface", binding["identity"]["target_surface_uuid"],
                                   "--", actual_key, artifact=artifact)
             _event(journal, "KEY_SENT", key=actual_key)
-            deadline = time.monotonic() + max(0, min(float(wait_seconds), 10))
-            while True:
-                result = _observe(bridge, journal, artifact, text, marker)
-                if result.get("confirmed") or time.monotonic() >= deadline:
-                    result.update(input_operations=operations, reconciled_read_only=False, submission_key=actual_key)
-                    return result
-                time.sleep(0.25)
+            result = observe_receipt(lambda: _observe(bridge, journal, artifact, text, marker),
+                                     seconds, stop_when_queued=True)
+            result.update(input_operations=operations, terminal_input_operations=operations,
+                          reconciled_read_only=False, submission_key=actual_key)
+            return _publish_observation(bridge, journal, artifact, text, marker, result)
         except BaseException as exc:
-            _event(journal, "ERROR", error=str(exc), input_operations_attempted=operations)
+            annotate_attempt_error(exc, journal / "attempt.json", _attempt_evidence(journal, attempt))
+            _event(journal, "ERROR", error=str(exc), error_details=exc.details,
+                   input_operations_attempted=operations)
             raise

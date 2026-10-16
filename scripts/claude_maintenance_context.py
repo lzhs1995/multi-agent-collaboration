@@ -4,6 +4,7 @@ This is a file reader, not a sender or a native-receipt reconciler. It never
 changes the original attempt, runs a command from a notice, or blocks a hook.
 """
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -70,6 +71,9 @@ def private_root(create=False):
 def material(offer):
     if offer.get('schema') != SCHEMA:
         raise ValueError('unsupported maintenance offer')
+    if 'offer_id' in offer and offer['offer_id'] != digest(json.dumps(
+            {k: v for k, v in offer.items() if k != 'offer_id'}, sort_keys=True).encode()):
+        raise ValueError('maintenance offer id changed')
     session = str(uuid.UUID(offer['session_id']))
     if session != offer['session_id']:
         raise ValueError('invalid session')
@@ -91,11 +95,11 @@ def material(offer):
     if digest(read(authorization['path'])) != authorization['sha256']:
         raise ValueError('original authorization changed')
     pinned(offer['maintenance_request']).decode('utf-8')
-    body = read(attempt['body_reference']['path'])
-    if (len(body) != attempt['body_reference']['bytes']
-            or digest(body) != attempt['body_sha256']
-            or digest(body) != attempt['body_reference']['sha256']
-            or body.decode('utf-8') != attempt['body']):
+    reference = attempt.get('body_reference')
+    body = pinned(reference) if reference is not None else attempt['body'].encode('utf-8')
+    if (len(body) > MAX_BYTES or digest(body) != attempt['body_sha256']
+            or body.decode('utf-8') != attempt['body']
+            or (reference is None and attempt['wire'] != attempt['body'])):
         raise ValueError('original body changed')
     log = Path(binding['transcript']['path'])
     if (Path.home() / '.claude/projects') not in log.parents:
@@ -140,6 +144,83 @@ def _completed_reply(offer, attempt, reply):
     return reply.get('body_read') is True and all(reply.get(k) == v for k, v in expected.items())
 
 
+def _require_offer_id(value):
+    if value is not None and (not isinstance(value, str) or len(value) != 64
+            or any(c not in '0123456789abcdef' for c in value)):
+        raise ValueError('expected completed offer id must be its exact SHA256')
+
+
+def _same_executor(old, new):
+    target_keys = ('target_surface_uuid', 'target_workspace_uuid', 'target_pane_uuid')
+    if (old.get('provider') != new.get('provider') or old.get('session_id') != new.get('session_id')
+            or old['process'] != new['process']
+            or any(old['identity'].get(k) != new['identity'].get(k) for k in target_keys)
+            or any(old['transcript'].get(k) != new['transcript'].get(k)
+                   for k in ('path', 'device', 'inode'))):
+        raise ValueError('replacement must retain the original executor session and process')
+
+
+def _repeat_replacement(offer, expected_offer_id):
+    """An idempotent retry may name this offer or its exact archived predecessor."""
+    _require_offer_id(expected_offer_id)
+    if expected_offer_id is None or expected_offer_id == offer['offer_id']:
+        return
+    archive = private_root() / 'history' / offer['session_id'] / expected_offer_id / offer['offer_id']
+    old = json.loads(read(archive / 'offer.json'))
+    if (old.get('offer_id') != expected_offer_id or old.get('session_id') != offer['session_id']
+            or json.loads(read(archive / 'next-offer.json')) != offer):
+        raise ValueError('replacement retry does not match its archived predecessor')
+    attempt, old_binding, _ = material(old)
+    _, binding, _ = material(offer)
+    _same_executor(old_binding, binding)
+    reply_raw = read(archive / 'reply.json')
+    if (reply_raw != read(old['reply_path'])
+            or not _completed_reply(old, attempt, json.loads(reply_raw))):
+        raise ValueError('replacement retry has no exact archived body-read reply')
+
+
+def preflight_enrollment(attempt_path, request_path, reply_path, binding, *, replace_completed=None):
+    """Read-only argument/ownership checks before any transport or registry write.
+
+    A different unread offer does not block a separately authorized notice when
+    replacement was not requested. Transport and enrollment keep separate results.
+    Existing replies, however, are usable only for the exact original offer.
+    """
+    _require_offer_id(replace_completed)
+    if binding.get('provider') != 'claude':
+        raise ValueError('maintenance file context requires the original Claude session')
+    session = str(uuid.UUID(binding['session_id']))
+    reply = Path(reply_path)
+    exists = reply.exists() or reply.is_symlink()
+    old = None
+    if root().exists() or root().is_symlink():
+        target = private_root() / (session + '.json')
+        if target.exists() or target.is_symlink():
+            old = json.loads(read(target))
+    if old and old['attempt']['path'] == str(attempt_path):
+        if old['session_id'] != session:
+            raise ValueError('maintenance offer belongs to another session')
+        if (old['attempt'] != pin(attempt_path) or old['maintenance_request'] != pin(request_path)
+                or old['reply_path'] != str(reply)):
+            raise ValueError('original attempt is already enrolled; do not change its reply or pins')
+        attempt, old_binding, _ = material(old)
+        _same_executor(old_binding, binding)
+        _repeat_replacement(old, replace_completed)
+        if exists and not _completed_reply(old, attempt, json.loads(read(reply))):
+            raise ValueError('existing reply is not the exact executor body-read reply')
+        return
+    if exists:
+        raise ValueError('existing reply does not belong to this original maintenance offer')
+    if replace_completed is not None:
+        if (old is None or old['offer_id'] != replace_completed
+                or old['session_id'] != session):
+            raise ValueError('completed offer changed or belongs to another session')
+        attempt, old_binding, _ = material(old)
+        _same_executor(old_binding, binding)
+        if not _completed_reply(old, attempt, json.loads(read(old['reply_path']))):
+            raise ValueError('previous offer has no exact executor body-read reply')
+
+
 def _private_directory(path):
     path.mkdir(mode=0o700, exist_ok=True)
     st = path.lstat()
@@ -162,7 +243,19 @@ def _archive_bytes(path, raw):
         os.fsync(stream.fileno())
 
 
-def _replace_completed(target, offer, encoded, expected_offer_id):
+@contextlib.contextmanager
+def _cursor_lock(directory, session):
+    cursor = directory / (session + '.cursor.json')
+    fd = os.open(cursor, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'r+b') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        st = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077):
+            raise ValueError('maintenance cursor must be private')
+        yield stream
+
+
+def _replace_completed(target, offer, encoded, expected_offer_id, *, stream=None):
     """Advance one read-completed file offer, retaining the original evidence.
 
     This opt-in operation uses the same cursor lock as automatic discovery. It
@@ -170,17 +263,10 @@ def _replace_completed(target, offer, encoded, expected_offer_id):
     Archive first, then atomically publish the new registry; an interrupted
     archive can be retried while the old offer remains available.
     """
-    if (not isinstance(expected_offer_id, str) or len(expected_offer_id) != 64
-            or any(c not in '0123456789abcdef' for c in expected_offer_id)):
-        raise ValueError('expected completed offer id must be its exact SHA256')
+    _require_offer_id(expected_offer_id)
     directory = private_root()
-    cursor = directory / (offer['session_id'] + '.cursor.json')
-    fd = os.open(cursor, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'r+b') as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        st = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077):
-            raise ValueError('maintenance cursor must be private')
+    lock = _cursor_lock(directory, offer['session_id']) if stream is None else contextlib.nullcontext(stream)
+    with lock as stream:
         old_raw = read(target)
         old = json.loads(old_raw)
         if old.get('offer_id') != expected_offer_id or old.get('session_id') != offer['session_id']:
@@ -189,11 +275,7 @@ def _replace_completed(target, offer, encoded, expected_offer_id):
         _, binding, _ = material(offer)
         if old['attempt'] == offer['attempt']:
             raise ValueError('original attempt is already enrolled; observe it without re-enrolling')
-        target_keys = ('target_surface_uuid', 'target_workspace_uuid', 'target_pane_uuid')
-        if (old_binding['process'] != binding['process']
-                or any(old_binding['identity'].get(k) != binding['identity'].get(k) for k in target_keys)
-                or old_binding['transcript']['path'] != binding['transcript']['path']):
-            raise ValueError('replacement must retain the original executor session and process')
+        _same_executor(old_binding, binding)
         reply_raw = read(old['reply_path'])
         if not _completed_reply(old, old_attempt, json.loads(reply_raw)):
             raise ValueError('previous offer has no exact executor body-read reply')
@@ -225,6 +307,7 @@ def _replace_completed(target, offer, encoded, expected_offer_id):
 
 def enroll(attempt_path, queued_offset, queued_bytes, request_path, reply_path,
            *, replace_completed=None):
+    _require_offer_id(replace_completed)
     if (type(queued_offset) is not int or queued_offset < 0
             or type(queued_bytes) is not int or not 0 < queued_bytes <= MAX_BYTES):
         raise ValueError('invalid queue record bounds')
@@ -235,21 +318,41 @@ def enroll(attempt_path, queued_offset, queued_bytes, request_path, reply_path,
         stream.seek(queued_offset)
         raw = stream.read(queued_bytes)
     reply = Path(reply_path)
-    if not reply.is_absolute() or reply.parent.resolve() != reply.parent or reply.exists():
-        raise ValueError('reply must be a new absolute file in an existing directory')
+    if (not reply.is_absolute() or reply.parent.resolve(strict=True) != reply.parent
+            or not reply.parent.is_dir() or reply.name in ('', '.', '..')):
+        raise ValueError('reply must be an absolute file in an existing real directory')
     offer = dict(schema=SCHEMA, session_id=binding['session_id'], attempt=attempt_pin,
                  maintenance_request=pin(request_path), reply_path=str(reply),
                  queued_record=dict(offset=queued_offset, bytes=queued_bytes, sha256=digest(raw)))
     material(offer)
     offer['offer_id'] = digest(json.dumps(offer, sort_keys=True).encode())
-    target = private_root(create=True) / (offer['session_id'] + '.json')
+    directory = private_root(create=True)
+    target = directory / (offer['session_id'] + '.json')
     encoded = (json.dumps(offer, ensure_ascii=False, indent=2) + '\n').encode()
-    if replace_completed is not None:
-        _replace_completed(target, offer, encoded, replace_completed)
-        return target, offer
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'wb') as stream:
-        stream.write(encoded)
+    with _cursor_lock(directory, offer['session_id']) as cursor:
+        if target.exists() or target.is_symlink():
+            old = json.loads(read(target))
+            if old == offer:
+                # Reconcile may revisit this offer after the executor has read
+                # it. Preserve that reply and the discovery cursor byte-for-byte.
+                material(old)
+                _repeat_replacement(old, replace_completed)
+                if (reply.exists() or reply.is_symlink()) and not _completed_reply(
+                        old, attempt, json.loads(read(reply))):
+                    raise ValueError('existing reply is not the exact executor body-read reply')
+                return target, old
+            if old.get('attempt', {}).get('path') == attempt_pin['path']:
+                raise ValueError('original attempt is already enrolled; do not change its reply or pins')
+        if reply.exists() or reply.is_symlink():
+            raise ValueError('reply must be a new absolute file in an existing directory')
+        if replace_completed is not None:
+            _replace_completed(target, offer, encoded, replace_completed, stream=cursor)
+        else:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
     return target, offer
 
 

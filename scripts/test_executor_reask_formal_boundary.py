@@ -307,6 +307,75 @@ class FormalBoundaryTests(unittest.TestCase):
         self.assertEqual(stopped['state'], reask.STOPPED)
         self.assert_preserved(original, stopped)
 
+    def test_terminal_exact_release_clears_only_matching_pause_without_revival(self):
+        marker = self.marker()
+        reservation = dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])
+        other = dict(collaboration_id='keep-other', task_id=marker['task_id'])
+        for status in (reask.ANSWERED, reask.CONSUMED, reask.STOPPED):
+            with self.subTest(status=status):
+                state = self.fixture(status=status)
+                state.update(paused_tasks=[reservation, other], stopped_epoch=1001.,
+                             exit_reason='ORIGINAL_TERMINAL_REASON')
+                self.write_original(state)
+                released = self.boundary(marker, 'RELEASED', now=1010.)
+                self.assertEqual(released['paused_tasks'], [other])
+                self.assertEqual(released['state'], status)
+                for key in ('next_due_epoch', 'stopped_epoch', 'exit_reason'):
+                    self.assertEqual(released[key], state[key])
+                self.assertEqual(released['last_task_boundary']['event'], 'RELEASED')
+                self.assertEqual(self.boundary(marker, 'RELEASED', now=1020.), released)
+                self.assert_preserved(state, released)
+        self.channels.assert_not_called()
+
+    def test_terminal_wrong_release_and_unknown_state_keep_all_evidence(self):
+        marker = self.marker()
+        reservation = dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])
+        for status in (reask.ANSWERED, reask.CONSUMED, reask.STOPPED, 'UNKNOWN'):
+            state = self.fixture(status=status)
+            state['paused_tasks'] = [reservation]
+            self.write_original(state)
+            variants = [dict(task_id='wrong'), dict(collaboration_id='wrong'),
+                        dict(workspace_uuid=SUCCESSOR),
+                        dict(participants=self.marker(supervisor=SUCCESSOR)['participants'])]
+            if status == 'UNKNOWN':
+                variants.append({})
+            for change in variants:
+                with self.subTest(status=status, change=change):
+                    self.assertEqual(self.boundary(dict(marker, **change), 'RELEASED'), state)
+            self.assertEqual(self.boundary(marker, 'RESERVED'), state)
+        self.channels.assert_not_called()
+
+    def test_expiry_and_operator_stop_at_release_clear_pause_but_keep_stop(self):
+        marker = self.marker()
+        reservation = dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])
+        for cause in ('AUTHORIZATION_EXPIRED', 'OPERATOR_STOP'):
+            state = self.fixture(continuing=True)
+            state['paused_tasks'] = [reservation]
+            if cause == 'AUTHORIZATION_EXPIRED':
+                state['continuation']['until_epoch'] = 1001.
+            else:
+                ready.write_json(reask.stop_file(CALLER), {'reason': 'explicit stop'})
+            self.write_original(state)
+            stopped = self.boundary(marker, 'RELEASED', now=1010.)
+            self.assertEqual(stopped['state'], reask.STOPPED)
+            self.assertEqual(stopped['exit_reason'], cause)
+            self.assertEqual(stopped['paused_tasks'], [])
+            self.assertEqual(stopped['next_due_epoch'], state['next_due_epoch'])
+            self.assert_preserved(state, stopped)
+
+    def test_terminal_release_preview_does_not_publish_or_poll_authorization(self):
+        state = self.fixture(status=reask.STOPPED, continuing=True)
+        marker = self.marker()
+        state['paused_tasks'] = [dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])]
+        self.write_original(state)
+        before = self.files()
+        with patch.object(lifecycle, 'poll_authorization', side_effect=AssertionError('terminal poll')):
+            preview = copy.deepcopy(state)
+            self.assertTrue(lifecycle.apply_boundary(preview, marker, 'RELEASED', 1010., publish=False))
+        self.assertEqual(preview['paused_tasks'], [])
+        self.assertEqual(preview['state'], reask.STOPPED)
+        self.assertEqual(self.files(), before)
+
     def test_operator_stop_without_continuation_is_preserved_before_publication(self):
         original = self.fixture()
         ready.write_json(reask.stop_file(CALLER), {'reason': 'operator stop'})

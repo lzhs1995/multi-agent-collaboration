@@ -71,6 +71,89 @@ class MarkerLockTests(unittest.TestCase):
     def path(self, marker):
         return self.active / WORKSPACE / (marker['collaboration_id'] + '.json')
 
+    def native_arm(self, *, task='child', root=None, session=CALLER,
+                   supervisor_session=SUPERVISOR, workspace=WORKSPACE, label='surface:2'):
+        return harness.arm_task(
+            task, root or self.root, supervisor='surface:1',
+            supervisor_provider='codex', supervisor_surface_uuid=SUPERVISOR,
+            workspace_uuid=workspace,
+            executors=[dict(surface_ref=label, surface_uuid=CALLER, provider='claude')],
+            native_participants=[dict(role='supervisor', surface_uuid=SUPERVISOR,
+                                      provider='codex', native_session_id=supervisor_session),
+                                 dict(role='executor', surface_uuid=CALLER,
+                                      provider='claude', native_session_id=session)])
+
+    def test_native_repeated_preflight_reuses_original_reservation_and_bytes(self):
+        first = self.native_arm()
+        before = self.path(first).read_bytes()
+        state = reask.load(CALLER)
+        for _ in range(6):
+            self.assertEqual(self.native_arm(), first)
+        self.assertEqual(self.path(first).read_bytes(), before)
+        self.assertEqual(reask.load(CALLER), state)
+        self.assertEqual(len(list((self.active / WORKSPACE).glob('*.json'))), 1)
+        self.assertEqual(harness.disarm_task('child'), 1)
+        self.assert_paused(CALLER)
+
+    def test_native_retry_reuses_uuid_not_recycled_surface_label(self):
+        first = self.native_arm()
+        self.assertEqual(self.native_arm(label='surface:999'), first)
+        self.assert_paused(CALLER, first)
+
+    def test_native_retry_repairs_only_missing_reservation_after_failed_publication(self):
+        with patch.object(lifecycle, 'task_boundary_locked', side_effect=OSError('full')):
+            with self.assertRaises(OSError):
+                self.native_arm()
+        path = next((self.active / WORKSPACE).glob('*.json'))
+        before = path.read_bytes()
+        marker = self.native_arm()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(path, self.path(marker))
+        self.assert_paused(CALLER, marker)
+
+    def test_different_native_binding_task_root_and_workspace_are_not_reused(self):
+        original = self.native_arm()
+        for change in (dict(session=OTHER), dict(supervisor_session=OTHER),
+                       dict(task='other'), dict(root=self.root / 'different'),
+                       dict(workspace=OTHER)):
+            with self.subTest(change=change):
+                marker = self.native_arm(**change)
+                self.assertNotEqual(marker['collaboration_id'], original['collaboration_id'])
+        self.assertEqual(json.loads(self.path(original).read_text()), original)
+
+    def test_legacy_missing_native_pins_are_not_claimed_as_same_session(self):
+        legacy = self.arm()
+        current = self.native_arm()
+        self.assertNotEqual(current['collaboration_id'], legacy['collaboration_id'])
+        self.assertEqual(self.native_arm(), current)
+        self.assert_paused(CALLER, legacy, current)
+
+    def test_historical_duplicate_reservations_are_preserved_without_new_marker(self):
+        first = self.native_arm()
+        duplicate = copy.deepcopy(first)
+        duplicate['collaboration_id'] = OTHER
+        self.path(duplicate).write_text(json.dumps(duplicate))
+        before = {p: p.read_bytes() for p in (self.path(first), self.path(duplicate))}
+        with self.assertRaisesRegex(RuntimeError, 'multiple matching'):
+            self.native_arm()
+        self.assertEqual({p: p.read_bytes() for p in (self.active / WORKSPACE).glob('*.json')}, before)
+        self.assert_paused(CALLER, first)
+
+    def test_native_retry_holds_original_participant_and_directory_locks(self):
+        first = self.native_arm()
+        original = harness._matching_reservation
+
+        def checked(directory, marker):
+            with self.assertRaises(BlockingIOError), reask.episode_lock(CALLER):
+                self.fail('retry did not hold original caller lock')
+            with self.assertRaises(BlockingIOError), harness._marker_update_lock(self.path(first), first):
+                self.fail('retry did not hold marker lock')
+            return original(directory, marker)
+
+        with patch.object(harness, '_matching_reservation', side_effect=checked):
+            self.assertEqual(self.native_arm(), first)
+        self.assert_paused(CALLER, first)
+
     def legacy(self):
         path = self.active / (WORKSPACE + '.json')
         path.parent.mkdir(parents=True, exist_ok=True)

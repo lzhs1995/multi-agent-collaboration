@@ -168,11 +168,14 @@ class ProtocolTests(unittest.TestCase):
             record['scheduler']['sha256'] = '0' * 64
             self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
 
-    def test_0433_can_reenroll_0432_but_0432_cannot_claim_future_0433(self):
-        previous = '0.4.32-c7338a400bf4'
-        successor = '0.4.33-09de16ceb823'
+    def test_reviewed_issuers_keep_older_controllers_without_reverse_authority(self):
+        release32 = '0.4.32-c7338a400bf4'
+        release33 = '0.4.33-09de16ceb823'
+        release34 = '0.4.34-d333557fb498'
         for origin, scheduler, supported in (
-                (previous, successor, True), (successor, previous, False)):
+                (release32, release33, True), (release33, release32, False),
+                (release32, release34, True), (release34, release32, False),
+                (release33, release34, True), (release34, release33, False)):
             with self.subTest(controller=origin, issuer=scheduler):
                 state, record = self.episode(origin)
                 original = copy.deepcopy((state, record['controller']))

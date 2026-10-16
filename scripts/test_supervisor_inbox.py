@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -184,6 +185,148 @@ class InboxTest(unittest.TestCase):
         self.assertIn('REQUEST_DISCOVERED', result['additionalContext'])
         self.assertIn('REPLY=', result['additionalContext'])
         self.assertEqual(inbox.discover(dict(hook_event_name='Stop')), [])
+
+    def cursor(self, thread=None):
+        return (ready.state_root() / 'supervisor-inbox-discovery-v2'
+                / ready.digest(json.dumps([WORKSPACE, SUP, thread or self.payload['session_id']])))
+
+    def refuse_whole_inbox_scan(self, root):
+        real_scandir = os.scandir
+
+        def scan(path='.'):
+            if not isinstance(path, int) and Path(os.fsdecode(path)).resolve() == root.resolve():
+                raise AssertionError('no full inbox scan')
+            # Bound reply-mailbox lookup is a separate, legitimate operation.
+            return real_scandir(path)
+
+        return mock.patch.object(os, 'scandir', side_effect=scan)
+
+    def test_large_real_inbox_drains_despite_marker_churn_and_sparse_events(self):
+        states = {}
+        for _ in range(inbox.MAX_ENTRIES + 65):
+            caller = str(uuid.uuid4()).upper()
+            states[caller], _path = self.request(caller)
+        seen = set()
+        first = None
+        calls = []
+        native = inbox.directory.read_page
+
+        def observe(fd, offset):
+            result = native(fd, offset)
+            calls.append(len(result[0]))
+            return result
+
+        with mock.patch.object(inbox.directory, 'read_page', side_effect=observe), \
+                self.refuse_whole_inbox_scan(_path.parent):
+            for index in range(len(states)):
+                calls.clear()
+                batch = self.discover(now=100.0 + index * 60)
+                self.assertLessEqual(len(batch), inbox.MAX_NOTICES)
+                self.assertLessEqual(sum(calls), inbox.MAX_ENTRIES)
+                self.assertLessEqual(len(calls), 2)
+                if first is None and batch:
+                    first = batch[0]['caller_surface_uuid']
+                shown = {notice['caller_surface_uuid'] for notice in batch}
+                # Before the first walk completes, even old requests eligible
+                # for a reminder cannot overtake undiscovered later callers.
+                self.assertFalse(shown & seen)
+                seen.update(shown)
+                if seen == set(states):
+                    break
+                if first:
+                    reask.write_channels(states[first], f'EXECUTOR_READY_churn_{index}',
+                                         'still waiting', 101.0 + index * 60)
+            self.assertEqual(seen, set(states))
+
+    def test_junk_bad_files_and_symlinks_do_not_stop_later_valid_requests(self):
+        _state, valid = self.request()
+        wanted = json.loads(valid.read_bytes())
+        for index in range(inbox.MAX_ENTRIES * 3):
+            name = f'{index:064x}.json'
+            p = valid.parent / name
+            if index % 4 == 0:
+                p.symlink_to(valid)
+            elif index % 4 == 1:
+                p.mkdir()
+            elif index % 4 == 2:
+                p.write_text('{broken')
+            else:
+                p.write_text(json.dumps(dict(wanted, supervisor=CALLER)))
+        for index in range(inbox.MAX_ENTRIES + 1):
+            (valid.parent / f'junk-{index}').touch()
+        batches = []
+        with self.refuse_whole_inbox_scan(valid.parent):
+            for _ in range(100):
+                batch = self.discover()
+                batches.extend(batch)
+                if batch:
+                    break
+        self.assertEqual([notice['caller_surface_uuid'] for notice in batches], [CALLER])
+
+    def test_emit_failure_leaves_frontier_and_reminder_files_unchanged(self):
+        for _ in range(20):
+            self.request(str(uuid.uuid4()))
+        first = self.discover()
+        cursor = self.cursor()
+        before = {p.name: p.read_bytes() for p in cursor.iterdir() if p.suffix == '.json'}
+        observation = inbox.discover_bound(WORKSPACE, SUP,
+            thread_id=self.payload['session_id'], now=160.0)
+        self.assertEqual(len(observation), inbox.MAX_NOTICES)
+        with self.assertRaises(BrokenPipeError):
+            self.discover(now=160.0, emit=mock.Mock(side_effect=BrokenPipeError('flush failed')))
+        self.assertEqual(before, {p.name: p.read_bytes() for p in cursor.iterdir()
+                                  if p.suffix == '.json'})
+        second = self.discover(now=160.0)
+        self.assertEqual(second, observation)
+        self.assertFalse({x['caller_surface_uuid'] for x in first}
+                         & {x['caller_surface_uuid'] for x in second})
+
+    def test_empty_pages_commit_only_after_successful_flush_without_empty_notice(self):
+        _state, path = self.request()
+        path.unlink()
+        (path.parent / 'junk').touch()
+        cursor = self.cursor()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(self.discover(emit=inbox.emit_context), [])
+        self.assertEqual(output.getvalue(), '')
+        frontier = cursor / 'frontier.json'
+        before = frontier.read_bytes()
+        with mock.patch.object(inbox.sys, 'stdout') as stream:
+            stream.flush.side_effect = BrokenPipeError('no client')
+            with self.assertRaises(BrokenPipeError):
+                self.discover(emit=inbox.emit_context)
+        self.assertEqual(frontier.read_bytes(), before)
+
+    def test_replaced_directory_invalidates_saved_backlog_and_symlink_is_refused(self):
+        for _ in range(15):
+            self.request(str(uuid.uuid4()))
+        first = self.discover()
+        root = Path(first[0]['request']).parent
+        archived = root.with_name(root.name + '-previous')
+        root.rename(archived)
+        root.mkdir()
+        caller = str(uuid.uuid4())
+        self.request(caller)
+        self.assertEqual([x['caller_surface_uuid'] for x in self.discover()], [caller])
+        for p in root.iterdir():
+            p.unlink()
+        root.rmdir()
+        root.symlink_to(archived, target_is_directory=True)
+        self.assertEqual(self.discover(), [])
+
+    def test_large_inbox_frontiers_are_independent_between_actual_threads(self):
+        for _ in range(20):
+            self.request(str(uuid.uuid4()))
+        first = self.discover()
+        other = str(uuid.uuid4())
+        another = inbox.discover_bound(WORKSPACE, SUP, thread_id=other,
+                                       emit=self.emissions.append, now=100.0)
+        self.assertEqual([x['request'] for x in first], [x['request'] for x in another])
+        second = self.discover()
+        another_second = inbox.discover_bound(WORKSPACE, SUP, thread_id=other,
+                                              emit=self.emissions.append, now=100.0)
+        self.assertEqual([x['request'] for x in second], [x['request'] for x in another_second])
 
 
 if __name__ == '__main__':

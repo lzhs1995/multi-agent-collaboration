@@ -253,6 +253,67 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "PASTE_FENCE_REQUIRED"):
             delivery.scan_received(self.bridge, self.artifact, binding, self.text)
 
+    def test_reconcile_resumes_partial_line_without_rescanning_old_records(self):
+        self.bridge.response = "none"
+        self.submit()
+        original = (self.journal() / "attempt.json").read_bytes()
+        self.append_record("unrelated complete record")
+        self.append_record(self.text, newline=False)
+        result = self.reconcile()
+        self.assertFalse(result["confirmed"])
+        cursor = json.loads((self.journal() / "native-scan.json").read_text())["next_offset"]
+        self.assertGreater(cursor, json.loads(original)["native_binding"]["transcript"]["offset"])
+        with self.transcript.open("ab") as stream:
+            stream.write(b"\n")
+        result = self.reconcile()
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["input_operations"], 0)
+        self.assertEqual((self.journal() / "attempt.json").read_bytes(), original)
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_cached_proof_is_revalidated_against_exact_record_bytes(self):
+        self.submit()
+        proof = json.loads((self.journal() / "native-scan.json").read_text())["native_proof"]
+        with self.transcript.open("r+b") as stream:
+            stream.seek(proof["offset"])
+            stream.write(b"!")
+        with self.assertRaises(delivery.native.NativeDeliveryError):
+            self.reconcile()
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_transcript_rotation_and_truncation_cannot_reuse_cached_proof(self):
+        self.submit()
+        raw = self.transcript.read_bytes()
+        self.transcript.write_bytes(b"")
+        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "TRUNCATED"):
+            self.reconcile()
+        self.transcript.write_bytes(raw)
+        replacement = self.transcript.with_suffix(".replacement")
+        replacement.write_bytes(raw)
+        replacement.replace(self.transcript)
+        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "REPLACED"):
+            self.reconcile()
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_changed_cursor_binding_refuses_observation_without_new_input(self):
+        self.bridge.response = "none"
+        self.submit()
+        path = self.journal() / "native-scan.json"
+        cursor = json.loads(path.read_text())
+        cursor["intent_sha256"] = "0" * 64
+        path.write_text(json.dumps(cursor))
+        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "SCAN_BINDING_CHANGED"):
+            self.reconcile()
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_invalid_window_never_creates_successor_attempt(self):
+        for value in (-1, 61, True, float("nan")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "CONFIRMATION_WINDOW_INVALID"):
+                delivery.submit(self.bridge, self.artifact, self.text, marker=self.marker,
+                                state_root=self.root, wait_seconds=value)
+        self.assertFalse(self.journal().exists())
+        self.assertEqual(self.bridge.operations, [])
+
 
 class SuccessorCliTests(unittest.TestCase):
     def test_validate_and_error_both_emit_json(self):

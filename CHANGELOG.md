@@ -1,3 +1,38 @@
+## 0.4.35
+
+- Observe new native receipts for 30 seconds by default; validate finite
+  `--wait-seconds` in [0, 60] before input. Reconcile defaults to one read-only
+  observation. Time and iteration ceilings retain synchronous I/O limitations.
+  Exit 75 preserves RPC outcomes, original controller provenance and exact
+  zero-input reconcile guidance. Turn interruption is diagnostic, not message loss.
+- Expose authenticated ANSWERED bodies and original consume commands, pending
+  handshake/timeout work and opt-in queued maintenance context at PostToolUse.
+  Commit reminder cursors only after successful output flush. Hooks never ACK,
+  consume, send input, force continuation or accept work on a model's behalf.
+- Add independent CALLBACK_SETTLEMENT reminders for native-confirmed callbacks
+  awaiting exact RELEASE. Preserve next-task ask_count, report acceptance and
+  original task ownership. Reuse exact reservations under the existing locks;
+  exact RELEASE cleanup never revives terminal or revoked episodes.
+- Measure terminal reask cadence from the previous native confirmation, leaving
+  file cadence independent and unconfirmed input untouched. Preserve source,
+  registration and historical controller checks, including fully verified
+  0.4.34 v3 producers/v2 issuers and their original 0.4.28/30/31/32/33/34 range.
+- Use Standard launchd scheduling only for the reask scheduler; leave the
+  configuration guardian Background. Record module-to-sweep and phase timing,
+  retain fair cursors, and page inbox directory discovery within bounded work.
+- Recognize measured Claude Monitor/Goal footer layouts and narrowly bounded
+  wrapped-path padding. Preserve complete composer checks and all negative
+  controls; no global whitespace stripping, draft clearing or new recovery key.
+- Distinguish proven helper NO_INPUT from uncertain input, preserving the
+  original request and evidence instead of leaving a false pending send.
+
+Local final validation passes all 2,108 offline tests with zero failures or
+errors, plus 321 targeted tests and 33 adapter checks. The adapter preserved
+its inputs and performed zero live input operations. Documentation checks
+pass for all 14 changed documents across both skill repositories. Original-session
+review, CI, immutable installation and live adoption remain separate checks.
+See [the release contract](references/release-0.4.35.md) for exact boundaries.
+
 ## 0.4.34
 
 - Accept one exact native ACK text block alongside structurally valid Claude
