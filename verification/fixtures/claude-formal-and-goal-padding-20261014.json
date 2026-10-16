@@ -944,6 +944,385 @@
           "private_extracted_screen_sha256": "35e050f2fbc610db40cc94260b161dc05e63e6fed377ec96f924d98d0b8e7ccd"
         }
       ]
+    },
+    {
+      "case": "B0021",
+      "source_attempt_sha256": "03a9b4dbd213f24c22e3571f8675dc2a52bf6650e59519bf9160503b1d83e934",
+      "notice": "TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\" SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call cmux_bridge.submit_completion_callback(pack).",
+      "notice_sha256": "597136888c05ee34f750fe4cd7201b4faafe295a89f677739736213b270e3c18",
+      "frames": [
+        {
+          "event_index": 2,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 3,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 4,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 5,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 6,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 7,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 8,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 9,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 10,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 11,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 12,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 13,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 14,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 15,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 16,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 17,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 18,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 19,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 20,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        },
+        {
+          "event_index": 21,
+          "source_screen_sha256": "19b6240e1dfb73fd251375c9cce91be546cab28821e27a8e0e1196bc73762451",
+          "source_line_start": 90,
+          "source_line_stop": 105,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0021-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0021/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=383afe005e3051c02c1bb8042408f516ca54ed02aef6abb9eb6758fed5aa812e           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) │ ⏱️  822h 49m\n  上下文 ██░░░░░░░░ 22%\n  2 CLAUDE.md | 1 规则 | 10 MCPs | 7 钩子\n  ✓ Bash ×15 | ✓ Read ×3 | ✓ Edit ×1 | ✓ ScheduleWakeup ×1\n  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)\n  ✓ general-purpose [opus-5]: placeholder (<1s)\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "4962f14aa0a4be198e2ce76eedce654405b287b0bdc92b009c112aeee438a2bf",
+          "private_extracted_screen_sha256": "43397d3fae693e93c0c98f81d35ff0d74633c596ddc24d4ba7ed948f020eb3c0"
+        }
+      ],
+      "sanitization": "Preserves 100-cell PACK prefix followed by a two-cell CJK character at the hard-wrap boundary; original frame/attempt hashes are unchanged."
+    },
+    {
+      "case": "B0022",
+      "source_attempt_sha256": "eafda61c80a09a59000ca6fc83eca8455bda0e30d10e87e86c13e534919e1cc9",
+      "notice": "TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\" SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call cmux_bridge.submit_completion_callback(pack).",
+      "notice_sha256": "d40b2d1d4a16fa0f4c13afdffccef9589311058f09b67d74030cc15f66b26c12",
+      "frames": [
+        {
+          "event_index": 2,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 3,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 4,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 5,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 6,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 7,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 8,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 9,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 10,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 11,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 12,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 13,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 14,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 15,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 16,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 17,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 18,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 19,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 20,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        },
+        {
+          "event_index": 21,
+          "source_screen_sha256": "f569831233e2e2eda930879b80ab426441cfc7fed7e02a8287205ad97882f273",
+          "source_line_start": 89,
+          "source_line_stop": 103,
+          "screen": "─────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ TASK_PACK_V2 TASK=\"fixture-b0022-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n  PACK=\"/fixtures/论文/b0022/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  文aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaatask-pack.json\"\n  SHA256=6fc514dfc33ad608f087bdf528f3c95b1b083237d41ade813763a4d3fb54565c           \n  READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; write report then call\n  cmux_bridge.submit_completion_callback(pack).\n─────────────────────────────────────────────────────────────────────────────────────────────────────────\n  [Opus 5] │ work/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx git:(review/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n  ⏱️  296h 38m\n  上下文 ███░░░░░░░ 25%\n  1 CLAUDE.md | 9 MCPs | 7 钩子\n  ✓ Bash ×11 | ✓ Edit ×4 | ✓ Read ×3 | ✓ ScheduleWakeup ×2\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+          "screen_sha256": "a1780365a8c40149b92b9cdacfa2dfbb13a4d7693df6a10ad3756ac217abbf67",
+          "private_extracted_screen_sha256": "79c0f3e6073e5b47bf73ec16f167df3fa98a9f99aa727e45c623e81d4db1c5cf"
+        }
+      ],
+      "sanitization": "Preserves 100-cell PACK prefix followed by a two-cell CJK character at the hard-wrap boundary; original frame/attempt hashes are unchanged."
     }
-  ]
+  ],
+  "sha_row_source_records_sha256": "329c9e415eedc88cbcf84c6f9e9c909fc8c3b7f27be36f1918b91353df10c45a"
 }

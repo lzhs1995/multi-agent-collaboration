@@ -1,4 +1,4 @@
-"""100 sanitized measured-renderer frames and actual draft/submission gates."""
+"""Sanitized measured-renderer frames and actual draft/submission gates."""
 import hashlib
 import json
 from pathlib import Path
@@ -24,7 +24,9 @@ def composer_indices(screen):
 
 class MeasuredPaddingTests(unittest.TestCase):
     def test_all_pinned_frames_pass_actual_stable_draft_gate(self):
-        self.assertEqual([len(c['frames']) for c in CASES], [20, 20, 20, 20, 20])
+        self.assertEqual([c['case'] for c in CASES],
+                         ['B0016', 'B0015', 'GOAL_1D_EXAMPLE', 'B0018', 'B0019', 'B0021', 'B0022'])
+        self.assertEqual([len(c['frames']) for c in CASES], [20] * len(CASES))
         with patch.object(bridge.time, 'sleep'), patch.object(bridge, 'send_text') as paste, \
                 patch.object(bridge, 'send_key') as key, patch.object(reference, 'read_body') as read:
             for case in CASES:
@@ -80,7 +82,7 @@ class MeasuredPaddingTests(unittest.TestCase):
             padded = next(i for i in range(start, end) if rows[i].endswith(' ' * 10))
             clean = rows[padded].rstrip(' ')
             count = len(rows[padded]) - len(clean)
-            invalid = (count - 1, count + 1) if width == 118 else (15, 18)
+            invalid = (15, 18) if width == 183 else (count - 1, count + 1)
             for pad in invalid:
                 changed = list(rows)
                 changed[padded] = clean + ' ' * pad
@@ -100,6 +102,39 @@ class MeasuredPaddingTests(unittest.TestCase):
                 bridge._stable_owned_draft('offline', text, 200, None, expected_structure=original)
             key.assert_not_called()
 
+    def test_sha_padding_is_preserved_in_two_read_stability_checks(self):
+        for case in (c for c in CASES if c['case'] in ('B0021', 'B0022')):
+            value, text = case['frames'][0]['screen'], case['notice']
+            rows, start, end = composer_indices(value)
+            original = bridge._draft_structure(value, text)
+            self.assertEqual(original[1][3], rows[start + 3])
+            self.assertTrue(original[1][3].endswith(' ' * 11))
+            rows[start + 3] = rows[start + 3][:-11]
+            changed = '\n'.join(rows) + '\n'
+            self.assertTrue(bridge._exact_pending_text(changed, text))
+            self.assertNotEqual(original, bridge._draft_structure(changed, text))
+            # An ordinary submission keeps observing until two consecutive raw
+            # structures agree. Alternating padding must exhaust that budget.
+            with self.subTest(case=case['case'], mode='unstable'), \
+                    NativeFixture(provider='claude') as native, patch.object(
+                        bridge, 'read_screen', side_effect=[value, changed] * 10) as screen:
+                with self.assertRaisesRegex(bridge.DispatchUnconfirmed, 'DRAFT_NOT_READY'):
+                    bridge._stable_owned_draft('offline', text, 200, None)
+                self.assertEqual(screen.call_count, 20)
+                native.send.assert_not_called()
+                native.key.assert_not_called()
+            # Recovery additionally pins the original structure; any change
+            # revokes its authority immediately, even with an equal payload.
+            with self.subTest(case=case['case'], mode='recovery'), \
+                    NativeFixture(provider='claude') as native, patch.object(
+                        bridge, 'read_screen', side_effect=[value, changed]) as screen:
+                with self.assertRaisesRegex(bridge.DispatchUnconfirmed, 'COMPOSE_STRUCTURE_CHANGED'):
+                    bridge._stable_owned_draft('offline', text, 200, None,
+                                               expected_structure=original)
+                self.assertEqual(screen.call_count, 2)
+                native.send.assert_not_called()
+                native.key.assert_not_called()
+
     def test_unknown_or_truncated_frame_never_authorizes_a_key(self):
         for case in CASES:
             frame, text = case['frames'][0]['screen'], case['notice']
@@ -117,11 +152,23 @@ class MeasuredPaddingTests(unittest.TestCase):
             # process/UI I/O is replaced; pack contract, journals and proof run.
             with self.subTest(case=case['case']), NativeFixture(provider='claude') as native:
                 source, start, end = composer_indices(case['frames'][0]['screen'])
-                token_cells = {'B0016': 158, 'B0015': 166, 'B0018': 159, 'B0019': 161}[case['case']]
+                token_cells = {'B0016': 158, 'B0015': 166, 'B0018': 159, 'B0019': 161,
+                               'B0021': 156, 'B0022': 160}[case['case']]
                 base = str(native.home / '文' / 'task-pack.json')
                 fill = token_cells - bridge._display_cells('PACK=' + json.dumps(base, ensure_ascii=False))
                 self.assertGreater(fill, 0)
-                path = native.home / ('文' + 'a' * fill) / 'task-pack.json'
+                sha_row_padding = len(source[start - 1]) == 105
+                if sha_row_padding:
+                    # The measured hard wrap leaves 100 cells before a wide
+                    # character. ASCII-only redaction changes that boundary.
+                    prefix = 'PACK=' + json.dumps(str(native.home / '文'), ensure_ascii=False)[:-1]
+                    before_wrap = 100 - bridge._display_cells(prefix)
+                    self.assertGreaterEqual(before_wrap, 0)
+                    self.assertGreaterEqual(fill - before_wrap, 2)
+                    filler = 'a' * before_wrap + '文' + 'a' * (fill - before_wrap - 2)
+                else:
+                    filler = 'a' * fill
+                path = native.home / ('文' + filler) / 'task-pack.json'
                 path.parent.mkdir()
                 task = json.loads(case['notice'].split(' PACK=', 1)[0].removeprefix('TASK_PACK_V2 TASK='))
                 report = native.home / 'report.md'
@@ -135,15 +182,23 @@ class MeasuredPaddingTests(unittest.TestCase):
                 path.write_text(json.dumps(pack, ensure_ascii=False) + '\n')
                 text = bridge.task_pack_notice(path)
                 token = 'PACK=' + json.dumps(str(path), ensure_ascii=False)
-                split = next(i for i in range(len(token)) if bridge._display_cells(token[:i]) == 114)
+                split_cells = 100 if sha_row_padding else 114
+                split = next(i for i in range(len(token)) if bridge._display_cells(token[:i]) == split_cells)
                 self.assertEqual(bridge._display_cells(token), token_cells)
-                end_cell = 72 if case['case'] == 'B0018' else 96
-                pad = end_cell - bridge._display_cells(token[split:])
-                sha_and_scope = text.split(' SHA256=', 1)[1]
-                tail = 'SHA256=' + sha_and_scope
-                cut = tail.index(' pack SHA;')
-                draft_rows = ['❯\u00a0TASK_PACK_V2 TASK=' + json.dumps(task), '  ' + token[:split],
-                              '  ' + token[split:] + ' ' * pad, '  ' + tail[:cut], '  ' + tail[cut + 1:]]
+                tail = 'SHA256=' + text.split(' SHA256=', 1)[1]
+                if sha_row_padding:
+                    self.assertEqual(bridge._display_cells(token[split]), 2)
+                    sha, scope = tail.split(' ', 1)
+                    before_call, call = scope.rsplit(' ', 1)
+                    draft_rows = ['❯\u00a0TASK_PACK_V2 TASK=' + json.dumps(task),
+                                  '  ' + token[:split], '  ' + token[split:],
+                                  '  ' + sha + ' ' * 11, '  ' + before_call, '  ' + call]
+                else:
+                    end_cell = 72 if case['case'] == 'B0018' else 96
+                    pad = end_cell - bridge._display_cells(token[split:])
+                    cut = tail.index(' pack SHA;')
+                    draft_rows = ['❯\u00a0TASK_PACK_V2 TASK=' + json.dumps(task), '  ' + token[:split],
+                                  '  ' + token[split:] + ' ' * pad, '  ' + tail[:cut], '  ' + tail[cut + 1:]]
                 draft = '\n'.join(source[:start] + draft_rows + source[end:]) + '\n'
                 empty = '\n'.join(source[:start] + ['❯\u00a0'] + source[end:]) + '\n'
                 native.key.side_effect = native.receipt_on_key(text)

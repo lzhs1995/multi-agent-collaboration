@@ -105,6 +105,9 @@ class CallbackDiagnoseTests(unittest.TestCase):
         patches = ExitStack()
         self.addCleanup(patches.close)
         patches.enter_context(patch.object(daemon.sys, "platform", "darwin"))
+        # Pin the observed parent as well as its process data. A container's
+        # PID 1 parent otherwise skips ancestry and never exercises refusal.
+        patches.enter_context(patch.object(daemon.os, "getppid", return_value=4242))
         self.process_reader = patches.enter_context(patch.object(
             daemon, "process", side_effect=_ordinary_process))
         patches.enter_context(patch.object(stop_guard, "ACTIVE_DIR", self.active))

@@ -1128,16 +1128,18 @@ def _display_cells(value):
 
 
 def _claude_task_pack_padding_candidate(content, text, border_cells):
-    """Measured 118-cell PACK continuation, without reading or altering a pack.
+    """Measured formal-notice padding, without reading or altering a pack.
 
     B0015/B0016 wrap the PACK token at 114 display cells, then add exactly
     44/52 ASCII cells after its closing quote (at display cell 96). B0018
     has a 45-cell suffix and 27 ASCII cells, ending at cell 72. B0019
     has a 47-cell suffix and 49 ASCII cells, ending at cell 96. Restrict
-    equivalence to those observed shapes. The caller still checks the entire
+    equivalence to those observed shapes. B0021/B0022 use 105-cell borders,
+    wrap PACK at 100 cells with a 56/60-cell suffix, and add 11 ASCII cells
+    after the standalone SHA256 token. The caller still checks the entire
     notice and wrap geometry; draft stability retains every original cell.
     """
-    if border_cells != 118 or len(content) != 5:
+    if (border_cells, len(content)) not in ((118, 5), (105, 6)):
         return None
     prefix = "TASK_PACK_V2 TASK="
     header, separator, rest = text.partition(" PACK=")
@@ -1157,13 +1159,19 @@ def _claude_task_pack_padding_candidate(content, text, border_cells):
         return None
     token = "PACK=" + rest[:end]
     if (not content[1].startswith("PACK=") or not token.startswith(content[1])
-            or _display_cells(content[1]) != 114
+            or _display_cells(content[1]) != (100 if border_cells == 105 else 114)
             or not any(unicodedata.east_asian_width(c) in "WF" for c in token)):
         return None
     suffix = token[len(content[1]):]
     suffix_cells = _display_cells(suffix)
-    padding = {44: 52, 52: 44, 45: 27, 47: 49}.get(suffix_cells)
     sha_token = rest[end + 1:].split(" ", 1)[0]
+    if border_cells == 105:
+        if (suffix_cells not in (56, 60) or content[2] != suffix
+                or content[3] != sha_token + " " * 11
+                or content[4:] != _TASK_PACK_NOTICE_SUFFIX[1:].rsplit(" ", 1)):
+            return None
+        return [content[0], content[1], suffix, sha_token, *content[4:]]
+    padding = {44: 52, 52: 44, 45: 27, 47: 49}.get(suffix_cells)
     if (padding is None or content[2] != suffix + " " * padding
             or not content[3].startswith(sha_token + " ")):
         return None
@@ -1178,7 +1186,7 @@ def _claude_reference_padding_candidate(content, text, border_cells):
     not native editor-byte proof. The caller still checks every other character
     and both wrap boundaries. _draft_structure retains the original raw rows.
     """
-    if border_cells == 118:
+    if border_cells in (105, 118):
         return _claude_task_pack_padding_candidate(content, text, border_cells)
     if border_cells != 183 or len(content) < 3:
         return None

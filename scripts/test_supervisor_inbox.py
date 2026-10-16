@@ -31,10 +31,29 @@ class InboxTest(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(Path, 'home', return_value=self.home))
         self.payload, self.proof = native_thread(self.home)
         self.emissions = []
+        self.discovery_trace = []
 
     def discover(self, *, now=100.0, emit=None):
-        return inbox.discover_bound(WORKSPACE, SUP, thread_id=self.payload['session_id'],
-                                    emit=self.emissions.append if emit is None else emit, now=now)
+        # Keep native paging evidence in assertion failures: directory offsets
+        # and EOF behavior differ between the real CI filesystems.
+        frontier = self.cursor() / 'frontier.json'
+        trace = dict(now=now, before=ready.read_json(frontier), pages=[])
+        native = inbox.directory.read_page
+
+        def observe(fd, offset):
+            names, following = native(fd, offset)
+            trace['pages'].append(dict(offset=offset, following=following,
+                                       count=len(names), names=names[:4]))
+            return names, following
+
+        try:
+            with mock.patch.object(inbox.directory, 'read_page', side_effect=observe):
+                return inbox.discover_bound(
+                    WORKSPACE, SUP, thread_id=self.payload['session_id'],
+                    emit=self.emissions.append if emit is None else emit, now=now)
+        finally:
+            trace['after'] = ready.read_json(frontier)
+            self.discovery_trace = (self.discovery_trace + [trace])[-4:]
 
     def request(self, caller=CALLER, marker='EXECUTOR_READY_one'):
         state = reask.start(caller, SUP, 'completed-task', now=1.0, workspace=WORKSPACE)
@@ -52,7 +71,7 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(notices[0]['input_operations'], 0)
         self.assertEqual(self.discover(), [])
         reask.write_channels(state, 'EXECUTOR_READY_two', 'request', 62.0)
-        self.assertEqual(len(self.discover()), 1)
+        self.assertEqual(len(self.discover()), 1, self.discovery_trace)
         self.assertEqual(len(list(path.parent.glob('*.json'))), 1)
 
     def test_wrong_workspace_supervisor_paths_templates_and_inactive_requests_refused(self):
@@ -67,7 +86,7 @@ class InboxTest(unittest.TestCase):
                 ready.write_json(path, dict(body, **change))
                 self.assertEqual(self.discover(), [])
         ready.write_json(path, body)
-        self.assertEqual(len(self.discover()), 1)
+        self.assertEqual(len(self.discover()), 1, self.discovery_trace)
 
     def test_frozen_full_request_can_reply_after_current_path_and_history_rotate(self):
         import mac_harness as harness
@@ -157,7 +176,7 @@ class InboxTest(unittest.TestCase):
         self.request()
         self.assertEqual(len(self.discover(now=100.0)), 1)
         self.assertEqual(self.discover(now=159.999), [])
-        self.assertEqual(len(self.discover(now=160.0)), 1)
+        self.assertEqual(len(self.discover(now=160.0)), 1, self.discovery_trace)
         self.assertEqual(self.discover(now=160.001), [])
 
     def test_discovery_cursors_are_isolated_by_actual_thread(self):
