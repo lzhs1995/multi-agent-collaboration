@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import uuid
 from unittest.mock import patch
-from contextlib import redirect_stdout, nullcontext
+from contextlib import ExitStack, redirect_stdout, nullcontext
 
 import callback_settlement_advisory as advisory
 from callback_native_evidence import reconcile_received
@@ -77,11 +77,13 @@ class SettlementTests(unittest.TestCase):
             reconcile_received(self.packfile, bridge, transcript=self.native.transcript, line=2)
         self.native.send.reset_mock()
         self.native.key.reset_mock()
-        self.screen = self.enterContext(patch.object(bridge, 'read_screen',
+        self.contexts = ExitStack()
+        self.addCleanup(self.contexts.close)
+        self.screen = self.contexts.enter_context(patch.object(bridge, 'read_screen',
             side_effect=AssertionError('observer must never inspect a composer')))
         self.active = self.home / 'active'
         (self.active / W).mkdir(parents=True)
-        self.enterContext(patch.object(advisory.markers.stop_guard, 'ACTIVE_DIR', self.active))
+        self.contexts.enter_context(patch.object(advisory.markers.stop_guard, 'ACTIVE_DIR', self.active))
         # Exercise the actual marker writer, including its version and native
         # participant shape. A handwritten v1 fixture hid the v2 regression.
         with patch.object(harness, '_ACTIVE_DIR', self.active), \

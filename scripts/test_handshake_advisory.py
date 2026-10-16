@@ -64,16 +64,18 @@ class HandshakeTests(unittest.TestCase):
         spec.loader.exec_module(self.sender)
         self.active = self.home / 'active'
         (self.active / W).mkdir(parents=True)
-        self.enterContext(patch.object(advisory.markers.stop_guard, 'ACTIVE_DIR', self.active))
-        self.enterContext(patch.object(ready, 'state_root', return_value=self.home / 'state'))
-        self.enterContext(patch.object(bridge, 'COLLABORATION_SKILL_PATH', self.source / 'SKILL.md'))
+        self.contexts = ExitStack()
+        self.addCleanup(self.contexts.close)
+        self.contexts.enter_context(patch.object(advisory.markers.stop_guard, 'ACTIVE_DIR', self.active))
+        self.contexts.enter_context(patch.object(ready, 'state_root', return_value=self.home / 'state'))
+        self.contexts.enter_context(patch.object(bridge, 'COLLABORATION_SKILL_PATH', self.source / 'SKILL.md'))
         self.supervisor_payload, _ = native_thread(self.home, actual=S)
         self.payload = dict(hook_event_name='PostToolUse', session_id=self.native.session_id,
             transcript_path=str(self.native.transcript), tool_name='Bash')
         self.cursor = self.home / 'cursors'
         self.emissions = []
         self.case = self.make_case('task')
-        self.screen = self.enterContext(patch.object(bridge, 'read_screen',
+        self.screen = self.contexts.enter_context(patch.object(bridge, 'read_screen',
             side_effect=AssertionError('an observer cannot inspect compose')))
         self.reset_input_mocks()
 

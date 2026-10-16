@@ -1,4 +1,5 @@
 """The file scheduler authenticates the complete release without installer I/O."""
+from contextlib import ExitStack
 import hashlib
 import json
 from pathlib import Path
@@ -34,10 +35,12 @@ class ReadOnlyReleaseTests(unittest.TestCase):
             self.files[name] = dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
         self.current = dict(source=str(self.source), python=sys.executable)
         self.pin_manifest()
-        self.enterContext(patch.object(Path, 'home', return_value=self.home))
-        self.enterContext(patch.object(guardian, '__file__',
+        self.contexts = ExitStack()
+        self.addCleanup(self.contexts.close)
+        self.contexts.enter_context(patch.object(Path, 'home', return_value=self.home))
+        self.contexts.enter_context(patch.object(guardian, '__file__',
                                       str(self.source / 'scripts/configuration_guardian.py')))
-        self.enterContext(patch.object(scheduler, '__file__',
+        self.contexts.enter_context(patch.object(scheduler, '__file__',
                                       str(self.source / 'scripts/executor_reask_scheduler.py')))
 
     def pin_manifest(self):
