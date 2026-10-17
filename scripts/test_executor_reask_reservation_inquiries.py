@@ -300,7 +300,7 @@ class ReservationInquiryIntegrationTests(unittest.TestCase):
         path = scheduler.enrollment_path(CALLER)
         raw = path.read_bytes()
         self.reserve(at=1001.)
-        for missing in ('none', 'token', 'enrollment', 'both'):
+        for missing in ('none', 'token', 'enrollment', 'both', 'stale-binding'):
             for route in ('enroll-existing', 'start', 'compatibility-enroll'):
                 with self.subTest(missing=missing, route=route):
                     state = copy.deepcopy(original)
@@ -309,12 +309,16 @@ class ReservationInquiryIntegrationTests(unittest.TestCase):
                         state.pop('registration')
                     reask.save(state)
                     path.write_bytes(raw)
+                    if missing == 'stale-binding':
+                        record = ready.read_json(path)
+                        record['binding']['episode_id'] = 'stale-enrolled-episode'
+                        ready.write_json(path, record)
                     if missing in ('enrollment', 'both'):
                         path.unlink()
                     before = self.files()
                     with self.assertRaises(ValueError):
                         if route == 'enroll-existing':
-                            digest = hashlib.sha256(raw).hexdigest() if path.exists() else 'ABSENT'
+                            digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else 'ABSENT'
                             scheduler.enroll_existing(self.live(), state['episode_id'], digest, now=1002.)
                         elif route == 'start':
                             scheduler.start(self.live(), task_id='reservation-integration', now=1002.,

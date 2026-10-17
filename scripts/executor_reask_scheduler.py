@@ -546,7 +546,16 @@ def enroll_existing(live, episode, enrollment_sha256, *, now=None):
                 return dict(outcome='REGISTRATION_UNCOMMITTED', input_operations=0)
         old = _bound_record(record, state, path) if record is not None else None
         if record is not None and old is None:
-            raise ValueError('existing enrollment belongs to its original controller/binding')
+            prior_binding = record.get('binding') if isinstance(record, dict) else None
+            prior_episode = prior_binding.get('episode_id') if isinstance(prior_binding, dict) else None
+            # An authenticated original episode may replace a pinned enrollment
+            # left by a different episode. It cannot repair a changed binding
+            # for this episode or acquire reservation privileges by re-enrolling.
+            if (not isinstance(record, dict) or record.get('schema') not in (SCHEMA, LEGACY_SCHEMA)
+                    or not isinstance(prior_episode, str) or not prior_episode
+                    or prior_episode == state['episode_id']
+                    or (state.get('continuation') or {}).get('reservation_inquiries') is True):
+                raise ValueError('existing enrollment belongs to its original controller/binding')
         if (reask.stop_file(caller).exists() or state.get('state') != reask.WAITING
                 or old and old.get('status') == 'FINISHED'):
             raise ValueError('stopped or finished inquiries cannot be re-enrolled')
