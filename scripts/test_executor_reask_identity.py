@@ -288,6 +288,34 @@ class ExecutorIdentityIntegrationTests(unittest.TestCase):
         result = lifecycle.consume(CALLER, state['reply']['body_sha256'], now=1003.)
         self.assertTrue(result['consume_result']['consumed'])
 
+    def test_native_log_change_during_caller_resolution_is_refused(self):
+        self.select_provider('codex')
+        self.begin()
+        state = self.answered()
+
+        def changed_snapshot():
+            result = self.snapshot()
+            self.log.write_bytes(self.log.read_bytes()[:-1])
+            return result
+
+        with patch.object(workspace, 'caller_snapshot', side_effect=changed_snapshot) as observed:
+            self.refused(state['reply']['body_sha256'])
+        observed.assert_called_once()
+
+    def test_native_session_change_during_caller_resolution_is_refused(self):
+        self.select_provider('codex')
+        self.begin()
+        state = self.answered()
+
+        def changed_snapshot():
+            result = self.snapshot()
+            self.write_registration(OTHER_SESSION)
+            return result
+
+        with patch.object(workspace, 'caller_snapshot', side_effect=changed_snapshot) as observed:
+            self.refused(state['reply']['body_sha256'])
+        observed.assert_called_once()
+
     def test_native_log_truncation_prefix_and_tail_changes_are_refused(self):
         self.begin()
         state = self.answered()
@@ -435,6 +463,18 @@ class ExecutorIdentityIntegrationTests(unittest.TestCase):
                       dict(original, foreground=dict(thread_id=OTHER_SESSION))):
             with self.subTest(proof=proof):
                 self.proof = proof
+                self.refused(state['reply']['body_sha256'])
+        self.proof = original
+
+    def test_codex_changed_well_formed_caller_proof_cannot_consume(self):
+        self.select_provider('codex')
+        self.begin()
+        state = self.answered()
+        original = copy.deepcopy(self.proof)
+        for delta in (dict(daemon_pid=DAEMON_PID + 1), dict(argv_sha256='b' * 64),
+                      dict(foreground=dict(thread_id=SESSION, extra_pin='changed'))):
+            with self.subTest(delta=delta):
+                self.proof = dict(original, **delta)
                 self.refused(state['reply']['body_sha256'])
         self.proof = original
 

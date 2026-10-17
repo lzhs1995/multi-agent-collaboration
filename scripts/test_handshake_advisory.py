@@ -327,8 +327,11 @@ class HandshakeTests(HandshakeFixture):
 
         self.assertEqual(self.discover(role='supervisor', emit=failed_flush), [])
         self.assertEqual(cursor.read_bytes(), before)
-        # A newly appeared earlier marker must not delay the unfinished one.
-        self.write(self.active / W / '0000-unrelated.json', {'unrelated': True})
+        # More than a scan budget of later markers prevents cursor wraparound
+        # from accidentally satisfying the unfinished-marker-first contract.
+        for index in range(advisory.MAX_MARKERS + 1):
+            self.write(self.active / W / ('zzzz-unrelated-%03d.json' % index),
+                       {'unrelated': True})
         second = self.discover(role='supervisor')
         self.assertEqual([n['ordinal'] for n in first + second], list(range(1, 12)))
         self.assertEqual(len(second), 3)

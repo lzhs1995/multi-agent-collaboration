@@ -21,6 +21,8 @@ NORMAL = "⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
 SPINNER = "✽ Skedaddling… (8m 40s · ↓ 9.8k tokens)"
 GOAL = " " * 45 + "◎ /goal active (10h)"
 SUMMARY = "✻ Cogitated for 14m 15s · 1 monitor still running"
+IDLE_PROSE = ('⏺ Done (all 12 tests pass).', '⏺ Updated foo.py (two lines).',
+              '  ⎿  Running tests: 12 passed', '· Note: see README...')
 
 
 def screen(*, status=SPINNER, goal=GOAL, footer=MONITOR, tool=False):
@@ -77,6 +79,16 @@ class MonitorGoalTests(unittest.TestCase):
 
     def test_active_tool_is_independent_of_spinner(self):
         self.assertTrue(b._queued_or_active_input(screen(status=SUMMARY, tool=True)))
+
+    def test_completed_prose_is_idle_with_or_without_goal_but_active_tools_still_win(self):
+        for status in IDLE_PROSE:
+            for goal in ('', GOAL):
+                with self.subTest(status=status, goal=goal):
+                    value = screen(status=status, goal=goal)
+                    self.assertFalse(b._queued_or_active_input(value))
+                    b.require_clearable_agent_input(value, 'offline-peer')
+                    self.assertTrue(b._queued_or_active_input(
+                        screen(status=status, goal=goal, tool=True)))
 
     def test_measured_dot_spinner_is_active_only_before_the_frame(self):
         dot = SPINNER.replace('✽', '·', 1)
@@ -189,6 +201,18 @@ class MonitorGoalTests(unittest.TestCase):
                 self.assertTrue(result["confirmed"])
                 native.send.assert_called_once()
                 native.key.assert_called_once_with("offline-peer", "enter")
+
+    def test_completed_prose_allows_one_new_input_with_exact_native_receipt(self):
+        for status in IDLE_PROSE:
+            before = screen(status=status)
+            text = 'STATUS: IDLE_PROSE0435'
+            with self.subTest(status=status), NativeFixture(provider='claude') as native, patch.object(
+                    b, 'read_screen', side_effect=native.ready_screens(before, with_draft(before, text))):
+                native.key.side_effect = native.receipt_on_key(text)
+                result = b.submit_text('offline-peer', text, marker='IDLE_PROSE0435')
+                self.assertTrue(result['confirmed'])
+                native.send.assert_called_once()
+                native.key.assert_called_once_with('offline-peer', 'enter')
 
 
 class BridgeProbeActivityEntryTests(OfflineWorkspaceFixture):

@@ -3,6 +3,7 @@ import copy
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 import io
+import hashlib
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
@@ -119,6 +120,7 @@ class ReservationInquiryIntegrationTests(unittest.TestCase):
         self.assertEqual(state['ask_count'], 2)
         self.assertEqual([a['at_epoch'] for a in state['asks']], [1001., 1061.])
         self.assertEqual(request['inquiry_kind'], 'RESERVATION_STATUS')
+        self.assertIn('requests RESERVATION_STATUS', request['request'])
         self.assertIn('neither dispatches work nor releases a reservation', request['request'])
         self.assertEqual(request['reservations'], state['paused_tasks'])
         self.assertEqual(state['controller'], original)
@@ -293,6 +295,72 @@ class ReservationInquiryIntegrationTests(unittest.TestCase):
         self.assertEqual(result['file_posts'], 0)
         self.assertEqual(result['episodes'][0]['status'], 'BINDING_OR_CONTROLLER_MISMATCH')
 
+    def test_existing_enrollment_cannot_reauthorize_an_edited_capability(self):
+        original = self.begin(enabled=False)
+        path = scheduler.enrollment_path(CALLER)
+        raw = path.read_bytes()
+        self.reserve(at=1001.)
+        for missing in ('none', 'token', 'enrollment', 'both'):
+            for route in ('enroll-existing', 'start', 'compatibility-enroll'):
+                with self.subTest(missing=missing, route=route):
+                    state = copy.deepcopy(original)
+                    state['continuation']['reservation_inquiries'] = True
+                    if missing in ('token', 'both'):
+                        state.pop('registration')
+                    reask.save(state)
+                    path.write_bytes(raw)
+                    if missing in ('enrollment', 'both'):
+                        path.unlink()
+                    before = self.files()
+                    with self.assertRaises(ValueError):
+                        if route == 'enroll-existing':
+                            digest = hashlib.sha256(raw).hexdigest() if path.exists() else 'ABSENT'
+                            scheduler.enroll_existing(self.live(), state['episode_id'], digest, now=1002.)
+                        elif route == 'start':
+                            scheduler.start(self.live(), task_id='reservation-integration', now=1002.,
+                                            authenticate_executor=True, continuing=True,
+                                            continuation=dict(self.continuation, reservation_inquiries=True))
+                        else:
+                            scheduler.enroll(state, self.live(), now=1002.)
+                    self.assertEqual(self.files(), before)
+
+    def test_removed_registration_cannot_authorize_reserved_foreground_inquiries(self):
+        self.begin(enabled=False)
+        self.reserve(at=1001., notify=True)
+        frozen = self.preserve_pending()
+        state = reask.load(CALLER)
+        state['continuation']['reservation_inquiries'] = True
+        state.pop('registration')
+        reask.save(state)
+        enrollment = scheduler.enrollment_path(CALLER).read_bytes()
+        with self.files_only() as sender:
+            result = reask.tick(CALLER, 1002., send=sender)
+        self.assertEqual(result['registration_observation'], 'REGISTRATION_UNCOMMITTED')
+        self.assertEqual(result['input_operations'], 0)
+        self.assertEqual(result['file_posts'], 0)
+        self.assertEqual(result['asks'], [])
+        self.assertEqual(scheduler.enrollment_path(CALLER).read_bytes(), enrollment)
+        self.assertFalse(reask.inbox_path(result).exists())
+        self.assert_preserved(frozen)
+
+    def test_original_authorized_enrollment_remains_reusable(self):
+        original = self.begin()
+        self.reserve(at=1001., notify=True)
+        before = self.files()
+        digest = hashlib.sha256(scheduler.enrollment_path(CALLER).read_bytes()).hexdigest()
+        state = scheduler.enroll_existing(self.live(), original['episode_id'], digest, now=1002.)
+        self.assertEqual(self.files(), before)
+        with self.files_only():
+            result = scheduler.sweep(now=1003.)
+        self.assertEqual(result['file_posts'], 1)
+        self.assertEqual(state['episode_id'], original['episode_id'])
+
+    def test_reservation_inquiries_require_the_original_current_controller(self):
+        state = self.begin()
+        self.assertTrue(lifecycle.reservation_inquiries_allowed(state))
+        state['continuation']['controller']['sha256'] = 'f' * 64
+        self.assertFalse(lifecycle.reservation_inquiries_allowed(state))
+
     def test_cli_requires_continuing_and_original_authorization_file(self):
         base = ['start', '--caller-uuid', CALLER, '--supervisor', SUP, '--reservation-inquiries']
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
@@ -332,4 +400,3 @@ class ReservationInquiryIntegrationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

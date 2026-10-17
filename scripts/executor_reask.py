@@ -753,7 +753,8 @@ def default_send(state, marker, text):
                   transport='codex-native-input-v1' if provider == 'codex' else 'terminal',
                   paste_intent='PASTE_INTENT' in phases,
                   native_received=ask.get('outcome') == 'CONFIRMED')
-    for key in ('confirmation_scope', 'body_read_confirmed', 'receipt'):
+    for key in ('confirmation_scope', 'body_read_confirmed', 'receipt',
+                'details', 'dispatch_state'):
         if key in ask:
             result[key] = ask[key]
     if ask.get('zero_input_verified') is True:
@@ -842,7 +843,8 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
     observe_boundaries_locked(state, now)
     if state.get('state') != WAITING:
         return state
-    if state.get('registration'):
+    if (state.get('registration') or
+            (state.get('continuation') or {}).get('reservation_inquiries') is True):
         from executor_reask_scheduler import registration_observation
         observation = registration_observation(state)
         if observation != 'REGISTERED':

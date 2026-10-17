@@ -5,6 +5,8 @@
   observation. Time and iteration ceilings retain synchronous I/O limitations.
   Exit 75 preserves RPC outcomes, original controller provenance and exact
   zero-input reconcile guidance. Turn interruption is diagnostic, not message loss.
+  Preserve those diagnostics through the reask controller's first send and
+  durable pending state without granting another input attempt.
 - Expose authenticated ANSWERED bodies and original consume commands, pending
   handshake/timeout work and opt-in queued maintenance context at PostToolUse.
   Commit reminder cursors only after successful output flush. Hooks never ACK,
@@ -20,6 +22,7 @@
   callback status and the next action/time. Keep 60-second file cadence, terminal
   input paused, pending evidence intact and RELEASE separate from consumption.
   Existing episodes cannot acquire this capability by changing a flag or controller.
+  Deleting registration or attempting to repin edited state also cannot grant it.
   Legacy/non-opt-in reservations still pause requests; `NO_EPISODE` still lacks
   reservation-owner, age and pack metadata. File timers cannot wake an idle model.
 - Authenticate the pinned original native executor and exact reply SHA for both
@@ -28,6 +31,8 @@
   remaining workers when one marker exceeds the per-event notice budget.
 - Refuse expired same-task marker reuse before any renewal. Diagnose and skip
   malformed non-UUID marker names; preserve and refuse malformed UUID markers.
+  Parsed but incomplete UUID reservations also refuse; complete legacy markers
+  remain preserved without acquiring native conversation identity.
 - Measure terminal reask cadence from the previous native confirmation, leaving
   file cadence independent and unconfirmed input untouched. Preserve source,
   registration and historical controller checks, including fully verified
@@ -47,7 +52,8 @@
   wrapped-path padding. Preserve complete composer checks and all negative
   controls; no global whitespace stripping, draft clearing or new recovery key.
   Refuse active/unknown spinner, compaction and tool-running forms. Historical
-  padding evidence has two distinct screens read 20 times each and 34 distinct
+  completed prose is not an active tool header or spinner.
+  Padding evidence has two distinct screens read 20 times each and 34 distinct
   negative controls; busy-screen evidence is a separate pair of v202 screens.
   Repeated reads are not independent samples or live native receipt evidence.
 - Distinguish proven helper NO_INPUT from uncertain input, preserving the

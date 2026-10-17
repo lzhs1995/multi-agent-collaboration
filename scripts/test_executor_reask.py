@@ -153,6 +153,34 @@ class ReaskTest(Base):
         state = reask.tick(CALLER, 1002.0, Sender())
         self.assertEqual(state['state'], reask.WAITING)
 
+    def test_default_send_preserves_unconfirmed_diagnostics_through_tick(self):
+        import cmux_bridge
+
+        self.begin()
+        bridge = mock.Mock()
+        bridge.pin_workspace.return_value = dict(caller_surface_uuid=CALLER)
+        details = dict(reason='NATIVE_CONFIRMATION_PENDING', attempt='/original/attempt-0001.json')
+        failure = cmux_bridge.DispatchUnconfirmed(
+            'original input is not yet confirmed', state='NATIVE_INPUT_UNCONFIRMED', details=details)
+        with mock.patch.object(ready, '_bridge', return_value=bridge), \
+                mock.patch('cmux_native_delivery.bind_target', return_value={'provider': 'codex'}), \
+                mock.patch.object(reask, '_held', return_value=(None, '')), \
+                mock.patch.object(ready, '_receipt', return_value=None), \
+                mock.patch.object(ready, '_submit', side_effect=failure) as submit:
+            state = reask.tick(CALLER, 1001.0, reask.default_send)
+            for saved in (state['asks'][-1], state['terminal_pending'],
+                          reask.load(CALLER)['terminal_pending']):
+                self.assertEqual(saved['outcome'], 'UNCONFIRMED_DO_NOT_RESEND')
+                self.assertEqual(saved['dispatch_state'], failure.state)
+                self.assertEqual(saved['details']['reason'], details['reason'])
+                self.assertEqual(saved['details']['attempt'], details['attempt'])
+                self.assertEqual(saved['details']['reconcile_guidance']['input_operations'], 0)
+            original_marker = state['terminal_pending']['marker']
+            later = reask.tick(CALLER, 1001.0 + reask.INTERVAL, reask.default_send)
+            self.assertEqual(later['terminal_pending']['marker'], original_marker)
+            submit.assert_called_once()
+        bridge.submit_text.assert_not_called()
+
     def test_mailbox_reply_ends_episode(self):
         state = self.begin(now=0.0)
         reask.tick(CALLER, 1.0, Sender())

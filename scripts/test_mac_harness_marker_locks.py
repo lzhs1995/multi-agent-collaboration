@@ -179,6 +179,32 @@ class MarkerLockTests(unittest.TestCase):
         self.assertEqual(path, self.path(marker))
         self.assert_paused(CALLER, marker)
 
+    def test_parsed_but_damaged_uuid_marker_cannot_create_or_mutate_reservations(self):
+        original = self.native_arm()
+        path = self.path(original)
+        partial = copy.deepcopy(original)
+        partial['participants'][1].pop('native_session_id')
+        invalid_pin = copy.deepcopy(original)
+        invalid_pin['participants'][1]['native_session_id'] = ''
+        damaged = ({}, dict(original, marker_version=None),
+                   dict(original, task_id=''), dict(original, collaboration_id=OTHER),
+                   *(dict(original, participants=value) for value in
+                     (None, {}, [], [None], [original['participants'][0]], [{}, {}])),
+                   partial, invalid_pin)
+        for value in damaged:
+            with self.subTest(value=value):
+                path.write_text(json.dumps(value))
+                before = {str(p): (p.read_bytes(), p.stat().st_ino)
+                          for p in self.home.rglob('*.json')}
+                with patch.object(lifecycle, 'task_boundary_locked') as boundary:
+                    with self.assertRaisesRegex(RuntimeError, 'malformed active reservation'):
+                        self.native_arm()
+                    boundary.assert_not_called()
+                self.assertEqual({str(p): (p.read_bytes(), p.stat().st_ino)
+                                  for p in self.home.rglob('*.json')}, before)
+        path.write_text(json.dumps(original))
+        self.assertEqual(self.native_arm(), original)
+
     def test_different_native_binding_task_root_and_workspace_are_not_reused(self):
         original = self.native_arm()
         for change in (dict(session=OTHER), dict(supervisor_session=OTHER),

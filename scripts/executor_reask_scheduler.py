@@ -392,6 +392,10 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
         raise ValueError('registration changed before commit')
     old_record = json.loads(registration_raw) if registration_raw is not None else None
     active = _bound_record(old_record, previous, path) if previous else None
+    if (previous and previous.get('episode_id') == state.get('episode_id')
+            and (state.get('continuation') or {}).get('reservation_inquiries') is True
+            and active is None):
+        raise ValueError('reservation inquiries require the original enrollment or a new authenticated episode')
     token = uuid.uuid4().hex
     registration = dict(token=token, enrollment=str(path))
     candidate = copy.deepcopy(state)
@@ -541,6 +545,8 @@ def enroll_existing(live, episode, enrollment_sha256, *, now=None):
             if record and record.get('schema') == TRANSACTION_SCHEMA:
                 return dict(outcome='REGISTRATION_UNCOMMITTED', input_operations=0)
         old = _bound_record(record, state, path) if record is not None else None
+        if record is not None and old is None:
+            raise ValueError('existing enrollment belongs to its original controller/binding')
         if (reask.stop_file(caller).exists() or state.get('state') != reask.WAITING
                 or old and old.get('status') == 'FINISHED'):
             raise ValueError('stopped or finished inquiries cannot be re-enrolled')

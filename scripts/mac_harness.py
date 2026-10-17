@@ -492,6 +492,39 @@ def _matching_reservation(directory, candidate):
     """
     from executor_reask_lifecycle import MAX_FORMAL_MARKERS, marker_epoch, valid_epoch
 
+    def well_formed(marker):
+        # Pre-native v2 markers have complete participant rows but no native
+        # session keys at all. They remain preserved and cannot establish a
+        # conversation match. Missing rows or partial native pins are damage,
+        # not permission to silently create another reservation.
+        if (marker.get('marker_version') != _ACTIVE_MARKER_VERSION
+                or not all(isinstance(marker.get(key), str) and marker[key] for key in
+                           ('collaboration_id', 'task_id', 'artifact_root',
+                            'workspace_id', 'workspace_uuid'))):
+            return False
+        participants = marker.get('participants')
+        if not isinstance(participants, list) or len(participants) < 2:
+            return False
+        for index, participant in enumerate(participants):
+            if (not isinstance(participant, dict)
+                    or participant.get('role') != ('supervisor' if index == 0 else 'executor')
+                    or type(participant.get('ordinal')) is not int
+                    or participant['ordinal'] != index
+                    or not all(isinstance(participant.get(key), str) for key in
+                               ('surface_ref', 'surface_uuid', 'provider'))):
+                return False
+        if any('native_session_id' in row for row in participants):
+            for row in participants:
+                if not all(isinstance(row.get(key), str) and row[key] for key in
+                           ('surface_uuid', 'provider', 'native_session_id')):
+                    return False
+                try:
+                    _uuid.UUID(row['native_session_id'])
+                    _uuid.UUID(row['surface_uuid'])
+                except ValueError:
+                    return False
+        return True
+
     def identity(marker):
         participants = marker.get('participants')
         if not isinstance(participants, list) or not participants:
@@ -520,20 +553,29 @@ def _matching_reservation(directory, candidate):
                     or not entry.is_file(follow_symlinks=False)):
                 continue
             try:
+                _uuid.UUID(entry.name[:-5])
+                uuid_filename = True
+            except ValueError:
+                uuid_filename = False
+            try:
                 marker = _read_active_marker(Path(entry.path))
             except ValueError as exc:
                 # v2 reservations have UUID filenames. Non-marker debris may
                 # be diagnosed and ignored, but a corrupted UUID file could
                 # still reserve these participants: never recreate it.
-                try:
-                    _uuid.UUID(entry.name[:-5])
-                except ValueError:
+                if not uuid_filename:
                     print('Ignoring malformed non-reservation file: ' + entry.path,
                           file=sys.stderr)
                     continue
                 raise RuntimeError(
                     'unreadable active reservation; preserve original file and '
                     'resolve its ownership before arming: ' + entry.path) from exc
+            if marker is not None and uuid_filename and (
+                    not well_formed(marker)
+                    or entry.name != marker['collaboration_id'] + '.json'):
+                raise RuntimeError(
+                    'malformed active reservation; preserve original file and '
+                    'resolve its ownership before arming: ' + entry.path)
             if marker is not None and identity(marker) == expected:
                 if entry.name != str(marker.get('collaboration_id')) + '.json':
                     raise RuntimeError('matching reservation filename is not bound to its id')
