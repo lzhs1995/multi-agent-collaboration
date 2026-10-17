@@ -18,6 +18,7 @@ import copy
 from bisect import bisect_right
 from contextlib import contextmanager
 import fcntl
+from functools import wraps
 import hashlib
 import json
 import math
@@ -67,14 +68,33 @@ def secure_directory(path):
         raise ValueError('scheduler state must be a private canonical directory')
 
 
+class RegistryBusy(BlockingIOError):
+    """Only failure to acquire the scheduler registry lock."""
+
+
 @contextmanager
 def registry_lock():
     """Serialize registrations so simultaneous callers cannot exceed the cap."""
     secure_directory(root())
     fd = os.open(root() / 'registry.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+') as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RegistryBusy('scheduler registry is busy') from exc
         yield
+
+
+def registration_result(function):
+    """Expose lock contention without reclassifying failures inside the body."""
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except RegistryBusy:
+            return dict(outcome='REGISTRY_BUSY', input_operations=0,
+                        retry_same_arguments=True)
+    return invoke
 
 
 def check_capacity(directory):
@@ -416,6 +436,7 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
     return candidate
 
 
+@registration_result
 def start(live, *, now=None, authenticate_executor=False, **kwargs):
     """Atomically register an explicitly authenticated new inquiry episode."""
     now = time.time() if now is None else now
@@ -458,6 +479,7 @@ def start(live, *, now=None, authenticate_executor=False, **kwargs):
                        resume_stopped=kwargs.get('resume_stopped', False))
 
 
+@registration_result
 def enroll(state, live, *, now=None):
     """Compatibility API for already authenticated, locally created episodes."""
     now = time.time() if now is None else now
@@ -495,6 +517,7 @@ def enroll(state, live, *, now=None):
         return _select(ready.read_json(path), result, path)
 
 
+@registration_result
 def enroll_existing(live, episode, enrollment_sha256, *, now=None):
     """Original executor explicitly registers exact old evidence; never ticks."""
     now = time.time() if now is None else now

@@ -406,6 +406,12 @@ byte hash and all five snapshot members: `intent.json`, `previous-state.json`,
 Declared absent members must still be absent. Changed intent, INDEX, preimages or
 member sets are rejected; recomputing an INDEX's own bytes/SHA fields is no proof.
 
+- Contention acquiring the registry lock returns `REGISTRY_BUSY`,
+  `input_operations=0` and `retry_same_arguments=true` from `start`, `enroll` and
+  `enroll-existing`. The CLI exits 2; retry the same registration later. Existing
+  episode, enrollment and channel bytes are unchanged. Creating the private lock
+  directory/file is possible; this is not a claim of zero filesystem writes.
+  Errors after acquiring the lock are not classified as registry contention.
 - Before the live token commit, failure reports `REGISTRATION_UNCOMMITTED` and
   does not tick or replace the old state/channel. A sweep verifies the original
   intent and restores the exact old enrollment. For a failed first registration,
@@ -457,6 +463,15 @@ consumption does not clear the pause or issue a request before matching RELEASE.
 The same rule applies to reviewed cross-release file scheduling. Validate it
 separately from registration, actual scheduler execution, automatic hooks and
 two real continuing rounds in the original sessions.
+
+While the matching formal reservation remains, a stalled supervisor can leave
+the executor without a next-task request channel. The 60-second reask cadence is
+not promised during this pause. `status` exposes `paused_tasks` for an existing
+episode, but `NO_EPISODE` does not expose the reservation owner, age or pack state.
+This remains a known visibility limitation. The file scheduler neither monitors
+transcripts/API health nor wakes a model; marker age and supervisor silence do
+not authorize a new request or RELEASE. A native-confirmed callback may qualify
+for the separate settlement reminder below, not a next-task inquiry.
 
 Only the matching supervisor/caller/workspace and exact collaboration/task
 RELEASE removes its reservation; remaining reservations or ended authorization

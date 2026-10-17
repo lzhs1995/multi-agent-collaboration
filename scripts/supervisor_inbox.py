@@ -65,6 +65,9 @@ def _frontier(inbox, previous):
                 rewind_fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY
                                     | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
                 try:
+                    rewind_info = os.fstat(rewind_fd)
+                    if [rewind_info.st_dev, rewind_info.st_ino] != binding:
+                        raise OSError(errno.ESTALE, 'reopened inbox directory identity changed')
                     names, following = directory.read_page(rewind_fd, 0)
                 finally:
                     os.close(rewind_fd)

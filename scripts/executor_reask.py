@@ -1058,6 +1058,7 @@ def main(argv=None):
     return 2 if result.get('outcome') in {
         'REGISTRATION_UNCOMMITTED', 'COMMITTED_RECOVERY_REQUIRED',
         'ORIGINAL_CONTROLLER_REQUIRED', 'UNSUPPORTED_FILE_PROTOCOL', 'EPISODE_BUSY',
+        'REGISTRY_BUSY',
     } else 0
 
 

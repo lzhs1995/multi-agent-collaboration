@@ -54,6 +54,12 @@ locks. Exact RELEASE cleanup removes only the matching pause and never revives
 STOPPED, CONSUMED, revoked or otherwise terminal work. TTL expiry, heartbeat and
 marker disappearance do not release a reservation.
 
+A stalled supervisor may therefore leave an executor without next-task inquiries
+until exact RELEASE; the 60-second cadence does not apply during a formal pause.
+Existing episode status shows `paused_tasks`, but `NO_EPISODE` does not show the
+reservation owner, age or pack state. This known visibility limit does not grant
+the scheduler transcript/API monitoring, model wakeup or release authority.
+
 `CALLBACK_SETTLEMENT` is a separate file reminder for a verified native callback
 whose matching reservation still awaits RELEASE. It does not increment next-task
 `ask_count`, send input, consume a reply, accept a report or release the task.
@@ -73,6 +79,11 @@ timings make interrupted work observable. The startup measurement covers module
 entry to sweep entry, not all time before the interpreter began executing.
 Registration, actual execution, hook exposure and model reading remain separate.
 File-only scheduling does not read transcripts, transport input or wake a model.
+
+Registration lock contention returns `REGISTRY_BUSY` with zero input and CLI
+exit 2; the same arguments may be tried later. Episode, enrollment and channel
+bytes remain unchanged, although the lock directory/file may be created.
+Only lock acquisition contention is classified this way.
 
 The reviewed historical file protocol now includes the complete
 `0.4.34-d333557fb498` release, with every manifest member, hash, byte count and

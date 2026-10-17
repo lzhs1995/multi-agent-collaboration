@@ -1,6 +1,7 @@
 """File inquiries remain discoverable without arming a research task."""
 import contextlib
 import copy
+import errno
 import hashlib
 import io
 import json
@@ -242,6 +243,37 @@ class InboxTest(unittest.TestCase):
         replaced = inbox._frontier(root, current)
         self.assertNotEqual(replaced['directory'], current['directory'])
         self.assertEqual(replaced['pending'], [replacement_name])
+
+    def test_eof_restart_rejects_a_different_inode_and_closes_both_streams(self):
+        _state, path = self.request()
+        previous = inbox._frontier(path.parent, {})
+        previous['pending'] = []
+        original = copy.deepcopy(previous)
+        other = self.home / 'different-inbox'
+        other.mkdir()
+        native_open = os.open
+        opened = []
+
+        def replace_reopened_stream(name, flags, *args, **kwargs):
+            if name == '.' and 'dir_fd' in kwargs:
+                fd = native_open(other, flags)
+            else:
+                fd = native_open(name, flags, *args, **kwargs)
+            opened.append(fd)
+            return fd
+
+        with mock.patch.object(inbox.os, 'open', side_effect=replace_reopened_stream), \
+                mock.patch.object(inbox.directory, 'read_page', return_value=([], previous['offset'])) as read:
+            with self.assertRaises(OSError) as raised:
+                inbox._frontier(path.parent, previous)
+        self.assertEqual(raised.exception.errno, errno.ESTALE)
+        self.assertEqual(read.call_count, 1)  # The foreign stream was never read.
+        self.assertEqual(previous, original)
+        self.assertEqual(len(opened), 2)
+        for fd in opened:
+            with self.assertRaises(OSError) as closed:
+                os.fstat(fd)
+            self.assertEqual(closed.exception.errno, errno.EBADF)
 
     def test_discovery_cursors_are_isolated_by_actual_thread(self):
         self.request()

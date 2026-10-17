@@ -20,10 +20,14 @@
 - Use Standard launchd scheduling only for the reask scheduler; leave the
   configuration guardian Background. Record module-to-sweep and phase timing,
   retain fair cursors, and page inbox directory discovery within bounded work.
+- Report registration lock contention as `REGISTRY_BUSY` with a nonzero CLI
+  exit and zero input, preserving existing episode, enrollment and channel bytes.
+  Leave downstream I/O errors distinct; retry the same registration later.
 - Restart an exhausted inbox walk with a fresh directory stream of the same
   held inode. This avoids ext4 retaining its EOF hash after a rewind and hiding
   new requests or 60-second reminders. Keep page limits and flush-before-commit
-  semantics; regression tests cover shared-stream EOF and path replacement.
+  semantics and explicitly verify the reopened stream's device/inode; regression
+  tests cover shared-stream EOF, path replacement and a foreign reopened stream.
 - Recognize measured Claude Monitor/Goal footer layouts and narrowly bounded
   wrapped-path padding. Preserve complete composer checks and all negative
   controls; no global whitespace stripping, draft clearing or new recovery key.
