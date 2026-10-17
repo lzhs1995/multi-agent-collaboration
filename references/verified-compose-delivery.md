@@ -62,6 +62,22 @@ RPC timeout、异常、回执未知或记录写入失败都不能授权第二次
 历史 queued callback、PASTE_INTENT 和冻结包保持原控制器，仅按原证据核收；
 绝不把旧队列消息再经 native 路径发送。新 native attempt 不具有补键预算。
 
+## 0.4.35 的原次确认窗口
+
+新提交默认观察原生收件30秒；`--wait-seconds` 只接受有限的0至60秒，
+在输入前校验。`--reconcile-only` 默认0秒，即一次只读观察。间隔1秒，
+同时受时间和 `ceil(seconds)+1` 次数上限约束；同步 I/O 可能延长实际耗时，
+不能据此承诺端到端延迟。
+
+exit75保留原RPC结果、原controller来源及同参数 `--reconcile-only` 指引。
+旧attempt缺控制器时保持 `UNKNOWN_LEGACY_CONTROLLER`，不能补CURRENT。
+turn abort是诊断事实，不证明消息丢失。等待耗尽仅允许观察原次，
+不增加输入、重贴或补键预算；原controller不会因文档更新改变默认行为。
+
+实测Monitor/Goal与路径续行padding只按已覆盖的完整结构识别，不对真实正文
+作全局strip/rstrip，不清草稿。原探针恢复提案未纳入本版。
+完整行为与验收边界见[0.4.35说明](release-0.4.35.md)。
+
 ## Claude 终端首次输入只有一次粘贴和一次提交键
 
 复用受保护 bridge。首次输入前确认 agent TUI 和空 composer；SHELL、
@@ -210,6 +226,11 @@ CCC 在合法报告等待边界与 `WAITING_SUPERVISOR` 同步，并保留有限
 原 episode 仍可为 WAITING_REPLY，这不证明 runner 仍活跃。必要时按授权
 继续原 episode，不重贴旧请求、不重置原 attempt 的按键预算。
 全局 `cmux_executor_reask_stop_guard.py` 注册经 advisory 观察器，不强迫续轮。
+0.4.35终端新询问从上一条消息原生确认后至少60秒起算，并重新核原receipt；
+缓存时间不能单独授权输入，文件求派独立计时。正式预留或待原控制器消费的
+回复使本次run返回，给出 `runner_returned=true` 及明确原因；
+`wait_boundary` 保留 `idle_observed=false`、`goal_state_changed=false` 和
+`fresh_preflight_required=true`。这不停止或重开episode，不证明终端已空闲。
 绑定主管答复或 operator stop 可结束等待；旧 AUTHENTICATED_NEW_DISPATCH
 出口依赖较新的 idle binding，而现役观察器不写它，不能仅凭新包声称已触发。
 

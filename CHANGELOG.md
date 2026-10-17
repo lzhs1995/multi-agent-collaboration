@@ -1,3 +1,65 @@
+## 0.4.35
+
+- Observe new native receipts for 30 seconds by default; validate finite
+  `--wait-seconds` in [0, 60] before input. Reconcile defaults to one read-only
+  observation. Time and iteration ceilings retain synchronous I/O limitations.
+  Exit 75 preserves RPC outcomes, original controller provenance and exact
+  zero-input reconcile guidance. Turn interruption is diagnostic, not message loss.
+- Expose authenticated ANSWERED bodies and original consume commands, pending
+  handshake/timeout work and opt-in queued maintenance context at PostToolUse.
+  Commit reminder cursors only after successful output flush. Hooks never ACK,
+  consume, send input, force continuation or accept work on a model's behalf.
+- Add independent CALLBACK_SETTLEMENT reminders for native-confirmed callbacks
+  awaiting exact RELEASE. Preserve next-task ask_count, report acceptance and
+  original task ownership. Reuse exact reservations under the existing locks;
+  exact RELEASE cleanup never revives terminal or revoked episodes.
+- Add explicitly authorized `start --continuing --reservation-inquiries` for
+  file status requests during a formal reservation. Pin the flag, overall task,
+  authorization file and original executor in the current controller's enrollment.
+  `RESERVATION_STATUS` includes the exact reservations and asks for dependency or
+  callback status and the next action/time. Keep 60-second file cadence, terminal
+  input paused, pending evidence intact and RELEASE separate from consumption.
+  Existing episodes cannot acquire this capability by changing a flag or controller.
+  Legacy/non-opt-in reservations still pause requests; `NO_EPISODE` still lacks
+  reservation-owner, age and pack metadata. File timers cannot wake an idle model.
+- Authenticate the pinned original native executor and exact reply SHA for both
+  continuing and ordinary current-controller consumption. Preserve old controllers.
+  Pending handshake context recognizes the exact participant role and resumes
+  remaining workers when one marker exceeds the per-event notice budget.
+- Refuse expired same-task marker reuse before any renewal. Diagnose and skip
+  malformed non-UUID marker names; preserve and refuse malformed UUID markers.
+- Measure terminal reask cadence from the previous native confirmation, leaving
+  file cadence independent and unconfirmed input untouched. Preserve source,
+  registration and historical controller checks, including fully verified
+  0.4.34 v3 producers/v2 issuers and their original 0.4.28/30/31/32/33/34 range.
+- Use Standard launchd scheduling only for the reask scheduler; leave the
+  configuration guardian Background. Record module-to-sweep and phase timing,
+  retain fair cursors, and page inbox directory discovery within bounded work.
+- Report registration lock contention as `REGISTRY_BUSY` with a nonzero CLI
+  exit and zero input, preserving existing episode, enrollment and channel bytes.
+  Leave downstream I/O errors distinct; retry the same registration later.
+- Restart an exhausted inbox walk with a fresh directory stream of the same
+  held inode. This avoids ext4 retaining its EOF hash after a rewind and hiding
+  new requests or 60-second reminders. Keep page limits and flush-before-commit
+  semantics and explicitly verify the reopened stream's device/inode; regression
+  tests cover shared-stream EOF, path replacement and a foreign reopened stream.
+- Recognize measured Claude Monitor/Goal footer layouts and narrowly bounded
+  wrapped-path padding. Preserve complete composer checks and all negative
+  controls; no global whitespace stripping, draft clearing or new recovery key.
+  Refuse active/unknown spinner, compaction and tool-running forms. Historical
+  padding evidence has two distinct screens read 20 times each and 34 distinct
+  negative controls; busy-screen evidence is a separate pair of v202 screens.
+  Repeated reads are not independent samples or live native receipt evidence.
+- Distinguish proven helper NO_INPUT from uncertain input, preserving the
+  original request and evidence instead of leaving a false pending send.
+
+Validation uses the full offline suite (`python -B scripts/test_all.py`) on
+macOS and Ubuntu with Python 3.10 and 3.14, measured composer fixtures and
+negative controls. Results apply only to their tested source commit; earlier
+candidate counts are not final-release evidence. Original-session review,
+immutable installation and live adoption remain separate checks.
+See [the release contract](references/release-0.4.35.md) for exact boundaries.
+
 ## 0.4.34
 
 - Accept one exact native ACK text block alongside structurally valid Claude

@@ -10,9 +10,18 @@ import stat
 import sys
 
 LABEL = 'org.multi-agent-collaboration.executor-reask-scheduler'
-FILES = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
-         'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
-         'scripts/executor_reask_lifecycle.py')
+LEGACY_FILES = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
+                'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
+                'scripts/executor_reask_lifecycle.py')
+# New consumers pin the code that grants identity/consumption authority. Keep
+# the reviewed historical file set intact: compatibility never upgrades pins.
+FILES = LEGACY_FILES + ('scripts/executor_reask_identity.py',
+                       'scripts/executor_reask_protocol.py',
+                       'scripts/executor_reply_advisory.py',
+                       'scripts/cmux_native_delivery.py',
+                       'scripts/cmux_workspace_guard.py',
+                       'scripts/cmux_daemon_identity.py',
+                       'scripts/cmux_foreground_thread.py')
 SCHEDULER = 'scripts/executor_reask_scheduler.py'
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
@@ -25,6 +34,7 @@ LEGACY_MANIFESTS = {
     '0.4.31-79ae83e9d5da': 'bc369ef7c81e7a4c34c4001736df61a99b634350248a2299def68e92efa098f5',
     '0.4.32-c7338a400bf4': '682e2215a09381c2e565eb73b142f360ec506c4a428a776423f64ff22cdd77d5',
     '0.4.33-09de16ceb823': 'fd89bd0508862f30271c6201346f8f85472c47bfeaba45635f868c4d7d8ee08a',
+    '0.4.34-d333557fb498': 'd4039ba7078eeaae7df91dcbd83ff886408539ff50874537ba0e555f95b8c917',
 }
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
@@ -73,6 +83,15 @@ LEGACY = {
         "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
         "scripts/executor_reask_lifecycle.py": "65328f881c2397d1f1e079d7bc129c109b1f4fb7385dfe54fd43a6813030660d",
         "scripts/executor_reask_scheduler.py": "4376f237d8f15652f195bc856cd6ebc17ddfb447387783c1f58cb6b69cd4c901"
+    },
+    "0.4.34-d333557fb498": {
+        "VERSION": "1f1673fdef5874a5e9e75a39634b0d001e54cd2fb11b9f3bc21b35de3a204cf9",
+        "scripts/executor_reask.py": "f7782ae273d5cf2c2944b2372447bae8e85aa93b2da2f0ca5a1944acb39e1e24",
+        "scripts/executor_ready.py": "39e297b4ef4b2a1c5977570a81f050482156fd088d6a9cab364acb2e8510af62",
+        "scripts/cmux_bridge.py": "27a8bfac62c21be3910ccf81b50d2d77bbbcb870951e5f367fe846a020ea9b8a",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reask_lifecycle.py": "65328f881c2397d1f1e079d7bc129c109b1f4fb7385dfe54fd43a6813030660d",
+        "scripts/executor_reask_scheduler.py": "4376f237d8f15652f195bc856cd6ebc17ddfb447387783c1f58cb6b69cd4c901"
     }
 }
 # Reviewed v3 state/v2 enrollment producers, after full immutable verification.
@@ -91,6 +110,13 @@ LEGACY_FILE_PROTOCOL = {
         'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
                         '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
                         '0.4.33-09de16ceb823'),
+    },
+    '0.4.34-d333557fb498': {
+        'descriptor': {'id': 'executor-reask-file-v1',
+                       'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+        'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+                        '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+                        '0.4.33-09de16ceb823', '0.4.34-d333557fb498'),
     },
 }
 CONTRACT = dict(id='executor-reask-file-v1', version=1,
@@ -148,7 +174,7 @@ def controller_shape(value):
         return (isinstance(value, dict) and set(value) == {'source', 'python', 'files'}
                 and canonical_path(value['source']) and canonical_path(value['python'])
                 and isinstance(value['files'], dict)
-                and set(value['files']) == set(FILES)
+                and set(value['files']) in (set(FILES), set(LEGACY_FILES))
                 and all(sha256_shape(v) for v in value['files'].values()))
     except (TypeError, KeyError, ValueError, OSError):
         return False
@@ -167,6 +193,8 @@ def continuation_shape(value, state):
             return False
         pin, until, authorized = value['authorization'], value['until_epoch'], value['authorized_epoch']
         return (value.get('enabled') is True and text(value.get('id'), 128)
+                and ('reservation_inquiries' not in value
+                     or type(value['reservation_inquiries']) is bool)
                 and text(value.get('overall_task'), 4096) and text(value.get('status'), 128)
                 and text(value.get('owner'), 128) and value['owner'] == state.get('supervisor')
                 and finite(authorized) and (until is None or finite(until) and until > authorized)
@@ -254,7 +282,7 @@ def _verify_release(source, expected):
     if hashlib.sha256(raw).hexdigest() != expected:
         raise ValueError('untrusted release manifest')
     files = value.get('files')
-    required = {*FILES, SCHEDULER, 'scripts/configuration_guardian.py', 'scripts/manage_install.py'}
+    required = {*LEGACY_FILES, SCHEDULER, 'scripts/configuration_guardian.py', 'scripts/manage_install.py'}
     if (not isinstance(files, dict) or not 1 <= len(files) <= MAX_RELEASE_FILES
             or not required.issubset(files)):
         raise ValueError('incomplete release manifest')
@@ -303,7 +331,7 @@ def _trusted_release(source, checked):
     if name not in LEGACY:
         raise ValueError('unknown historical release is unsupported')
     files = _verify_release(source, LEGACY_MANIFESTS.get(name))
-    if {key: files[key]['sha256'] for key in (*FILES, SCHEDULER)} != LEGACY[name]:
+    if {key: files[key]['sha256'] for key in (*LEGACY_FILES, SCHEDULER)} != LEGACY[name]:
         raise ValueError('unreviewed controller/scheduler combination')
     result = dict(kind='legacy', name=name, files=files)
     checked[source] = result
@@ -314,7 +342,8 @@ def _controller_release(value, checked):
     if not controller_shape(value):
         raise ValueError('invalid controller')
     release = _trusted_release(Path(value['source']), checked)
-    if (value['files'] != {key: release['files'][key]['sha256'] for key in FILES}
+    members = FILES if release['kind'] == 'current' else LEGACY_FILES
+    if (value['files'] != {key: release['files'][key]['sha256'] for key in members}
             or release['kind'] == 'current' and value['python'] != release['python']):
         raise ValueError('controller pins differ from the trusted release')
     return release
@@ -325,6 +354,9 @@ def _supported_state(state, record, checked):
     if value is None or type(state.get('version')) is not int or state['version'] not in (2, 3):
         return False
     release = _controller_release(value, checked)
+    if ('reservation_inquiries' in (state.get('continuation') or {})
+            and release['kind'] != 'current'):
+        return False
     # Old v2 producers and the explicitly reviewed v3 producer have different
     # schemas. A public descriptor never grants support to an unknown release.
     if state['version'] == 2:

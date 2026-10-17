@@ -31,7 +31,7 @@ class LegacyPausedReplyTests(unittest.TestCase):
         self.base = self.home / '.local/share/multi-agent-collaboration/releases'
         source, pins, raw = self.make_release(name)
         self.stack.enter_context(patch.dict(protocol.LEGACY, {
-            name: {key: pins[key]['sha256'] for key in (*protocol.FILES, protocol.SCHEDULER)}}))
+            name: {key: pins[key]['sha256'] for key in (*protocol.LEGACY_FILES, protocol.SCHEDULER)}}))
         self.stack.enter_context(patch.dict(protocol.LEGACY_MANIFESTS, {name: digest(raw)}))
         original = identity(source, pins)
         state['version'] = 3 if modern else 2

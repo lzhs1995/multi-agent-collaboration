@@ -5,8 +5,9 @@ skills and global CLAUDE.md link here; they do not implement another sender or
 copy hook code. Pin one complete immutable release for each new task. An
 in-flight task keeps its original controller, task pack, journal and receipts.
 
-This reference describes **0.4.32** behavior. See [CHANGELOG](../CHANGELOG.md)
-for the final offline validation. Installation, actual scheduler
+This reference describes **0.4.35** behavior. See the
+[release boundaries](release-0.4.35.md) and [CHANGELOG](../CHANGELOG.md)
+for validation status. Installation, actual scheduler
 execution, automatic hooks and original-client adoption require separate live
 evidence; offline results do not establish them.
 
@@ -91,6 +92,16 @@ Stop never enrolls an episode or launches the loop. An API outage, killed proces
 or paused client can prevent execution; expose that state instead of promising
 that software can never stop.
 
+In 0.4.35, terminal inquiries wait at least 60 seconds after the previous native
+confirmation, revalidating the original receipt before another input. Cached
+timestamps alone cannot authorize input. Pending attempts remain observation-only;
+file inquiries keep their independent cadence and formal ownership checks.
+The runner also returns when it observes a formal reservation or a reply needing
+original consumption. `runner_returned=true` is an invocation boundary, not an
+idle observation, episode stop or Goal change; fresh preflight is still required.
+Old controllers retain their original runner behavior. See
+[the return and confirmation contract](release-0.4.35.md#let-the-original-executor-read-and-return).
+
 The explicit CLI uses the nonblocking caller lock and an authenticated existing
 idle binding where needed. Do not reopen an operator stop or take another supervisor's
 executor. The legacy AUTHENTICATED_NEW_DISPATCH exit requires a newer idle binding
@@ -163,8 +174,9 @@ ANSWERED records detection, not consumption. Preserve the current business
 episode and original pack while the original authenticated executor consumes the
 exact reply; pending consumption does not authorize repeated dispatch. A TASK
 reply remains separate from a formal task pack. A same-supervisor reservation
-keeps inquiries paused until its exact RELEASE. Neither more asks nor a missing
-marker justifies releasing that reservation or reopening a terminal episode.
+keeps terminal inquiries paused until exact RELEASE. File inquiries during it
+require the explicit current-controller enrollment described below. Neither more
+asks nor a missing marker justifies release or reopening a terminal episode.
 
 Report useful outcomes and observed delays separately:
 
@@ -287,6 +299,12 @@ old episodes or authorize communication. A new explicitly authorized
 purpose, workspace, supervisor, episode, file channels and immutable controller.
 Preserve the original controller of every earlier attempt; do not migrate it.
 
+In 0.4.35 only this job uses `ProcessType=Standard`; the configuration guardian
+remains `Background`. Startup timing records module entry to sweep entry, not
+the interpreter's entire startup. Bounded directory pages and fair cursors limit
+discovery work; partial counts still require the phase evidence below. Job
+configuration alone does not establish improved execution under load.
+
 The launchd job runs at 60-second intervals with a 256-enrollment cap and a
 10-second sweep budget, uses nonblocking registry/episode locks and rotates its
 scan fairly. It only updates file requests and reads their bound file replies.
@@ -344,6 +362,13 @@ reviewed controllers. The 0.4.32 issuer's range stays fixed: it cannot claim a
 0.4.33 or future CURRENT controller. Both complete releases and all descriptors
 must still verify; original enrollment and controller bytes remain authoritative.
 
+Version 0.4.35 extends the same complete review to
+`0.4.34-d333557fb498`. Its original issuer may retain only its reviewed
+0.4.28/30/31/32/33/34 controllers; older issuers do not gain authority over
+0.4.34 or a future CURRENT. All actual members, modes, hashes, descriptors and
+the complete original issuer/controller combination must verify. This adds file
+interpretation, not old-code execution, migration or reply-consumption authority.
+
 Match the complete enrollment binding and registration token to the live state;
 legacy tokenless states match only tokenless records. An existing continuation
 must be structurally valid and contain the exactly equal complete original
@@ -367,11 +392,13 @@ channels. Authorization/boundary previews use `publish=False` on deep copies.
 Registry operations take the registry lock before the caller lock and reread
 their inputs under those locks.
 
-A same-supervisor formal reservation created before a new episode also rejects
-`start`, for both ordinary and continuing inquiries, including `--file-only`.
+A same-supervisor formal reservation created before a new episode rejects
+`start` unless the current controller validates explicit `--continuing
+--reservation-inquiries` authorization. `--file-only` alone grants no exception.
 Rejection leaves the original marker and any existing state or enrollment intact
 and performs no initial tick. Existing enrolled episodes instead follow the
-pause and bound-reply rules below; creating a replacement is not pause recovery.
+pause and bound-reply rules below. Starting an existing episode with a changed
+reservation-inquiry flag is refused; creating a replacement is not pause recovery.
 
 A PREPARING envelope retains the original active record and proposed enrollment,
 with a pinned intent and complete preimages. The single commit point is live
@@ -382,6 +409,12 @@ byte hash and all five snapshot members: `intent.json`, `previous-state.json`,
 Declared absent members must still be absent. Changed intent, INDEX, preimages or
 member sets are rejected; recomputing an INDEX's own bytes/SHA fields is no proof.
 
+- Contention acquiring the registry lock returns `REGISTRY_BUSY`,
+  `input_operations=0` and `retry_same_arguments=true` from `start`, `enroll` and
+  `enroll-existing`. The CLI exits 2; retry the same registration later. Existing
+  episode, enrollment and channel bytes are unchanged. Creating the private lock
+  directory/file is possible; this is not a claim of zero filesystem writes.
+  Errors after acquiring the lock are not classified as registry contention.
 - Before the live token commit, failure reports `REGISTRATION_UNCOMMITTED` and
   does not tick or replace the old state/channel. A sweep verifies the original
   intent and restores the exact old enrollment. For a failed first registration,
@@ -421,18 +454,40 @@ rejects enrollment; compatibility cannot grant successor ownership.
 Version 0.4.32 applies this boundary before file compatibility checks, both to
 continuing inquiries and ordinary WAITING, including old 0.4.27 episodes that
 CURRENT cannot file-tick. A valid reservation must bind the original caller and
-workspace. Same-supervisor reservations pause inquiries. A legitimate different
+workspace. Same-supervisor reservations pause terminal inquiries and, unless
+explicitly enrolled as below, file inquiries. A legitimate different
 supervisor's reservation must be newer than the episode to end the old inquiry
 with persistent `STOPPED / FORMAL_OWNER_CHANGED`. It does not migrate the old
 controller, settle a callback or grant the successor old task scope.
 
-A same-supervisor pause blocks new requests, not discovery of the already-bound
-reply. The reply may become ANSWERED while the reservation remains. Only the
-authenticated original executor through its original controller may consume it;
-consumption does not clear the pause or issue a request before matching RELEASE.
-The same rule applies to reviewed cross-release file scheduling. Validate it
-separately from registration, actual scheduler execution, automatic hooks and
-two real continuing rounds in the original sessions.
+A reservation never blocks discovery of the already-bound reply. It may become
+ANSWERED while the reservation remains. The authenticated original executor
+reads the complete body and consumes its exact SHA through its original controller.
+Consumption can rearm authorized continuing file inquiries, but cannot clear the
+reservation or authorize terminal input. Reviewed cross-release file scheduling
+does not grant consumption authority or add new capabilities to old controllers.
+
+In 0.4.35 the original authenticated executor may explicitly enroll a new
+`start --continuing --reservation-inquiries --overall-task TASK
+--authorization-file /absolute/user-authorization.txt` episode. The flag is part
+of the immutable authorization/enrollment binding and requires the current
+controller. During matching reservations, foreground ticks and the scheduler
+write file-only `RESERVATION_STATUS` requests at the existing 60-second cadence.
+Each includes the exact reservations and requests task, dependency or callback
+status and the next expected action/time. Pending terminal evidence is preserved;
+no transport, terminal reconciliation, automatic ACK or RELEASE is performed.
+An ANSWERED body stops further requests until original-executor consumption.
+
+Installing a release or enrolling an old episode cannot add this capability.
+Legacy and non-opt-in episodes still pause all requests during reservations.
+`run` still returns `FORMAL_RESERVATION_WAIT`, allowing the foreground tool to
+finish while the enrolled file scheduler remains separate. Existing-episode
+`status` exposes `reservation_paused`, `reservation_inquiries_authorized`,
+`inquiries_paused` and `paused_tasks`. `NO_EPISODE` still lacks reservation owner,
+age and pack state. The scheduler does not monitor transcripts/API health or
+wake a model. Marker age and supervisor silence cannot authorize RELEASE.
+Verify registration, actual sweeps, automatic hooks, body reading and two real
+continuing request/reply/consume/rearm rounds separately in the original sessions.
 
 Only the matching supervisor/caller/workspace and exact collaboration/task
 RELEASE removes its reservation; remaining reservations or ended authorization
@@ -450,6 +505,29 @@ guarantee. Ordinary tools and workflow hooks remain nonblocking.
 
 Reservation is not native dispatch evidence or business acceptance.
 TASK/DISPATCHED/ACK mailbox text alone does not dispatch or reserve work.
+
+Version 0.4.35 reuses an exact reservation for the same task, artifact root,
+workspace and native participants under the existing participant/directory locks.
+The marker must still be fresh; an expired exact marker is refused without
+renewal and requires original-owner settlement. It does not merge historical
+duplicate markers. Exact RELEASE cleanup may remove
+the matching stale pause on a terminal episode, but never restores its waiting
+state or authorization.
+
+### Reply and settlement context at actual tool boundaries
+
+An authenticated executor's PostToolUse may expose the exact ANSWERED body, SHA
+and original-controller consume command. Only the original executor reads and
+consumes that body. Reminder cursors advance after successful output flush;
+exposure, body reading and consumption have separate evidence.
+
+Independent `CALLBACK_SETTLEMENT` context reminds the original supervisor about
+a verified native callback still awaiting matching RELEASE. It is a file
+coordination request, not another next-task inquiry: it does not increase
+`ask_count`, send terminal input, accept a report or release a reservation.
+Pending handshake/timeout and explicitly authorized maintenance context likewise
+preserve the original nonce, controller, attempt and full body. They do not ACK,
+consume or turn queued notices into native receipts.
 
 ## Continuing authorization (0.4.28)
 
@@ -484,6 +562,11 @@ File compatibility does not let CURRENT consume an old controller's reply.
 Except for operator stop, a controller mismatch returns
 `ORIGINAL_CONTROLLER_REQUIRED` before authorization, receipt or state writes.
 Consumption requires the authenticated original executor and original controller.
+For new current-controller episodes this checks the pinned original native
+session/thread and process binding, not just the surface/workspace. Both ordinary
+and continuing `consume` require `--reply-sha256` for the exact body. Missing or
+changed original identity refuses consumption; old controllers retain their
+original behavior and cannot be upgraded by CURRENT file compatibility.
 
 After consumption the same authorized episode resumes, no earlier than the
 existing 60-second cadence and the reply's next due time. Each new inquiry has a
@@ -491,11 +574,12 @@ new marker. Previously consumed rounds cannot close it again. An elapsed deadlin
 allows a new inquiry; it never proves a dependency completed. No catch-up burst
 occurs after a delayed sweep. This does not promise model response within 60 seconds.
 
-The [formal reservation boundary](#formal-reservation-boundary) pauses on the
-same supervisor's reservation and ends old inquiries on a legitimate newer
-supervisor's reservation. Only exact release can resume a still-authorized paused
-lifecycle; the former blanket rule that all foreign reservations are ineffective
-does not apply to a valid new formal owner.
+The [formal reservation boundary](#formal-reservation-boundary) retains terminal
+pauses and requires explicit authorization for file status inquiries during a
+same-supervisor reservation. Only exact RELEASE removes that reservation. A
+legitimate newer supervisor's reservation ends the old inquiries; the former
+blanket rule that all foreign reservations are ineffective does not apply to a
+valid new formal owner.
 For overall completion, explicit stop or authorization withdrawal, use
 `stop --reason OVERALL_TASK_COMPLETE` (or the applicable operator reason). Stop
 works even while a reply awaits consumption. An expired/revoked authorization

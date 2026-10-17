@@ -443,14 +443,22 @@ class StopGuardTest(Base):
         guard.decide(self.payload(), CALLER, 1001.0)
         self.assertEqual(reask.load(CALLER)['ask_count'], 0)
 
-    def test_answered_blocks_once_then_allows(self):
+    def test_answered_remains_unconsumed_across_stop_checks(self):
         self.begin()
         reask.tick(CALLER, 1001.0, Sender())
         self.user(json.dumps(self.reply()))
         block, reason = guard.decide(self.payload(), CALLER, 1002.0)
-        self.assertTrue(block)
-        self.assertIn('successor release installed', reason)
-        self.assertEqual(guard.decide(self.payload(), CALLER, 1003.0), (False, ''))
+        self.assertFalse(block)
+        self.assertIn('consume --reply-sha256', reason)
+        state = reask.load(CALLER)
+        self.assertEqual(state['state'], reask.ANSWERED)
+        self.assertEqual(state['reply']['body']['trigger'], 'successor release installed')
+        self.assertIn(state['reply']['body_sha256'], reason)
+        before = reask.state_path(CALLER).read_bytes()
+        for now, active in ((1003.0, False), (1063.0, True)):
+            self.assertEqual(guard.decide(self.payload(active), CALLER, now), (False, reason))
+            self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+        self.assertFalse((reask.root() / 'consumed').exists())
 
     def test_stopped_allows(self):
         self.begin()
@@ -475,16 +483,22 @@ class StopGuardTest(Base):
 
     def test_cli_entry_does_not_trust_raw_daemon_environment(self):
         self.begin()
-        env = dict(os.environ, HOME=str(self.home), CMUX_SURFACE_ID=CALLER)
-        # 子进程 HOME 不同于 mock，需在其 HOME 下重建等待段。
-        code = ('import sys; sys.path.insert(0, %r); import executor_reask as r;'
-                'r.start(%r, %r, "r24")' % (str(HERE), CALLER, SUP))
-        subprocess.run([sys.executable, '-B', '-c', code], env=env, check=True)
-        run = subprocess.run([sys.executable, '-B', str(HERE / 'cmux_executor_reask_stop_guard.py')],
-                             input=json.dumps(self.payload()), capture_output=True, text=True,
-                             env=env, check=True)
-        self.assertEqual(run.stdout, '')
-        self.assertNotIn('INTERNAL_ERROR', run.stderr)
+        # Model a managed daemon explicitly: the real host may be an ordinary
+        # shell or Linux CI. The real resolver must reject this Stop payload
+        # without session_id rather than trust the supplied surface selector.
+        daemon_identity = guard.hook_identity.workspace.daemon_identity
+        before = reask.state_path(CALLER).read_bytes()
+        with (mock.patch.object(guard.sys, 'stdin', io.StringIO(json.dumps(self.payload()))),
+              mock.patch.object(daemon_identity.sys, 'platform', 'darwin'),
+              mock.patch.object(daemon_identity, '_ancestry', return_value=([], {'pid': 987654})),
+              mock.patch.dict(os.environ, CMUX_SURFACE_ID=CALLER, CMUX_WORKSPACE_ID=WORKSPACE),
+              contextlib.redirect_stdout(io.StringIO()) as output,
+              contextlib.redirect_stderr(io.StringIO()) as error):
+            self.assertEqual(guard.main(), 0)
+        self.assertEqual(output.getvalue(), '')
+        self.assertIn('IDENTITY_REFUSED IdentityError', error.getvalue())
+        self.assertNotIn('INTERNAL_ERROR', error.getvalue())
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
 
     def authenticated_check(self):
         with mock.patch.object(guard.sys, 'stdin', io.StringIO(json.dumps(self.payload()))), \

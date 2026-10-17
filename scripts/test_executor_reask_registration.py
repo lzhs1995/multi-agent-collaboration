@@ -1,7 +1,8 @@
 """Registration crash recovery with small isolated files and no real inputs."""
 import copy
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -96,6 +97,84 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual(value['schema'], scheduler.TRANSACTION_SCHEMA)
         self.assertEqual(value['status'], 'PREPARING')
         return value, Path(value['intent']['path']).parent
+
+    def test_registry_contention_preserves_episode_registration_and_channels(self):
+        state = self.start()
+        self.publish(state)
+        state_before = reask.state_path(CALLER).read_bytes()
+        enrollment_before = scheduler.enrollment_path(CALLER).read_bytes()
+        channels_before = self.channel_bytes(state)
+        memory_before = copy.deepcopy(state)
+        calls = {
+            'start': lambda: self.start(),
+            'enroll': lambda: scheduler.enroll(state, self.live(), now=1001.),
+            'enroll-existing': lambda: scheduler.enroll_existing(
+                self.live(), state['episode_id'], digest(enrollment_before), now=1001.),
+        }
+        for name, call in calls.items():
+            with self.subTest(entrypoint=name):
+                with scheduler.registry_lock(), patch.object(
+                        reask, 'episode_lock', side_effect=AssertionError('registry not acquired')):
+                    result = call()
+                self.assertEqual(result, dict(outcome='REGISTRY_BUSY', input_operations=0,
+                                              retry_same_arguments=True))
+                self.assertEqual(reask.state_path(CALLER).read_bytes(), state_before)
+                self.assertEqual(scheduler.enrollment_path(CALLER).read_bytes(), enrollment_before)
+                self.assertEqual(self.channel_bytes(state), channels_before)
+                self.assertEqual(state, memory_before)
+                # The same request succeeds after the original lock is released.
+                self.assertNotEqual(call().get('outcome'), 'REGISTRY_BUSY')
+                self.assertTrue(scheduler.registered(reask.load(CALLER)))
+                self.assertEqual(reask.state_path(CALLER).read_bytes(), state_before)
+                self.assertEqual(scheduler.enrollment_path(CALLER).read_bytes(), enrollment_before)
+                self.assertEqual(self.channel_bytes(state), channels_before)
+
+    def test_first_registration_contention_creates_no_episode_or_enrollment(self):
+        with scheduler.registry_lock():
+            self.assertEqual(self.start()['outcome'], 'REGISTRY_BUSY')
+        self.assertFalse(reask.state_path(CALLER).exists())
+        self.assertFalse(scheduler.enrollment_path(CALLER).exists())
+        self.assertFalse(self.channel.exists())
+        self.assertFalse((ready.state_root() / 'supervisor-inbox-v1').exists())
+        self.assertTrue(scheduler.registered(self.start()))
+
+    def test_registration_cli_reports_registry_busy_with_nonzero_exit_and_no_tick(self):
+        state = self.start()
+        self.publish(state)
+        state_before = reask.state_path(CALLER).read_bytes()
+        enrollment_before = scheduler.enrollment_path(CALLER).read_bytes()
+        channels_before = self.channel_bytes(state)
+        commands = [
+            ['start', '--supervisor', SUPERVISOR, '--task', 'original-task',
+             '--channel', str(self.channel), '--file-only'],
+            ['enroll-existing', '--episode', state['episode_id'],
+             '--enrollment-sha256', digest(enrollment_before)],
+        ]
+        for command in commands:
+            with self.subTest(command=command[0]):
+                output = io.StringIO()
+                with scheduler.registry_lock(), redirect_stdout(output), patch.object(
+                        reask, 'tick', side_effect=AssertionError('busy registration cannot tick')):
+                    code = reask.main(command + ['--caller-uuid', CALLER])
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(output.getvalue()), dict(
+                    outcome='REGISTRY_BUSY', input_operations=0, retry_same_arguments=True))
+                self.assertEqual(reask.state_path(CALLER).read_bytes(), state_before)
+                self.assertEqual(scheduler.enrollment_path(CALLER).read_bytes(), enrollment_before)
+                self.assertEqual(self.channel_bytes(state), channels_before)
+
+    def test_body_blocking_io_error_is_not_reclassified_as_registry_contention(self):
+        state = self.start()
+        enrollment_sha = digest(scheduler.enrollment_path(CALLER).read_bytes())
+        calls = [lambda: self.start(),
+                 lambda: scheduler.enroll(state, self.live()),
+                 lambda: scheduler.enroll_existing(self.live(), state['episode_id'], enrollment_sha)]
+        for call in calls:
+            failure = BlockingIOError('downstream operation, not registry acquisition')
+            with patch.object(scheduler, 'approved_release', side_effect=failure):
+                with self.assertRaises(BlockingIOError) as raised:
+                    call()
+            self.assertIs(raised.exception, failure)
 
     def fail_before_state_save(self, task='replacement-task', now=1002.):
         with patch.object(reask, 'save', side_effect=OSError('injected before state save')) as save:
@@ -328,7 +407,7 @@ class RegistrationTests(unittest.TestCase):
         name = next(iter(protocol.LEGACY))
         source = self.home / '.local/share/multi-agent-collaboration/releases' / name / 'source'
         pins = {}
-        for member in (*protocol.FILES, protocol.SCHEDULER,
+        for member in (*protocol.LEGACY_FILES, protocol.SCHEDULER,
                        'scripts/configuration_guardian.py', 'scripts/manage_install.py'):
             raw = ("raise AssertionError('old release code executed')\n# " + member).encode()
             path = source / member
@@ -340,10 +419,10 @@ class RegistrationTests(unittest.TestCase):
         (source.parent / 'MANIFEST.json').write_bytes(manifest)
         (source.parent / 'MANIFEST.json').chmod(0o444)
         self.stack.enter_context(patch.dict(protocol.LEGACY, {
-            name: {key: pins[key]['sha256'] for key in (*protocol.FILES, protocol.SCHEDULER)}}))
+            name: {key: pins[key]['sha256'] for key in (*protocol.LEGACY_FILES, protocol.SCHEDULER)}}))
         self.stack.enter_context(patch.dict(protocol.LEGACY_MANIFESTS, {name: digest(manifest)}))
         original = dict(source=str(source), python=str(self.home / 'original-python'),
-                        files={key: pins[key]['sha256'] for key in protocol.FILES})
+                        files={key: pins[key]['sha256'] for key in protocol.LEGACY_FILES})
         state = self.local_episode()
         state.update(version=2, controller=original)
         state.pop('file_protocol')

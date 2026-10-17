@@ -1,11 +1,30 @@
-Current source: **0.4.34**. Late handshake reconciliation accepts a Claude native assistant record containing one exact ACK text block alongside structurally valid reasoning blocks. Extra text, tool blocks, malformed metadata and any ACK whitespace or nonce difference remain rejected; reasoning contents are never emitted in reconciliation results or archives. The original supervisor and complete original controller remain required. See [late ACK reconciliation](references/late-handshake-ack.md).
+Current source: **0.4.35**. New submissions observe native reception for 30 seconds
+by default, with a finite 0–60 second option. Reconciliation defaults to one
+read-only observation and retains the original attempt, controller and RPC
+diagnostic. A timeout or aborted turn never authorizes another input.
+
+Nonblocking hook context makes unconsumed replies, pending handshake work and
+callback settlement visible at actual tool boundaries. Exact reservations and
+RELEASE records preserve task ownership; callback settlement never dispatches
+the next task. Terminal reasks wait at least 60 seconds after the prior native
+confirmation. The reask scheduler uses Standard scheduling; the configuration
+guardian remains Background. Bounded discovery and measured Claude composer
+layouts preserve original drafts and pending evidence.
+
+The reviewed file protocol includes the complete 0.4.34 release without granting
+historical issuers future authority. See [0.4.35 behavior and evidence boundaries](references/release-0.4.35.md)
+and [validation history](CHANGELOG.md). Source tests, installation, actual
+automatic hooks, full body reading and live native reception are separate checks.
+
+Version **0.4.34** added late handshake reconciliation for a Claude native assistant record containing one exact ACK text block alongside structurally valid reasoning blocks. Extra text, tool blocks, malformed metadata and any ACK whitespace or nonce difference remain rejected; reasoning contents are never emitted in reconciliation results or archives. The original supervisor and complete original controller remain required. See [late ACK reconciliation](references/late-handshake-ack.md).
 
 File scheduling retains the fully verified 0.4.33 v3 producer and v2 issuer,
 including its historical enrollment of the 0.4.32 controller. An older issuer
 cannot claim support for a future controller. No registration, consumption or
 transport authority is inferred from compatibility.
-The 40 ACK behavior tests pass locally and through the original 0.4.32 controller.
-The final offline suite passes all 1,912 tests with no failures or errors.
+For 0.4.34, the 40 ACK behavior tests passed locally and through the original
+0.4.32 controller. Its final offline suite passed all 1,912 tests with no failures
+or errors; those historical results are not 0.4.35 validation.
 
 The Claude footer parser recognizes the HUD's measured input/cache token breakdown below complete composer borders. It preserves draft text and continues to refuse ordinary input during compaction or reconnect. New Codex-bound input goes directly to the original native thread: active-turn steer or idle-turn start, with no composer or Tab queue. Uncertain requests are observed without resending. Workflow hooks remain nonblocking, and supervisor PostToolUse exposes authenticated file requests without sending or settling work. An explicitly enrolled Claude maintenance notice can expose its verified original queued body at a tool boundary; it never changes the original transport receipt. See the [delivery contract](references/verified-compose-delivery.md) and [request lifecycle](references/configuration-and-reasks.md).
 

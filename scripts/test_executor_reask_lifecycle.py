@@ -17,7 +17,11 @@ from test_executor_reask_scheduler import CALLER, SUP, WORKSPACE
 
 
 class LifecycleTests(unittest.TestCase):
-    setUp = fixtures.SchedulerTests.setUp
+    def setUp(self):
+        fixtures.SchedulerTests.setUp(self)
+        self.consumer_auth = self.stack.enter_context(patch(
+            'executor_reask_identity.authenticate', side_effect=fixtures.consumer_fixture))
+
     live = fixtures.SchedulerTests.live
     enroll = fixtures.SchedulerTests.enroll
     def begin(self, caller=CALLER, **kwargs):
@@ -76,6 +80,84 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNone(reask.load(CALLER)['reply_consumed_epoch'])
         self.assertEqual(scheduler.sweep(now=5000.)['file_posts'], 0)
         self.assertEqual(reask.load(CALLER)['state'], reask.ANSWERED)
+
+    def consumption_files(self):
+        return {str(path): path.read_bytes() for path in ready.state_root().rglob('*')
+                if path.is_file() and path.suffix != '.lock'}
+
+    def invalid_epochs(self):
+        return (None, True, False, '1061', [], {}, -1, float('nan'),
+                float('inf'), float('-inf'), 10 ** 400, lifecycle.MAX_EPOCH + 1)
+
+    def test_invalid_task_reply_times_do_not_leave_receipt_or_partial_state(self):
+        self.enroll()
+        original = self.answered(status='TASK')
+        for field in ('next_due_epoch', 'deadline_epoch'):
+            for value in self.invalid_epochs():
+                with self.subTest(field=field, value=value):
+                    state = copy.deepcopy(original)
+                    body = dict(state['reply']['body'], **{field: value})
+                    state['reply'].update(reask.reply_record(body, state['reply']['source']))
+                    reask.save(state)
+                    before = self.consumption_files()
+                    with self.assertRaises(ValueError):
+                        lifecycle.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+                    self.assertEqual(self.consumption_files(), before)
+                    self.assertEqual(reask.load(CALLER)['state'], reask.ANSWERED)
+        self.transport.assert_not_called()
+
+    def test_task_reply_may_omit_optional_schedule_times(self):
+        self.enroll()
+        state = self.answered(status='TASK')
+        body = dict(state['reply']['body'])
+        for field in ('next_due_epoch', 'deadline_epoch'):
+            body.pop(field)
+        state['reply'].update(reask.reply_record(body, state['reply']['source']))
+        reask.save(state)
+        consumed = lifecycle.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+        self.assertTrue(consumed['consume_result']['consumed'])
+        self.assertEqual(consumed['next_due_epoch'], state['next_due_epoch'])
+        self.assertEqual(consumed['rearm_count'], 1)
+
+    def test_invalid_now_or_state_due_cannot_partially_consume(self):
+        self.enroll()
+        original = self.answered()
+        for value in self.invalid_epochs():
+            with self.subTest(field='state.next_due_epoch', value=value):
+                state = dict(original, next_due_epoch=value)
+                reask.save(state)
+                before = self.consumption_files()
+                with self.assertRaises(ValueError):
+                    lifecycle.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+                self.assertEqual(self.consumption_files(), before)
+            if value is not None:  # None selects the actual clock, not a supplied epoch.
+                with self.subTest(field='now', value=value):
+                    reask.save(original)
+                    before = self.consumption_files()
+                    with self.assertRaises(ValueError):
+                        lifecycle.consume(CALLER, original['reply']['body_sha256'], now=value)
+                    self.assertEqual(self.consumption_files(), before)
+
+    def test_invalid_prior_receipt_time_preserves_original_evidence(self):
+        self.enroll()
+        original = self.answered()
+        result = lifecycle.consume(CALLER, original['reply']['body_sha256'], now=1003.)
+        path = Path(result['consume_result']['receipt'])
+        receipt = ready.read_json(path)
+        # Simulate a receipt committed before the episode update, then corrupted.
+        reask.save(original)
+        for value in self.invalid_epochs():
+            with self.subTest(value=value):
+                ready.write_json(path, dict(receipt, consumed_epoch=value))
+                before = self.consumption_files()
+                with self.assertRaises(ValueError):
+                    lifecycle.consume(CALLER, original['reply']['body_sha256'], now=1004.)
+                self.assertEqual(self.consumption_files(), before)
+        ready.write_json(path, receipt)
+        recovered = lifecycle.consume(CALLER, original['reply']['body_sha256'], now=1004.)
+        self.assertEqual(recovered['reply_consumed_epoch'], 1003.)
+        self.assertEqual(recovered['rearm_count'], 1)
+        self.assertEqual(ready.read_json(path), receipt)
 
     def test_consumed_body_stays_complete_and_late_old_reply_cannot_close_new_round(self):
         self.enroll()
@@ -206,7 +288,7 @@ class PausedReplyTests(unittest.TestCase):
     task_marker = LifecycleTests.task_marker
 
     def setUp(self):
-        fixtures.SchedulerTests.setUp(self)
+        LifecycleTests.setUp(self)
         import mac_harness as harness
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', self.home / 'active'))
         self.stack.enter_context(patch.object(ready, 'Tail', side_effect=AssertionError('no transcript')))
@@ -326,11 +408,13 @@ class PausedReplyTests(unittest.TestCase):
         self.paused_wait()
         state = reask.tick(CALLER, now=2000.)
         before = reask.state_path(CALLER).read_bytes()
-        foreign = dict(self.live(), caller_surface_uuid=SUP)
-        bridge = SimpleNamespace(pin_workspace=lambda *_args, **_kwargs: foreign)
-        with patch.object(ready, '_bridge', return_value=bridge), self.assertRaises(ValueError):
+        with patch('executor_reask_identity.authenticate',
+                   side_effect=ValueError('original executor identity changed')) as auth, \
+                self.assertRaises(ValueError):
             reask.main(['consume', '--caller-uuid', CALLER,
                         '--reply-sha256', state['reply']['body_sha256']])
+        auth.assert_called_once()
+        self.assertEqual(auth.call_args.args[0], state)
         self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
 
     def test_paused_reply_is_detected_consumed_and_stays_paused_until_exact_release(self):
@@ -368,7 +452,7 @@ class PausedReplyTests(unittest.TestCase):
         self.assertEqual(answered['state'], reask.ANSWERED)
         self.assertEqual(answered['reply']['body'], body)
         self.assert_preserved_inquiry(original, answered)
-        consumed = lifecycle.consume(CALLER, now=1003.)
+        consumed = lifecycle.consume(CALLER, answered['reply']['body_sha256'], now=1003.)
         self.assertEqual(consumed['state'], reask.CONSUMED)
         self.assert_preserved_inquiry(original, consumed)
         self.assertEqual(scheduler.sweep(now=2000.)['file_posts'], 0)

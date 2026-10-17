@@ -98,7 +98,11 @@ def verified_receipt(bridge, surface, task_pack_path):
         return None
 
 
-def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, resume_queue_only=False):
+def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False,
+            resume_queue_only=False, wait_seconds=None):
+    from cmux_confirmation import (wait_budget, controller_provenance, attempt_details,
+                                   annotate_attempt_error, observe_attempt, RECEIPT_DIAGNOSTICS)
+    seconds = wait_budget(wait_seconds, reconcile_only=reconcile_only)
     if reconcile_only and resume_queue_only:
         raise bridge.TaskPackContractError("CONFLICTING_RECOVERY_MODES")
     from availability_contract import require_action
@@ -259,15 +263,16 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
         elif reconcile_only:
             if not old or old['phase'] in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_ATTEMPT: cannot manufacture receipt')
-            result = native.scan_original(bridge, pack['callback_target'], pack['completion_callback'],
-                                          attempts[-1], old.get('native_binding'), read_only=True)
+            result = observe_attempt(lambda: native.scan_original(bridge, pack['callback_target'],
+                pack['completion_callback'], attempts[-1], old.get('native_binding'), read_only=True),
+                attempts[-1], old, seconds, reconcile_only=True)
             observation = dict(result, recorded_at_epoch=time.time(), input_operations=0)
             observed = journal / ('observation-' + str(time.time_ns()) + '.json')
             write_json(observed, observation)
             if result.get('confirmed') is not True:
                 raise bridge.DispatchUnconfirmed(
                     'CALLBACK_NOT_YET_CONFIRMED: read-only observation saved; do not resend',
-                    state=bridge.DELIVERY_UNVERIFIED_BY_DETECTOR)
+                    state=bridge.DELIVERY_UNVERIFIED_BY_DETECTOR, details=result)
             result = dict(result, retries=old.get('extra_enter', 0))
             evidence = {'reconciled_read_only': True, 'observation': str(observed),
                         'attempt': str(attempts[-1])}
@@ -282,7 +287,8 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                 raise bridge.TaskPackContractError('CALLBACK_RETRY_BUDGET_EXHAUSTED: supervisor must review')
             attempt_path = journal / f'attempt-{len(attempts)+1:04d}.json'
             attempt = {'binding': binding, 'phase': 'PREPARED', 'events': [],
-                       'started_at_epoch': time.time()}
+                       'started_at_epoch': time.time(),
+                       'controller_provenance': controller_provenance(__file__)}
             write_json(attempt_path, attempt)
 
             def observe(phase, screen=None, *, evidence=None):
@@ -311,13 +317,15 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
                     pack['callback_target'], pack['completion_callback'],
                     marker=pack['completion_nonce'], confirm_lines=confirm_lines,
                     delivery_observer=observe, native_binding=attempt['native_binding'],
-                    native_attempt=attempt_path)
+                    native_attempt=attempt_path, wait_seconds=seconds)
                 if result.get('confirmed') is not True:
-                    raise bridge.DispatchUnconfirmed('callback not confirmed')
+                    raise bridge.DispatchUnconfirmed('callback not confirmed', details=result)
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'
-                attempt.update(error=str(exc), delivery_state=getattr(exc, 'state', None),
+                annotate_attempt_error(exc, attempt_path, attempt)
+                attempt.update(error=str(exc), error_details=exc.details,
+                               delivery_state=getattr(exc, 'state', None),
                                ended_at_epoch=time.time())
                 write_json(attempt_path, attempt)
                 raise
@@ -329,17 +337,18 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False, 
             raise bridge.TaskPackContractError('REPORT_CHANGED_DURING_CALLBACK: receipt refused')
         if bridge._sha256_file(task_pack_path) != binding['task_pack_sha256'] or current_identity() != proof:
             raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED_BEFORE_RECEIPT')
+        original = json.loads(read_bytes(Path(evidence['attempt'])))
+        result = attempt_details(result, evidence['attempt'], original, reconcile_only=reconcile_only)
         if not native.receipt_evidence(bridge, pack['callback_target'], pack['completion_callback'],
-                                      json.loads(read_bytes(Path(evidence['attempt']))), result,
+                                      original, result,
                                       read_only=reconcile_only):
-            raise bridge.DispatchUnconfirmed('CALLBACK_NATIVE_PROOF_REQUIRED')
+            raise bridge.DispatchUnconfirmed('CALLBACK_NATIVE_PROOF_REQUIRED', details=result)
         receipt = {**{k: v for k, v in binding.items() if k != 'identity'},
                    'confirmed': True, 'bridge_retries': result.get('retries', 0),
                    'native_binding': result['native_binding'], 'native_proof': result['native_proof'],
                    'confirmation_source': result['confirmation_source'],
                    'recorded_at_epoch': time.time(), **evidence}
-        for name in ('transport', 'native_method', 'native_rpc_outcome', 'native_turn_id',
-                     'terminal_input_operations', 'input_operations', 'elapsed_ms'):
+        for name in RECEIPT_DIAGNOSTICS:
             if name in result:
                 receipt[name] = result[name]
         encoded = (json.dumps(receipt, ensure_ascii=False, indent=2) + '\n').encode()

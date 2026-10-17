@@ -3,7 +3,10 @@ from contextlib import ExitStack, contextmanager
 import copy
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -13,11 +16,19 @@ import uuid
 import executor_ready as ready
 import executor_reask as reask
 import executor_reask_scheduler as scheduler
+import executor_reply_advisory as reply_advisory
 
 CALLER = '11111111-1111-4111-8111-111111111111'
 SUP = '22222222-2222-4222-8222-222222222222'
 WORKSPACE = '33333333-3333-4333-8333-333333333333'
 PANE = '44444444-4444-4444-8444-444444444444'
+
+
+def consumer_fixture(state):
+    """Dependency stub for lifecycle tests; real authentication has its own suite."""
+    return dict(schema='executor-reply-consumer-proof-v1', provider='claude',
+                session_id='55555555-5555-4555-8555-555555555555', process={},
+                identity_sha256='a' * 64, episode_id=state['episode_id'])
 
 
 class SchedulerTests(unittest.TestCase):
@@ -32,6 +43,10 @@ class SchedulerTests(unittest.TestCase):
             scheduler, 'approved_release', return_value=self.current))
         self.transport = self.stack.enter_context(patch.object(
             ready, '_bridge', side_effect=AssertionError('background transport forbidden')))
+        self.capture = self.stack.enter_context(patch.object(
+            reply_advisory, 'capture_executor',
+            return_value=dict(schema='executor-reask-consumer-identity-v1',
+                              fixture='scheduler dependency only')))
 
     def begin(self, caller=CALLER, **kwargs):
         return reask.start(caller, SUP, 'original-task', workspace=WORKSPACE, now=1000., **kwargs)
@@ -351,6 +366,116 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(spec['ProgramArguments'][-3:], ['sweep', '--manifest', '/CURRENT.json'])
         self.assertNotIn('configuration_guardian.py', str(spec))
         self.assertNotIn('run', spec['ProgramArguments'])
+        self.assertEqual(spec['ProcessType'], 'Standard')
+
+    def test_cadence_is_separate_from_sweep_outcome_and_handles_clock_regression(self):
+        first = scheduler.sweep(now=1000.)
+        self.assertEqual(first['cadence']['status'], 'FIRST_OBSERVATION')
+        second = scheduler.sweep(now=1120.)
+        self.assertEqual(second['cadence']['status'], 'ON_TIME')
+        delayed = scheduler.sweep(now=1301.)
+        self.assertEqual((delayed['status'], delayed['cadence']['status']), ('SWEPT', 'SWEEP_LATE'))
+        self.assertEqual(delayed['cadence']['interval_observed_seconds'], 181.)
+        self.assertEqual(scheduler.sweep(now=1200.)['cadence']['status'], 'CLOCK_REGRESSED')
+        self.assertNotIn('startup_observation', delayed)  # library imports are not process launches
+
+    def test_exact_release_watermark_and_legacy_first_visible_are_distinct(self):
+        from executor_reask_lifecycle import apply_boundary
+        state = self.enroll()
+        scheduler.sweep(now=1001.)
+        state = reask.load(CALLER)
+        marker = dict(collaboration_id='release-test', task_id='business', workspace_uuid=WORKSPACE,
+                      participants=[dict(role='supervisor', surface_uuid=SUP),
+                                    dict(role='executor', surface_uuid=CALLER)])
+        self.assertTrue(apply_boundary(state, marker, 'RESERVED', 1002.))
+        self.assertTrue(apply_boundary(state, marker, 'RELEASED', 1003.))
+        self.assertEqual(state['last_task_boundary']['file_posts_at_release'], 1)
+        reask.save(state)
+        result = scheduler.sweep(now=1300.)
+        observation = result['episodes'][0]['release_resume_observation']
+        self.assertTrue(observation['first_is_actual_first'])
+        self.assertEqual(observation['release_to_first_file_post_seconds'], 297.)
+        self.assertEqual(observation['delay_status'], 'RESUME_LATE')
+        saved = ready.read_json(scheduler.enrollment_path(CALLER))['release_resume_observation']
+        self.assertEqual(saved, observation)
+        # Later posts cannot replace the recorded first successful observation.
+        self.assertEqual(scheduler.sweep(now=1360.)['episodes'][0]['release_resume_observation'], saved)
+        state = reask.load(CALLER)
+        boundary = state['last_task_boundary']
+        boundary.pop('file_posts_at_release')
+        boundary.pop('attempt_count_at_release')
+        state['asks'] = state['asks'][-1:]  # bounded legacy history really lost earlier posts
+        visible = scheduler._release_observation(state, None, 1400.)
+        self.assertFalse(visible['first_is_actual_first'])
+        self.assertNotIn('release_to_first_file_post_seconds', visible)
+        self.assertEqual(visible['status'], 'FIRST_VISIBLE_POST_OBSERVED')
+        self.transport.assert_not_called()
+        self.capture.assert_not_called()
+
+    def test_release_pending_never_infers_eligibility_or_release(self):
+        state = dict(state=reask.WAITING, asks=[], last_task_boundary=dict(
+            event='RELEASED', at_epoch=1000., task_id='task', collaboration_id='collab'))
+        waiting = scheduler._release_observation(state, None, 1121.)
+        self.assertEqual((waiting['status'], waiting['delay_status']),
+                         ('AWAITING_FILE_POST', 'RESUME_LATE'))
+        for extra in (dict(state=reask.STOPPED), dict(state=reask.ANSWERED),
+                      dict(paused_tasks=[dict(task_id='other', collaboration_id='new')])):
+            held = scheduler._release_observation(dict(state, **extra), None, 1121.)
+            self.assertEqual(held['status'], 'RESUME_NOT_CURRENTLY_ELIGIBLE')
+            self.assertEqual(held['delay_status'], 'PENDING')
+        self.assertIsNone(scheduler._release_observation(dict(state, last_task_boundary={}), None, 1121.))
+
+    def test_subprocess_startup_observation_flush_state_and_lock_release(self):
+        # Execute in an isolated actual process, introducing import latency
+        # before heavy modules. Do not sample or touch the running launchd job.
+        code = r'''
+import atexit, builtins, fcntl, io, json, os, sys, time
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+home = Path(sys.argv[2])
+real_import = builtins.__import__
+def delayed(name, *args, **kwargs):
+    if name == 'configuration_guardian':
+        time.sleep(.06)
+    return real_import(name, *args, **kwargs)
+with patch.object(builtins, '__import__', side_effect=delayed):
+    import executor_reask_scheduler as scheduler
+import executor_ready as ready
+atexit.register(lambda: (home / 'normal-finalization').write_text('ok'))
+class Output(io.StringIO):
+    flushed = False
+    def flush(self):
+        self.flushed = True
+out = Output()
+with patch.object(Path, 'home', return_value=home), patch.object(scheduler.sys, 'stdout', out):
+    def approved(*args):
+        if sys.argv[3] == 'failure':
+            raise ValueError('simulated invalid manifest')
+        return dict(source=sys.argv[1], python=sys.executable)
+    with patch.object(scheduler, 'approved_release', side_effect=approved):
+        rc = scheduler.main(['sweep'])
+    with open(scheduler.root() / 'sweep.lock', 'r+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    result = json.loads(out.getvalue())
+    assert result == ready.read_json(scheduler.root() / 'STATUS.json')
+    assert out.flushed
+print(json.dumps(dict(rc=rc, result=result, flushed=out.flushed)))
+'''
+        for mode in ('success', 'failure'):
+            home = self.home / mode
+            home.mkdir()
+            run = subprocess.run([sys.executable, '-B', '-c', code,
+                                  str(Path(scheduler.__file__).parent), str(home), mode],
+                                 capture_output=True, text=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            report = json.loads(run.stdout)
+            self.assertEqual(report['rc'], 0 if mode == 'success' else 2)
+            startup = report['result']['startup_observation']
+            self.assertGreaterEqual(startup['module_import_seconds'], .06)
+            self.assertGreaterEqual(startup['module_to_sweep_seconds'], startup['module_import_seconds'])
+            self.assertFalse(startup['interpreter_start_observed'])
+            self.assertTrue((home / 'normal-finalization').is_file())
 
     def test_atomic_state_failure_leaves_no_temporary_files(self):
         path = self.home / 'state.json'

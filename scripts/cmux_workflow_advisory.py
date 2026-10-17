@@ -19,6 +19,9 @@ WORKFLOW_HOOKS = frozenset({
     'cmux_executor_reask_stop_guard.py',
     'cmux_native_delivery_guard.py',
     'cmux_supervisor_report_guard.py',
+    'executor_reply_advisory.py',
+    'callback_settlement_advisory.py',
+    'handshake_advisory.py',
 })
 MAX_INPUT_CHARS = 2 * 1024 * 1024
 
@@ -77,6 +80,19 @@ def main() -> int:
         try:
             import claude_maintenance_context
             claude_maintenance_context.discover(payload)
+        except BaseException:
+            pass
+    if payload.get('hook_event_name') == 'PostToolUse':
+        try:
+            if hook == 'executor_reply_advisory.py':
+                import executor_reply_advisory
+                executor_reply_advisory.discover(payload)
+            elif hook == 'callback_settlement_advisory.py':
+                import callback_settlement_advisory
+                callback_settlement_advisory.discover(payload)
+            elif hook == 'handshake_advisory.py':
+                import handshake_advisory
+                handshake_advisory.discover(payload)
         except BaseException:
             pass
     return 0

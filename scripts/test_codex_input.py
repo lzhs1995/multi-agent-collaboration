@@ -133,6 +133,96 @@ class CodexInputTests(unittest.TestCase):
         self.assertEqual(len(self.rpc.mutations), 1)
         self.assert_no_terminal()
 
+    def test_default_window_confirms_eight_second_native_append_with_one_input(self):
+        self.rpc.receive = False
+        elapsed = [0.0]
+        def sleep(seconds):
+            elapsed[0] += seconds
+            if elapsed[0] == 8:
+                self.fixture.append_user(self.text)
+        with patch.object(direct.time, 'monotonic', side_effect=lambda: elapsed[0]), patch.object(
+                direct.time, 'sleep', side_effect=sleep):
+            result = self.send()
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['confirmation_observation']['requested_seconds'], 30)
+        self.assertEqual(result['confirmation_observation']['elapsed_seconds'], 8)
+        self.assertEqual(len(self.rpc.mutations), 1)
+        self.assert_no_terminal()
+
+    def test_pending_diagnostic_and_delayed_reconcile_preserve_attempt_bytes(self):
+        self.rpc.receive = False
+        self.rpc.mutation_error = TimeoutError('original RPC result unknown')
+        with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
+            self.send(wait_seconds=0)
+        details = caught.exception.details
+        self.assertEqual(details['native_rpc_outcome'], 'RPC_ERROR_OR_UNKNOWN')
+        self.assertEqual(details['input_operations'], 1)
+        self.assertEqual(details['confirmation_observation']['requested_seconds'], 0)
+        self.assertFalse(details['business_accepted'])
+        attempt = Path(details['attempt'])
+        original = attempt.read_bytes()
+        with patch.object(direct.time, 'sleep', side_effect=lambda _: self.fixture.append_user(self.text)):
+            result = self.send(reconcile_only=True, wait_seconds=30)
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['input_operations'], 0)
+        self.assertEqual(result['native_rpc_outcome'], 'RPC_ERROR_OR_UNKNOWN')
+        self.assertEqual(attempt.read_bytes(), original)
+        self.assertEqual(len(self.rpc.mutations), 1)
+        self.assert_no_terminal()
+
+    def test_invalid_windows_leave_all_dispatch_slots_and_rpc_untouched(self):
+        path, pack = self.make_pack()
+        for value in (-1, 61, True, '30', float('nan'), float('inf')):
+            for route in ('message', 'task', 'callback'):
+                with self.subTest(value=value, route=route):
+                    with self.assertRaisesRegex(ValueError, 'CONFIRMATION_WINDOW_INVALID'):
+                        if route == 'message':
+                            self.send(wait_seconds=value)
+                        elif route == 'task':
+                            bridge.submit_task_pack('target', self.text, path,
+                                                    marker=self.marker, wait_seconds=value)
+                        else:
+                            bridge.submit_completion_callback(path, wait_seconds=value)
+        self.assertEqual(self.attempts(), [])
+        self.assertEqual(self.rpc.calls, [])
+        self.assert_no_terminal()
+
+    def test_unavailable_goal_state_is_diagnosed_without_resume_or_input(self):
+        self.rpc.thread_changes['status'] = {'type': 'notLoaded'}
+        self.rpc.turn_changes.update(status='interrupted', error={'code': 429, 'message': 'busy'})
+        with self.assertRaisesRegex(native.NativeDeliveryError, 'TURN_CHANGED_OR_UNAVAILABLE') as caught:
+            self.send()
+        details = caught.exception.details
+        metadata = details['native_metadata']
+        self.assertEqual(details['input_operations'], 0)
+        self.assertEqual(metadata['thread_status'], 'notLoaded')
+        self.assertEqual(metadata['latest_turn_status'], 'interrupted')
+        self.assertEqual(metadata['latest_turn_error']['code'], 429)
+        self.assertIn("If the original client", metadata['resume_guidance'])
+        self.assertEqual([r[0] for r in self.rpc.calls], ['thread/read', 'thread/turns/list'])
+        self.assert_no_terminal()
+
+    def test_probe_reads_only_metadata_and_creates_no_attempt(self):
+        result = direct.probe_target(bridge, 'target')
+        self.assertEqual(result['input_operations'], 0)
+        self.assertFalse(result['journal_created'])
+        self.assertFalse(result['native_receipt_established'])
+        self.assertEqual(result['native_metadata']['available_input_method'], 'turn/steer')
+        self.assertEqual(self.attempts(), [])
+        self.assertEqual([r[0] for r in self.rpc.calls], ['thread/read', 'thread/turns/list'])
+        self.assert_no_terminal()
+
+    def test_metadata_connection_failure_is_zero_input(self):
+        self.fixture.rpc.side_effect = ConnectionError('daemon unavailable')
+        with self.assertRaises(ConnectionError) as caught:
+            self.send()
+        self.assertEqual(caught.exception.details['input_operations'], 0)
+        self.assertEqual(caught.exception.details['native_metadata']['metadata_rpc_status'], 'UNAVAILABLE')
+        original = json.loads(self.attempts()[0].read_text())
+        self.assertEqual(original['phase'], 'NO_INPUT')
+        self.assertEqual(original['events'], [])
+        self.assert_no_terminal()
+
     def test_timeout_without_receipt_never_uses_terminal_fallback(self):
         self.rpc.receive = False
         self.rpc.mutation_error = TimeoutError('ambiguous')
@@ -262,6 +352,29 @@ class CodexInputTests(unittest.TestCase):
         self.assertEqual(evidence['status'], 'EXACT_NATIVE_RECEPTION')
         with self.assertRaisesRegex(bridge.TaskPackContractError, 'RECEIPT_EXISTS'):
             bridge.submit_completion_callback(path)
+        self.assertEqual(len(self.rpc.mutations), 1)
+        self.assert_no_terminal()
+
+    def test_callback_receipt_preserves_abort_diagnostic_without_replay(self):
+        path, pack = self.make_pack()
+        self.rpc.receive = False
+        self.rpc.before_mutation = lambda *_: self.fixture.append_record(dict(
+            timestamp=datetime.now(timezone.utc).isoformat(), type='event_msg',
+            payload=dict(type='turn_aborted', turn_id=self.rpc.turn, reason='interrupted')))
+        with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
+            bridge.submit_completion_callback(path, wait_seconds=0)
+        self.assertEqual(caught.exception.details['native_turn_diagnostic']['status'],
+                         'ORIGINAL_TURN_ABORTED')
+        attempt = Path(caught.exception.details['attempt'])
+        original = attempt.read_bytes()
+        self.fixture.append_user(pack['completion_callback'])
+        result = bridge.submit_completion_callback(path, reconcile_only=True)
+        self.assertTrue(result['confirmed'])
+        receipt = json.loads(Path(pack['completion_receipt']).read_text())
+        self.assertEqual(receipt['native_turn_diagnostic']['status'], 'ORIGINAL_TURN_ABORTED')
+        self.assertFalse(receipt['native_turn_diagnostic']['replay_authorized'])
+        self.assertEqual(receipt['input_operations'], 0)
+        self.assertEqual(attempt.read_bytes(), original)
         self.assertEqual(len(self.rpc.mutations), 1)
         self.assert_no_terminal()
 

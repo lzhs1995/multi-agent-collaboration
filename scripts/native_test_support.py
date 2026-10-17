@@ -190,13 +190,14 @@ class NativeFixture(contextlib.AbstractContextManager):
 def historical_terminal_dispatch(surface, text, marker=None, confirm_lines=200,
                                  task_pack_path=None, force_compose=False,
                                  delivery_observer=None, *, native_binding=None,
-                                 native_attempt=None):
+                                 native_attempt=None, wait_seconds=None):
     """Test-only route for immutable historical paste/key regression fixtures."""
     bridge._validate_submission(surface, text, task_pack_path, force_compose,
                                 delivery_observer, native_binding, native_attempt)
     return bridge._submit_terminal_once(surface, text, marker, confirm_lines,
         task_pack_path, force_compose, delivery_observer,
-        native_binding=native_binding, native_attempt=native_attempt)
+        native_binding=native_binding, native_attempt=native_attempt,
+        wait_seconds=wait_seconds)
 
 
 class LegacyTerminalFixture(NativeFixture):

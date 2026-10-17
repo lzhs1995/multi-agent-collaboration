@@ -4,15 +4,18 @@ No terminal input. A discovery record is not native receipt or task acceptance.
 One current request and one discovery cursor per caller keep storage bounded.
 """
 import fcntl
+import errno
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import stat
+import sys
 import time
 import uuid
 
+import bounded_directory as directory
 import cmux_hook_identity as identity
 import cmux_hook_thread as thread_scope
 import executor_ready as ready
@@ -22,6 +25,64 @@ import executor_reply as replies
 MAX_ENTRIES = 256
 MAX_NOTICES = 8
 REMINDER_SECONDS = 60.0
+
+
+def _request_name(name):
+    return (isinstance(name, str) and len(name) == 69 and name.endswith('.json')
+            and all(char in '0123456789abcdef' for char in name[:-5]))
+
+
+def _frontier(inbox, previous):
+    """At most one nonempty native page; retain its unprocessed request names."""
+    fd = os.open(inbox, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        binding = [info.st_dev, info.st_ino]
+        state = previous if isinstance(previous, dict) else {}
+        offset = state.get('offset')
+        names = state.get('pending')
+        if (state.get('schema') != 'supervisor-inbox-frontier-v1'
+                or state.get('directory') != binding
+                or type(offset) is not int or not 0 <= offset < 2**63
+                or not _uuid(state.get('round'))
+                or not isinstance(names, list) or len(names) > MAX_ENTRIES
+                or any(not _request_name(name) for name in names)):
+            state = dict(schema='supervisor-inbox-frontier-v1', directory=binding,
+                         offset=0, pending=[], round=str(uuid.uuid4()))
+        else:
+            state = dict(state, pending=list(names))
+        if state['pending']:
+            return state
+        try:
+            names, following = directory.read_page(fd, state['offset'])
+            if not names and state['offset']:
+                # An EOF read consumes no entries. Restart here so small inboxes
+                # need no extra empty hook between reminders or new markers.
+                state['round'] = str(uuid.uuid4())
+                # ext4 can retain its EOF hash after lseek(0) on this stream.
+                # Reopen relative to the held fd for a fresh stream of the same
+                # inode, even if the inbox path was replaced. dup shares state.
+                rewind_fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY
+                                    | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                try:
+                    rewind_info = os.fstat(rewind_fd)
+                    if [rewind_info.st_dev, rewind_info.st_ino] != binding:
+                        raise OSError(errno.ESTALE, 'reopened inbox directory identity changed')
+                    names, following = directory.read_page(rewind_fd, 0)
+                finally:
+                    os.close(rewind_fd)
+        except OSError as exc:
+            if exc.errno != errno.EINVAL or not state['offset']:
+                raise
+            # A removed directory entry can invalidate a filesystem offset.
+            # Commit the rewind only after emit/flush, then try next event.
+            state.update(offset=0, pending=[], round=str(uuid.uuid4()))
+            return state
+        state['offset'] = following
+        state['pending'] = list(dict.fromkeys(name for name in names if _request_name(name)))
+        return state
+    finally:
+        os.close(fd)
 
 
 def request_bytes(path):
@@ -109,13 +170,9 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return []
-        paths = []
-        with os.scandir(inbox) as entries:
-            for index, entry in enumerate(entries):
-                if index >= MAX_ENTRIES:
-                    return []
-                if entry.is_file(follow_symlinks=False) and entry.name.endswith('.json'):
-                    paths.append(Path(entry.path))
+        frontier_path = cursor / 'frontier.json'
+        frontier = _frontier(inbox, ready.read_json(frontier_path))
+        paths = [inbox / name for name in frontier['pending']]
         # Use the last successful emission, even when a new marker replaced the
         # request. Path order starves later callers when tool events are >=60s
         # apart; a busy caller issuing new markers must not jump the queue.
@@ -130,7 +187,11 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                 last_emitted = 0.0
             pending.append((last_emitted, str(path), path, seen))
         notices = []
-        for last_emitted, _name, path, seen in sorted(pending, key=lambda item: item[:2]):
+        ordered = sorted(pending, key=lambda item: item[:2])
+        frontier['pending'] = []
+        for index, (last_emitted, _name, path, seen) in enumerate(ordered):
+            if seen.get('discovery_round') == frontier['round']:
+                continue  # replacement/churn must not jump ahead in this walk
             raw, body = request_bytes(path)
             if (not body or body.get('supervisor') != supervisor
                     or body.get('workspace_uuid') != workspace
@@ -164,19 +225,26 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                           workspace_uuid=workspace, task_id=body.get('task_id', ''),
                           episode_id=body['episode_id'], reply_mailbox=str(reply_path),
                           reply_template=template, discovered_epoch=now, actual_thread_id=thread_id,
+                          discovery_round=frontier['round'],
                           token=token, input_operations=0, native_delivery_confirmed=False)
             notice.update(scan)
             notices.append(notice)
             if len(notices) >= MAX_NOTICES:
+                frontier['pending'] = [item[2].name for item in ordered[index + 1:]]
                 break
-        if notices and emit is not None:
+        if emit is not None:
             emit(notices)  # exceptions leave all cursors unchanged; no lost notice
             for notice in notices:
                 ready.write_json(cursor / Path(notice['request']).name, notice)
+            # Empty/invalid pages also advance, but observation never consumes.
+            ready.write_json(frontier_path, frontier)
         return notices
 
 
 def emit_context(notices):
+    if not notices:
+        sys.stdout.flush()
+        return
     print(json.dumps({'hookSpecificOutput': {
         'hookEventName': 'PostToolUse', 'additionalContext': context(notices),
     }}, ensure_ascii=False), flush=True)

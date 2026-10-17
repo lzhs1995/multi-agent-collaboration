@@ -198,7 +198,7 @@ class RecoveryTests(r3.OfflineWorkspaceFixture):
     def handshake(self, screen=IDLE, success=False):
         with (
             mock.patch.object(B, "read_screen", return_value=screen),
-            mock.patch.object(B, "submit_text") as submit,
+            mock.patch.object(B, "submit_text", return_value={}) as submit,
             mock.patch.object(B, "wait_for_ack",
                               return_value="PREFLIGHT_ACK|r3-test|claude:identity|READY|INLINE|abcd"),
             mock.patch.object(H.secrets, "token_hex", return_value="abcd"),
