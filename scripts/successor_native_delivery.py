@@ -333,7 +333,13 @@ def _publish_observation(bridge, journal, artifact, text, marker, result):
 def _secondary_error(original, operation, secondary):
     """Diagnostics are best effort after failure; they cannot replace its cause."""
     try:
-        original.add_note(f'{operation} failed: {type(secondary).__name__}: {secondary}')
+        note = f'{operation} failed: {type(secondary).__name__}: {secondary}'
+        add_note = getattr(original, 'add_note', None)
+        if callable(add_note):
+            add_note(note)
+        else:
+            # Keep diagnostics available to the journal on Python 3.10 too.
+            original.__notes__ = [*getattr(original, '__notes__', ()), note]
     except BaseException:
         pass
 

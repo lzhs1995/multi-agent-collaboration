@@ -273,16 +273,25 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.bridge.response = 'none'
         self.submit()
         before = (self.journal() / 'attempt.json').read_bytes()
-        primary = delivery.native.NativeDeliveryError('original transcript unavailable')
-        with patch.object(delivery, '_observe', side_effect=primary), \
-                patch.object(delivery, 'annotate_attempt_error',
-                             side_effect=OSError('annotation unavailable')):
-            with self.assertRaises(delivery.native.NativeDeliveryError) as raised:
-                self.reconcile()
-        self.assertIs(raised.exception, primary)
-        self.assertIn('annotation unavailable', '\n'.join(primary.__notes__))
-        self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+
+        class LegacyObservationError(delivery.native.NativeDeliveryError):
+            # Python 3.10 has no BaseException.add_note.
+            add_note = None
+
+        for error_type in (delivery.native.NativeDeliveryError, LegacyObservationError):
+            with self.subTest(error_type=error_type.__name__):
+                primary = error_type('original transcript unavailable')
+                primary.__notes__ = ['earlier diagnostic']
+                with patch.object(delivery, '_observe', side_effect=primary), \
+                        patch.object(delivery, 'annotate_attempt_error',
+                                     side_effect=OSError('annotation unavailable')):
+                    with self.assertRaises(delivery.native.NativeDeliveryError) as raised:
+                        self.reconcile()
+                self.assertIs(raised.exception, primary)
+                self.assertEqual(primary.__notes__[0], 'earlier diagnostic')
+                self.assertIn('annotation unavailable', '\n'.join(primary.__notes__))
+                self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
+                self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
 
     def test_foreign_draft_has_zero_input_and_no_attempt(self):
         self.bridge.occupied = True
