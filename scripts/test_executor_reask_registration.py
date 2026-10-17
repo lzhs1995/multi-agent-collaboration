@@ -407,7 +407,7 @@ class RegistrationTests(unittest.TestCase):
         name = next(iter(protocol.LEGACY))
         source = self.home / '.local/share/multi-agent-collaboration/releases' / name / 'source'
         pins = {}
-        for member in (*protocol.FILES, protocol.SCHEDULER,
+        for member in (*protocol.LEGACY_FILES, protocol.SCHEDULER,
                        'scripts/configuration_guardian.py', 'scripts/manage_install.py'):
             raw = ("raise AssertionError('old release code executed')\n# " + member).encode()
             path = source / member
@@ -419,10 +419,10 @@ class RegistrationTests(unittest.TestCase):
         (source.parent / 'MANIFEST.json').write_bytes(manifest)
         (source.parent / 'MANIFEST.json').chmod(0o444)
         self.stack.enter_context(patch.dict(protocol.LEGACY, {
-            name: {key: pins[key]['sha256'] for key in (*protocol.FILES, protocol.SCHEDULER)}}))
+            name: {key: pins[key]['sha256'] for key in (*protocol.LEGACY_FILES, protocol.SCHEDULER)}}))
         self.stack.enter_context(patch.dict(protocol.LEGACY_MANIFESTS, {name: digest(manifest)}))
         original = dict(source=str(source), python=str(self.home / 'original-python'),
-                        files={key: pins[key]['sha256'] for key in protocol.FILES})
+                        files={key: pins[key]['sha256'] for key in protocol.LEGACY_FILES})
         state = self.local_episode()
         state.update(version=2, controller=original)
         state.pop('file_protocol')

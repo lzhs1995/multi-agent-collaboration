@@ -13,6 +13,21 @@
   awaiting exact RELEASE. Preserve next-task ask_count, report acceptance and
   original task ownership. Reuse exact reservations under the existing locks;
   exact RELEASE cleanup never revives terminal or revoked episodes.
+- Add explicitly authorized `start --continuing --reservation-inquiries` for
+  file status requests during a formal reservation. Pin the flag, overall task,
+  authorization file and original executor in the current controller's enrollment.
+  `RESERVATION_STATUS` includes the exact reservations and asks for dependency or
+  callback status and the next action/time. Keep 60-second file cadence, terminal
+  input paused, pending evidence intact and RELEASE separate from consumption.
+  Existing episodes cannot acquire this capability by changing a flag or controller.
+  Legacy/non-opt-in reservations still pause requests; `NO_EPISODE` still lacks
+  reservation-owner, age and pack metadata. File timers cannot wake an idle model.
+- Authenticate the pinned original native executor and exact reply SHA for both
+  continuing and ordinary current-controller consumption. Preserve old controllers.
+  Pending handshake context recognizes the exact participant role and resumes
+  remaining workers when one marker exceeds the per-event notice budget.
+- Refuse expired same-task marker reuse before any renewal. Diagnose and skip
+  malformed non-UUID marker names; preserve and refuse malformed UUID markers.
 - Measure terminal reask cadence from the previous native confirmation, leaving
   file cadence independent and unconfirmed input untouched. Preserve source,
   registration and historical controller checks, including fully verified
@@ -31,6 +46,10 @@
 - Recognize measured Claude Monitor/Goal footer layouts and narrowly bounded
   wrapped-path padding. Preserve complete composer checks and all negative
   controls; no global whitespace stripping, draft clearing or new recovery key.
+  Refuse active/unknown spinner, compaction and tool-running forms. Historical
+  padding evidence has two distinct screens read 20 times each and 34 distinct
+  negative controls; busy-screen evidence is a separate pair of v202 screens.
+  Repeated reads are not independent samples or live native receipt evidence.
 - Distinguish proven helper NO_INPUT from uncertain input, preserving the
   original request and evidence instead of leaving a false pending send.
 

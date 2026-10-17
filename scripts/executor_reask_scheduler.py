@@ -310,11 +310,13 @@ def _continuing(state):
 def _available(state, pins, now):
     if not _pair_matches(state, pins) or state.get('state') != reask.WAITING:
         raise ValueError('live pair and waiting episode do not match')
-    from executor_reask_lifecycle import poll_authorization, observe_formal_tasks
+    from executor_reask_lifecycle import (poll_authorization, observe_formal_tasks,
+                                         reservation_inquiries_allowed)
     preview = copy.deepcopy(state)
     poll_authorization(preview, now, publish=False)
     observe_formal_tasks(preview, now, publish=False)
-    if preview.get('state') != reask.WAITING or preview.get('paused_tasks'):
+    if (preview.get('state') != reask.WAITING or preview.get('paused_tasks')
+            and not reservation_inquiries_allowed(preview)):
         raise ValueError('inquiry authorization ended or a formal task owns the executor')
 
 
@@ -470,9 +472,10 @@ def start(live, *, now=None, authenticate_executor=False, **kwargs):
             # before the registration transaction commits. This is the
             # foreground CLI; the background scheduler never reads transcripts.
             from executor_reply_advisory import capture_executor
-            native_identity = capture_executor(live)
-            if native_identity is not None:
-                state['executor_identity'] = native_identity
+            native_identity = capture_executor(live, state=state)
+            if not isinstance(native_identity, dict):
+                raise ValueError('new foreground inquiry requires its original executor identity')
+            state['executor_identity'] = native_identity
         _available(state, pins, now)
         return _commit(state, pins, previous, raw, authorization='EXPLICIT_REASK_START',
                        original=reask.controller(), now=now,
@@ -621,7 +624,9 @@ def _release_observation(state, previous, now):
         if exact:
             result['release_to_first_file_post_seconds'] = delay
     else:
-        eligible = state.get('state') == reask.WAITING and not state.get('paused_tasks')
+        from executor_reask_lifecycle import reservation_inquiries_allowed
+        eligible = (state.get('state') == reask.WAITING
+                    and (not state.get('paused_tasks') or reservation_inquiries_allowed(state)))
         elapsed = now - released
         result.update(status='AWAITING_FILE_POST' if eligible else 'RESUME_NOT_CURRENTLY_ELIGIBLE',
                       elapsed_since_release_seconds=elapsed,
@@ -687,6 +692,8 @@ def _sweep_one(path, now, execution):
                                next_due_epoch=state.get('next_due_epoch'))
                     if state.get('paused_tasks'):
                         row['paused_tasks'] = copy.deepcopy(state['paused_tasks'])
+                        from executor_reask_lifecycle import reservation_inquiries_allowed
+                        row['reservation_inquiries_authorized'] = reservation_inquiries_allowed(state)
                 else:
                     return dict(row, status='BINDING_OR_CONTROLLER_MISMATCH')
                 if ready.read_json(path) != record:

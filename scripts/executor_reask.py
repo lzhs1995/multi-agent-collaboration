@@ -150,6 +150,9 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
     now = time.time() if now is None else now
     if purpose not in ('REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'):
         raise ValueError('unknown inquiry purpose')
+    reservation_inquiries = (continuation or {}).get('reservation_inquiries', False)
+    if type(reservation_inquiries) is not bool or reservation_inquiries and not continuing:
+        raise ValueError('reservation inquiries require explicit continuing authorization')
     old = load(caller)
     binding = dict(caller_surface_uuid=caller, supervisor=supervisor, task_id=task_id,
                    workspace_uuid=workspace, purpose=purpose)
@@ -157,6 +160,9 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
             and (old.get('state') == WAITING or old.get('continuation') and old.get('state') != STOPPED)):
         if continuing and not old.get('continuation'):
             raise ValueError('existing episode must close before enabling continuation')
+        if (continuing and reservation_inquiries !=
+                (old.get('continuation') or {}).get('reservation_inquiries', False)):
+            raise ValueError('existing episode must close before changing reservation inquiry authorization')
         return old
     if (stop_file(caller).exists() or old and old.get('state') == STOPPED) and not resume_stopped:
         return old or dict(caller_surface_uuid=caller, state=STOPPED, ask_count=0)
@@ -455,12 +461,21 @@ def find_reply(state, *, file_only=False):
 
 def build_text(state, marker, attempt):
     mailbox = state['mailbox']
+    reservations = state.get('paused_tasks', [])
+    purpose = ('RESERVATION_STATUS' if reservations
+               else state.get('purpose', 'REQUEST_NEXT_TASK'))
+    action = (
+        'Formal reservations remain active: ' + json.dumps(reservations, ensure_ascii=False)
+        + '. Reply with task, dependency or callback-settlement status and the next expected action/time. '
+        'This file inquiry neither dispatches work nor releases a reservation. '
+        if reservations else
+        'Reply to this inquiry or dispatch an authorized task; this does not repeat a callback. ')
     text = (f"{ready.PREFIX}|{state['executor_ref']}|{marker} ask #{attempt}"
             f" (every {int(INTERVAL)}s until you reply): executor "
-            f"{state['caller_surface_uuid'][:8]} requests {state.get('purpose', 'REQUEST_NEXT_TASK')}"
+            f"{state['caller_surface_uuid'][:8]} requests {purpose}"
             + (f" after {state['task_id']}" if state.get('task_id') else '')
-            + ". Reply to this inquiry or dispatch an authorized task; this does not repeat a callback. "
-            f"Write {mailbox}/{marker}.json with the exact bindings and a concrete trigger: "
+            + '. ' + action
+            + f"Write {mailbox}/{marker}.json with the exact bindings and a concrete trigger: "
             + json.dumps(replies.template(state, marker), ensure_ascii=False))
     # 全文不截断。write_record 会为超过字节预算的新请求固定正文并发送短通知；
     # 此处只规划校验，文件通道仍记录完整请求，旧 attempt 不迁移。
@@ -484,6 +499,9 @@ def write_channels(state, marker, text, now, status=WAITING):
                 schema='executor-reask-current-v2', status=status, at_epoch=now,
                 episode_id=state['episode_id'], workspace_uuid=state.get('workspace_uuid', ''),
                 purpose=state.get('purpose', 'REQUEST_NEXT_TASK'),
+                inquiry_kind=('RESERVATION_STATUS' if state.get('paused_tasks')
+                              else state.get('purpose', 'REQUEST_NEXT_TASK')),
+                reservations=copy.deepcopy(state.get('paused_tasks', [])),
                 at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
                 caller_surface_uuid=state['caller_surface_uuid'], supervisor=state['supervisor'],
                 task_id=state.get('task_id', ''), ask_count=state['ask_count'], marker=marker,
@@ -551,12 +569,10 @@ def _advance_original(bridge, supervisor, caller, ask):
 
 
 def controller():
+    from executor_reask_protocol import FILES
     source = Path(__file__).resolve().parents[1]
-    files = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
-             'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
-             'scripts/executor_reask_lifecycle.py')
     return dict(source=str(source), python=str(Path(sys.executable).resolve()),
-                files={name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in files})
+                files={name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in FILES})
 
 
 def origin(state):
@@ -759,8 +775,8 @@ def poll_locked(state, now, *, file_only=False):
     observe_formal_tasks(state, now)
     if state['state'] != WAITING:
         return state
-    # A reservation forbids new inquiries, not observation of a reply to an
-    # already-issued request. Paused observation uses files only, so a legacy
+    # A reservation limits inquiries to explicitly authorized file status
+    # requests. Reply observation also uses files only, so a legacy
     # idle binding cannot consume the inquiry or imply that the task released.
     files_only = file_only or bool(state.get('paused_tasks'))
     binding = {} if files_only or state.get('continuation') else idle_binding(caller, state.get('workspace_uuid', '')) or {}
@@ -846,8 +862,15 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
         now = time.time()
     state['last_poll'] = dict(at_epoch=now, duration_seconds=max(0, poll_end - tick_start))
     save(state)
-    if state['state'] != WAITING or state.get('paused_tasks'):
+    if state['state'] != WAITING:
         return state
+    if state.get('paused_tasks'):
+        from executor_reask_lifecycle import reservation_inquiries_allowed
+        if not reservation_inquiries_allowed(state):
+            return state
+        # All foreground and scheduler entrypoints use this same restriction.
+        # No transport, pending reconciliation or new terminal intent is allowed.
+        file_only = True
     last = state['asks'][-1] if state['asks'] else None
     due = float(state.get('next_due_epoch', float(last['at_epoch']) + INTERVAL if last else now))
     if now < due:
@@ -861,7 +884,10 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
     state['attempt_count'] = attempt
     ask = dict(marker=marker, attempt=attempt, at_epoch=now, due_epoch=due,
                due_delay_seconds=max(0, now - due), text_sha256=ready.digest(text),
-               origin=origin(state) if not file_only else None)
+                origin=origin(state) if not file_only else None)
+    if state.get('paused_tasks'):
+        ask.update(inquiry_kind='RESERVATION_STATUS',
+                   reservations=copy.deepcopy(state['paused_tasks']))
     state['asks'] = (state['asks'] + [ask])[-HISTORY:]
     state['next_due_epoch'] = now + INTERVAL  # no catch-up burst after a stalled runner
     if not file_only and not state.get('terminal_pending'):
@@ -938,6 +964,8 @@ def summary(state):
     if not isinstance(state, dict) or 'caller_surface_uuid' not in state:
         return state
     last = state['asks'][-1] if state.get('asks') else None
+    from executor_reask_lifecycle import reservation_inquiries_allowed
+    reservation_authority = reservation_inquiries_allowed(state)
     result = dict(outcome=state.get('registration_observation') or state.get('outcome') or state.get('state'),
                 ask_count=state.get('ask_count', 0),
                 check_count=state.get('check_count', 0), attempt_count=state.get('attempt_count', 0),
@@ -948,6 +976,8 @@ def summary(state):
                 continuation=state.get('continuation'), paused_tasks=state.get('paused_tasks', []),
                 exit_reason=state.get('exit_reason'),
                 reservation_paused=bool(state.get('paused_tasks')),
+                reservation_inquiries_authorized=reservation_authority,
+                inquiries_paused=bool(state.get('paused_tasks')) and not reservation_authority,
                 rearm_count=state.get('rearm_count', 0),
                 reply_detected_epoch=state.get('reply_detected_epoch'),
                 reply_consumed_epoch=state.get('reply_consumed_epoch'),
@@ -972,6 +1002,8 @@ def main(argv=None):
     s.add_argument('--own-prefix', action='append', default=[])
     s.add_argument('--purpose', choices=['REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'], default='REQUEST_NEXT_TASK')
     s.add_argument('--continuing', action='store_true', help='explicitly authorized ongoing file inquiries')
+    s.add_argument('--reservation-inquiries', action='store_true',
+                   help='explicit authorization for file status inquiries during formal reservations; requires --continuing')
     s.add_argument('--overall-task', default='')
     s.add_argument('--authorization-file', type=Path)
     s.add_argument('--authorization-until', type=float)
@@ -997,6 +1029,8 @@ def main(argv=None):
         parser.error('--caller-uuid or CMUX_SURFACE_ID required')
     caller = args.caller_uuid
     if args.cmd == 'start':
+        if args.reservation_inquiries and not args.continuing:
+            parser.error('--reservation-inquiries requires --continuing and its authorization file')
         if args.file_only and args.transcript:
             parser.error('--file-only cannot be combined with --transcript')
         live = ready._bridge().pin_workspace(args.supervisor, caller_uuid=caller)
@@ -1011,7 +1045,8 @@ def main(argv=None):
         if args.continuing:
             continuation = dict(enabled=True, overall_task=args.overall_task,
                                 authorization_file=str(args.authorization_file or ''),
-                                owner=supervisor, until_epoch=args.authorization_until)
+                                owner=supervisor, until_epoch=args.authorization_until,
+                                reservation_inquiries=args.reservation_inquiries)
         import executor_reask_scheduler as scheduler
         state = scheduler.start(live, task_id=args.task, transcript=args.transcript,
                                 authenticate_executor=True,
@@ -1037,12 +1072,6 @@ def main(argv=None):
         state = stop(caller, args.reason)
     elif args.cmd == 'consume':
         from executor_reask_lifecycle import consume
-        original = load(caller) or {}
-        if original.get('continuation'):
-            live = ready._bridge().pin_workspace(original['supervisor'], caller_uuid=caller)
-            if (live.get('caller_surface_uuid', '').upper() != caller.upper()
-                    or live.get('workspace_uuid') != original['workspace_uuid']):
-                raise ValueError('consume requires the original authenticated executor')
         state = consume(caller, args.reply_sha256)
     else:
         state = load(caller) or dict(outcome='NO_EPISODE')

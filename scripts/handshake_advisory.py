@@ -90,6 +90,33 @@ def _executor_binding(binding):
                 **{k: copy.deepcopy(binding[k]) for k in ('tty', 'process', 'session_id', 'transcript')})
 
 
+def _check_original_executor(binding, payload):
+    if binding.get('provider') == 'claude':
+        return executors.check_executor(_executor_binding(binding), payload)
+    proof = identity.native_proof()
+    if binding.get('provider') != 'codex' or not isinstance(proof, dict):
+        raise ValueError('original authenticated executor required')
+    original = binding['identity']
+    # Hook identity exposes the authenticated public proof, not the daemon's
+    # private client object. Compare its original process/session coordinates;
+    # require_bound() below independently checks the full process file identity.
+    if (proof.get('session') != binding['session_id']
+            or (proof.get('foreground') or {}).get('thread_id') != binding['session_id']
+            or payload.get('session_id') != binding['session_id']
+            or payload.get('transcript_path') != binding['transcript']['path']
+            or any(proof.get(key) != binding['process'][key]
+                   for key in ('pid', 'birth', 'executable'))
+            or proof.get('tty') != binding['tty']
+            or proof.get('surface_uuid') != original['target_surface_uuid']
+            or identity.identity(payload) != (original['workspace_uuid'],
+                                               original['target_surface_uuid'])):
+        raise ValueError('hook does not belong to the original Codex executor')
+    # discover() has authenticated the root's native metadata/foreground. The
+    # caller still runs require_bound() below against the original pinned file,
+    # process, pane and session; this proof never creates a receiver binding.
+    return True
+
+
 def _participants(marker, path, workspace):
     if (type(marker.get('marker_version')) is not int or marker['marker_version'] != 2
             or marker.get('workspace_uuid') != workspace
@@ -189,13 +216,17 @@ def _notices(path, directory_fd, workspace, caller, facts, payload, scans, check
     if not isinstance(marker, dict):
         return []
     owner, workers = _participants(marker, path, workspace)
-    supervisor = facts['provider'] == 'codex'
-    if supervisor:
-        if (owner['surface_uuid'] != caller or owner['native_session_id'] != facts['session_id']):
-            return []
-    else:
+    # A Codex root can be an executor. Roles come from the authenticated marker,
+    # not the provider name or a borrowed foreground/thread selector.
+    supervisor = (owner['surface_uuid'] == caller
+                  and owner['native_session_id'] == facts['session_id']
+                  and owner.get('provider') == facts['provider'])
+    if not supervisor:
         workers = [w for w in workers if w['surface_uuid'] == caller
-                   and w['native_session_id'] == facts['session_id']]
+                   and w['native_session_id'] == facts['session_id']
+                   and w.get('provider') == facts['provider']]
+        if not workers:
+            return []
     root = Path(marker['artifact_root'])
     if not root.is_absolute() or root.resolve(strict=True) != root:
         return []
@@ -250,7 +281,7 @@ def _notices(path, directory_fd, workspace, caller, facts, payload, scans, check
                     or attempt['binding'].get('payload_sha256') != messages.digest(wire)):
                 raise ValueError('original handshake endpoint mismatch')
             if not supervisor:
-                executors.check_executor(_executor_binding(binding), payload)
+                _check_original_executor(binding, payload)
             native.require_bound(bridge, worker['surface_uuid'], binding, wire, read_only=True)
             result = _scan(attempt, wire, scans)
             pins.append(attempt_pin)
@@ -317,6 +348,8 @@ def _discover(workspace, caller, facts, payload, *, emit, now, state_root):
         old = ready.read_json(cursor_path) or {}
         last = old.get('last', '')
         last = last if isinstance(last, str) else ''
+        resume = old.get('resume', '')
+        resume = resume if isinstance(resume, str) else ''
         when = time.time() if now is None else now
         if type(when) not in (int, float) or not math.isfinite(when):
             return []
@@ -329,11 +362,15 @@ def _discover(workspace, caller, facts, payload, *, emit, now, state_root):
         deadline = time.monotonic() + SCAN_SECONDS
         paths = markers._workspace_paths(workspace, deadline, stack)
         window = [p for p in paths if str(p) > last] + [p for p in paths if str(p) <= last]
+        # If a marker has more workers than the per-hook notice budget, visit
+        # its remaining workers at the very next event, before rotating away.
+        pending = [p for p in window if str(p) == resume]
+        window = pending + [p for p in window if str(p) != resume]
+        resume = ''
         candidates, checked = [], {}
         for path in window[:MAX_MARKERS]:
             if len(candidates) >= MAX_NOTICES or time.monotonic() >= deadline:
                 break
-            previous_last = last
             last = str(path)
             try:
                 with ready.runtime_limit(max(0.001, deadline - time.monotonic())):
@@ -343,13 +380,15 @@ def _discover(workspace, caller, facts, payload, *, emit, now, state_root):
                     # Queue, ACK and pack-state changes do not grant an earlier
                     # reminder or a new terminal/input operation.
                     token = digest([notice[k] for k in ('collaboration_id', 'executor_uuid', 'ack_nonce')])
-                    if token not in offered and len(candidates) < MAX_NOTICES:
-                        candidates.append((path, token, notice))
+                    if token not in offered:
+                        if len(candidates) < MAX_NOTICES:
+                            candidates.append((path, token, notice))
+                        else:
+                            resume = str(path)
             except ready.WaitBudgetExpired:
-                # Retry the interrupted marker; a deadline proves nothing
-                # about a notice or unread native records inside that marker.
-                last = previous_last
-                break
+                # Publish neither progress nor offers after an interrupted
+                # scan. The next event retries from the original cursor.
+                return []
             except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
                 continue
         notices, tokens = [], []
@@ -365,7 +404,8 @@ def _discover(workspace, caller, facts, payload, *, emit, now, state_root):
         if notices:
             emit(notices)
             offered.update({token: when for token in tokens})
-        ready.write_json(cursor_path, dict(schema=SCHEMA, last=last, offered=offered, scans=scans))
+        ready.write_json(cursor_path, dict(schema=SCHEMA, last=last, resume=resume,
+                                          offered=offered, scans=scans))
         return notices
 
 

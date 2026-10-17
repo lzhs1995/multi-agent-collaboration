@@ -490,7 +490,7 @@ def _matching_reservation(directory, candidate):
     same conversation, and historical duplicates are preserved for their owner
     to release explicitly rather than silently merged or replaced.
     """
-    from executor_reask_lifecycle import MAX_FORMAL_MARKERS
+    from executor_reask_lifecycle import MAX_FORMAL_MARKERS, marker_epoch, valid_epoch
 
     def identity(marker):
         participants = marker.get('participants')
@@ -519,14 +519,43 @@ def _matching_reservation(directory, candidate):
             if (entry.name.startswith('.') or not entry.name.endswith('.json')
                     or not entry.is_file(follow_symlinks=False)):
                 continue
-            marker = _read_active_marker(Path(entry.path))
+            try:
+                marker = _read_active_marker(Path(entry.path))
+            except ValueError as exc:
+                # v2 reservations have UUID filenames. Non-marker debris may
+                # be diagnosed and ignored, but a corrupted UUID file could
+                # still reserve these participants: never recreate it.
+                try:
+                    _uuid.UUID(entry.name[:-5])
+                except ValueError:
+                    print('Ignoring malformed non-reservation file: ' + entry.path,
+                          file=sys.stderr)
+                    continue
+                raise RuntimeError(
+                    'unreadable active reservation; preserve original file and '
+                    'resolve its ownership before arming: ' + entry.path) from exc
             if marker is not None and identity(marker) == expected:
                 if entry.name != str(marker.get('collaboration_id')) + '.json':
                     raise RuntimeError('matching reservation filename is not bound to its id')
                 matches.append(marker)
     if len(matches) > 1:
         raise RuntimeError('multiple matching active reservations; preserve and release originals explicitly')
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    marker = matches[0]
+    armed = marker_epoch(marker)
+    ttl = marker.get('ttl_seconds')
+    now = time.time()
+    # Identity alone is insufficient: returning an expired marker would say
+    # arm succeeded while TTL-aware consumers consider the task inactive.
+    # Preserve both the marker and its reservation; only the original owner
+    # can RELEASE it. Heartbeats never extend the original armed_at or TTL.
+    if (not valid_epoch(armed) or not valid_epoch(ttl) or ttl <= 0
+            or not 0 <= now - armed <= ttl):
+        raise RuntimeError(
+            'matching reservation expired or has invalid timing; preserve the original '
+            'marker and require its owner to RELEASE it explicitly before rearming')
+    return marker
 
 
 def arm_task(task_id, root, supervisor="", executor="", *,

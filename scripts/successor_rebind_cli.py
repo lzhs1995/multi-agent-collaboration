@@ -178,7 +178,11 @@ def enroll_result(result, args, reply):
                           reply_path=offer['reply_path'])
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         status.update(state='ENROLLMENT_FAILED', error=str(exc),
-                      recovery='Preserve this transport result. Retry enrollment via original reconcile only.')
+                      recovery='Preserve this transport result and any existing offer. '
+                               'If an earlier offer occupies the slot, wait until the original executor '
+                               'has read and consumed it, then retry enrollment via original reconcile '
+                               'with --replace-completed-offer and the exact old offer SHA256. '
+                               'Keep the original attempt, text and marker; do not resend input.')
     return dict(result, maintenance_context=status)
 
 

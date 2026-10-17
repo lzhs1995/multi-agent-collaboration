@@ -221,6 +221,69 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(result["input_operations"], 0)
         self.assertEqual(self.bridge.operations, ["rpc"])
 
+    def assert_primary_failure_preserved(self, *, fail_annotation, fail_event):
+        self.bridge.fail_paste = True
+        annotate, event = delivery.annotate_attempt_error, delivery._event
+
+        def annotate_or_fail(*args, **kwargs):
+            if fail_annotation:
+                raise OSError('annotation unavailable')
+            return annotate(*args, **kwargs)
+
+        def event_or_fail(journal, phase, **kwargs):
+            if phase == 'ERROR' and fail_event:
+                raise OSError('error journal unavailable')
+            return event(journal, phase, **kwargs)
+
+        with patch.object(delivery, 'annotate_attempt_error', side_effect=annotate_or_fail), \
+                patch.object(delivery, '_event', side_effect=event_or_fail):
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous paste failure') as raised:
+                self.submit()
+        notes = '\n'.join(raised.exception.__notes__)
+        if fail_annotation:
+            self.assertIn('annotation unavailable', notes)
+        if fail_event:
+            self.assertIn('error journal unavailable', notes)
+        events = [json.loads(p.read_text()) for p in self.journal().glob('event-*.json')]
+        self.assertEqual(sum(e['phase'] == 'PASTE_INTENT' for e in events), 1)
+        self.assertFalse(any(e['phase'] == 'KEY_INTENT' for e in events))
+        errors = [e for e in events if e['phase'] == 'ERROR']
+        self.assertEqual(len(errors), int(not fail_event))
+        if errors:
+            self.assertEqual(errors[0]['error'], 'ambiguous paste failure')
+            self.assertEqual(errors[0]['input_operations_attempted'], 1)
+        before = (self.journal() / 'attempt.json').read_bytes()
+        for again in (self.reconcile, self.submit):
+            result = again()
+            self.assertFalse(result['confirmed'])
+            self.assertEqual(result['input_operations'], 0)
+        self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
+        self.assertEqual(self.bridge.operations, ['rpc'])
+
+    def test_annotation_failure_preserves_primary_and_original_input_budget(self):
+        self.assert_primary_failure_preserved(fail_annotation=True, fail_event=False)
+
+    def test_error_event_failure_preserves_primary_and_original_input_budget(self):
+        self.assert_primary_failure_preserved(fail_annotation=False, fail_event=True)
+
+    def test_both_diagnostic_failures_preserve_primary_and_original_input_budget(self):
+        self.assert_primary_failure_preserved(fail_annotation=True, fail_event=True)
+
+    def test_reconcile_annotation_failure_preserves_original_observation_error(self):
+        self.bridge.response = 'none'
+        self.submit()
+        before = (self.journal() / 'attempt.json').read_bytes()
+        primary = delivery.native.NativeDeliveryError('original transcript unavailable')
+        with patch.object(delivery, '_observe', side_effect=primary), \
+                patch.object(delivery, 'annotate_attempt_error',
+                             side_effect=OSError('annotation unavailable')):
+            with self.assertRaises(delivery.native.NativeDeliveryError) as raised:
+                self.reconcile()
+        self.assertIs(raised.exception, primary)
+        self.assertIn('annotation unavailable', '\n'.join(primary.__notes__))
+        self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
+        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+
     def test_foreign_draft_has_zero_input_and_no_attempt(self):
         self.bridge.occupied = True
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "COMPOSE_OCCUPIED"):

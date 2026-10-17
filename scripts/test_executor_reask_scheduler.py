@@ -24,6 +24,13 @@ WORKSPACE = '33333333-3333-4333-8333-333333333333'
 PANE = '44444444-4444-4444-8444-444444444444'
 
 
+def consumer_fixture(state):
+    """Dependency stub for lifecycle tests; real authentication has its own suite."""
+    return dict(schema='executor-reply-consumer-proof-v1', provider='claude',
+                session_id='55555555-5555-4555-8555-555555555555', process={},
+                identity_sha256='a' * 64, episode_id=state['episode_id'])
+
+
 class SchedulerTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
@@ -37,7 +44,9 @@ class SchedulerTests(unittest.TestCase):
         self.transport = self.stack.enter_context(patch.object(
             ready, '_bridge', side_effect=AssertionError('background transport forbidden')))
         self.capture = self.stack.enter_context(patch.object(
-            reply_advisory, 'capture_executor', return_value=None))
+            reply_advisory, 'capture_executor',
+            return_value=dict(schema='executor-reask-consumer-identity-v1',
+                              fixture='scheduler dependency only')))
 
     def begin(self, caller=CALLER, **kwargs):
         return reask.start(caller, SUP, 'original-task', workspace=WORKSPACE, now=1000., **kwargs)

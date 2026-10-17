@@ -30,6 +30,9 @@ body, SHA and original-controller consume entrypoint. The original executor
 reads that body and consumes its exact SHA. Exposure is neither reading nor
 consumption; the observer does neither on the executor's behalf. Reminder cursors
 commit only after successful output flush.
+Current-controller consumption checks the pinned original native executor and
+exact `--reply-sha256` for ordinary and continuing episodes. Surface/workspace
+alone is insufficient; old controllers keep their original contract.
 
 The explicit `executor_reask.py run` returns at a formal reservation, a reply
 requiring original consumption or the observation deadline. Its result includes
@@ -50,15 +53,27 @@ and formal reservation. See [configuration and reasks](configuration-and-reasks.
 ## Keep settlement separate from the next task
 
 An exact same-task reservation is reused under the participant and directory
-locks. Exact RELEASE cleanup removes only the matching pause and never revives
+locks only while its marker is fresh. Expired markers are refused without renewal
+and require original-owner settlement. Exact RELEASE cleanup removes only the
+matching pause and never revives
 STOPPED, CONSUMED, revoked or otherwise terminal work. TTL expiry, heartbeat and
 marker disappearance do not release a reservation.
 
-A stalled supervisor may therefore leave an executor without next-task inquiries
-until exact RELEASE; the 60-second cadence does not apply during a formal pause.
-Existing episode status shows `paused_tasks`, but `NO_EPISODE` does not show the
-reservation owner, age or pack state. This known visibility limit does not grant
-the scheduler transcript/API monitoring, model wakeup or release authority.
+The authenticated original executor can explicitly enroll a new current-controller
+`start --continuing --reservation-inquiries` episode, pinning its overall task and
+authorization file. During a reservation it issues file-only `RESERVATION_STATUS`
+requests at the existing 60-second cadence, including the exact reservations and
+asking for status and the next action/time. Terminal input stays paused and pending
+evidence stays intact. An ANSWERED reply requires full body reading and exact SHA
+consumption before rearm; inquiries do not dispatch, accept or release work.
+The enrollment flag cannot be added to an existing episode or old controller.
+
+Legacy and non-opt-in reservations still pause all requests. `run` still returns
+`FORMAL_RESERVATION_WAIT`. Existing-episode status separates `reservation_paused`,
+`reservation_inquiries_authorized`, `inquiries_paused` and `paused_tasks`;
+`NO_EPISODE` still lacks reservation owner, age and pack metadata. File cadence
+does not guarantee a response time or grant transcript/API monitoring or model
+wakeup. See [formal reservations](configuration-and-reasks.md#formal-reservation-boundary).
 
 `CALLBACK_SETTLEMENT` is a separate file reminder for a verified native callback
 whose matching reservation still awaits RELEASE. It does not increment next-task
@@ -100,12 +115,22 @@ queues and compaction remain protected. This is not global strip/rstrip
 normalization and grants no additional recovery key. The withdrawn original-probe
 recovery proposal is outside this release.
 
+Historical padding evidence consists of two distinct B0021/B0022 screens read
+20 times each, with 34 distinct negative controls. Those repeated reads do not
+establish 40 independent samples or 680 independent controls. Busy-state evidence
+comes from two separate v202 screens and explicit synthetic variants. Report
+their measured candidate and immutable 0.4.34 source hashes with each replay;
+offline gate results do not prove live input or native reception.
+
 ## Validation and adoption
 
 The [changelog](../CHANGELOG.md) records this candidate's actual validation.
 Historical 0.4.34 results and earlier targeted checks do not count as its final
 suite. Public synthetic fixtures test parser behavior; they are not live delivery
 receipts. Native directory paging needs the supported platform runs.
+Installation tests distinguish measured temporary-file/SQLite behavior from
+same-run plan consistency. A disk allocation budget measures installation space;
+it does not independently verify operational alert or executor thresholds.
 
 Freeze and independently review the candidate, complete CI, then install one
 immutable release within the user's current capacity requirement. Verify installed

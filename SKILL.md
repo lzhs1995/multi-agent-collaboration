@@ -16,8 +16,11 @@ and RPC diagnostics, and never resends. A turn abort does not prove message loss
 Nonblocking PostToolUse context exposes exact unconsumed replies, pending handshake
 work and verified callback settlement separately. Read the complete referenced
 body before using its original consume/ACK entrypoint; exposure is not acceptance.
-Exact reservations are reused, exact RELEASE cleanup preserves terminal episodes,
-and reviewed 0.4.34 file producers retain their historical authority only.
+Fresh exact reservations are reused; expired markers require original-owner
+settlement. Explicit `--continuing --reservation-inquiries` enrollment permits
+60-second file status inquiries during reservations, while terminal input stays
+paused. Exact RELEASE remains separate; reviewed 0.4.34 file producers retain
+their historical authority only.
 The reask scheduler uses Standard launchd scheduling and bounded, fair discovery;
 the configuration guardian remains Background. Measured Claude Monitor/Goal and
 wrapped-path padding are recognized without stripping or clearing real drafts.
@@ -211,7 +214,8 @@ prepare the next authorized pack → fresh live preflight → guarded dispatch.
 The explicitly authorized 60-second reask is a fallback; file timers cannot wake
 an idle model. ANSWERED means a reply was detected, not consumed: await the
 original executor's exact consumption without repeating dispatch or replacing
-the business episode. Formal reservation pauses remain in force until exact RELEASE.
+the business episode. Formal reservations retain terminal pauses until exact
+RELEASE; only explicitly enrolled file status inquiries can continue during them.
 Measure accepted unique coverage, verified issue closures and actual stage
 latency p50/p95 with sample counts; ask_count is diagnostic, not a performance
 target. See [dispatch cadence and metrics](references/configuration-and-reasks.md#dispatch-cadence-and-metrics)
@@ -532,11 +536,21 @@ original controller may perform `consume --reply-sha256` and rearm the same
 authorization. CURRENT file compatibility grants no consumption authority.
 The [formal reservation boundary](references/configuration-and-reasks.md#formal-reservation-boundary)
 also protects ordinary WAITING episodes, including unsupported 0.4.27 producers.
-A valid same-supervisor reservation pauses requests; only its exact RELEASE can
-remove that pause while authority remains valid. An already-bound reply can
-still be discovered as ANSWERED during the pause. The authenticated original
-executor may consume it through the original controller, but consumption never
-clears the reservation or issues another request before RELEASE.
+A valid same-supervisor reservation pauses terminal input and, by default, file
+requests until exact RELEASE. In 0.4.35, new `start --continuing
+--reservation-inquiries` enrollment additionally pins the overall task,
+authorization file and authenticated original executor. It permits file-only
+`RESERVATION_STATUS` inquiries every 60 seconds, including the exact reservations
+and asking for status and the next action/time. Installation, old controllers and
+editing an existing episode cannot grant this capability.
+An already-bound reply can still become ANSWERED during a reservation. The
+original executor reads the full body and consumes its exact SHA through the
+original controller; only that act rearms authorized continuing inquiries.
+Current-controller ordinary consumption also requires this native identity and
+SHA check. Consumption never clears a reservation or authorizes terminal input.
+`run` still returns `FORMAL_RESERVATION_WAIT`; existing-episode status separates
+`reservation_paused`, `reservation_inquiries_authorized`, `inquiries_paused` and
+`paused_tasks`. `NO_EPISODE` still lacks reservation owner/age/pack metadata.
 A legitimate new supervisor's
 reservation for the original caller/workspace, newer than the episode, ends the
 old inquiry with `STOPPED / FORMAL_OWNER_CHANGED`. Unrelated or invalid markers

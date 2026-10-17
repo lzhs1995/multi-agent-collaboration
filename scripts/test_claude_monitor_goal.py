@@ -1,10 +1,18 @@
 """Synthetic copies of the measured 2026-10-13 frame; no live input."""
+from contextlib import redirect_stderr, redirect_stdout
+import io
+import json
+from pathlib import Path
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
+import mac_harness as h
 from native_test_support import NativeFixture
 from test_claude_footer_parser_20261008 import with_draft
+from test_r3_hardening import OfflineWorkspaceFixture, gate
 
 
 MONITOR = "⏵⏵ bypass permissions on · 1 monitor · ← for agents"
@@ -44,11 +52,28 @@ class MonitorGoalTests(unittest.TestCase):
                 self.assertTrue(b._queued_or_active_input(value))
 
     def test_goal_does_not_itself_mean_busy_or_hide_completed_summary(self):
-        for status in (SUMMARY, "✻ Baked for 2m 0s", ""):
+        for status in (SUMMARY, "✻ Baked for 2m 0s", "✻ Brewed for 2m 0s", ""):
             with self.subTest(status=status):
                 value = screen(status=status)
                 self.assertFalse(b._queued_or_active_input(value))
                 b.require_clearable_agent_input(value, "offline-peer")
+
+    def test_no_duration_spinners_and_live_tool_rows_refuse_clear_without_keys(self):
+        for status in ('✻ Stewing…', '✻ Compacting conversation…', '· Stewing...',
+                       '⏺ Bash(sleep 600)', '⎿ Running…'):
+            with self.subTest(status=status):
+                value = screen(status=status)
+                self.assertTrue(b.compose_block_is_empty(value))
+                with NativeFixture(provider='claude') as native:
+                    with self.assertRaisesRegex(b.DispatchUnconfirmed, 'COMPOSE_OCCUPIED'):
+                        b.require_clearable_agent_input(value, 'offline-peer')
+                    native.send.assert_not_called()
+                    native.key.assert_not_called()
+                # The same bytes inside an actual draft do not describe the
+                # current turn and must remain an occupied, preserved draft.
+                draft = with_draft(screen(status=SUMMARY), status)
+                self.assertEqual(b.compose_block_text(draft), status)
+                self.assertFalse(b._queued_or_active_input(draft))
 
     def test_active_tool_is_independent_of_spinner(self):
         self.assertTrue(b._queued_or_active_input(screen(status=SUMMARY, tool=True)))
@@ -164,6 +189,80 @@ class MonitorGoalTests(unittest.TestCase):
                 self.assertTrue(result["confirmed"])
                 native.send.assert_called_once()
                 native.key.assert_called_once_with("offline-peer", "enter")
+
+
+class BridgeProbeActivityEntryTests(OfflineWorkspaceFixture):
+    """Drive the real CLI, parser and probe; replace only external I/O.
+
+    require_clearable_agent_input is not a production caller of this path.
+    These assertions cover the path that can actually paste or clear a draft.
+    """
+
+    def probe(self, frames, *, force=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate(root)
+            argv = ['mac_harness.py', 'bridge-test', '--artifact-root', str(root),
+                    '--task-id', 'r3-test'] + (['--force-compose'] if force else [])
+            with (patch.object(sys, 'argv', argv),
+                  redirect_stdout(io.StringIO()),
+                  redirect_stderr(io.StringIO()),
+                  patch.object(b, 'read_screen', side_effect=frames if isinstance(frames, list)
+                               else None, return_value=frames),
+                  patch.object(b, 'send_text') as paste,
+                  patch.object(b, 'send_key') as key,
+                  patch.object(b, 'focus_surface') as focus,
+                  patch.object(h.time, 'sleep'),
+                  patch.object(h.interrupted_probe.native, 'bind_target',
+                               side_effect=AssertionError('no native I/O for a live tool'))):
+                code = 0
+                try:
+                    h.main()
+                except SystemExit as exc:
+                    code = exc.code
+                evidence = json.loads((root / 'bridge-test-evidence.json').read_text())
+                return code, evidence, paste.call_args_list, key.call_args_list, focus.call_args_list
+
+    def test_live_activity_cli_refuses_empty_and_occupied_editor_even_with_force(self):
+        for status in ('✻ Stewing…', '✻ Compacting conversation…', '· Stewing...',
+                       '⏺ Bash(sleep 600)', '⎿ Running…'):
+            for draft in ('', 'Preserve this original user draft'):
+                for force in (False, True):
+                    with self.subTest(status=status, draft=draft, force=force):
+                        value = screen(status=status)
+                        if draft:
+                            value = with_draft(value, draft)
+                        code, ev, pastes, keys, focuses = self.probe(value, force=force)
+                        self.assertEqual(code, 1)
+                        self.assertEqual(ev['status'], 'COMPOSE_OCCUPIED')
+                        self.assertTrue(ev['active_or_queued_before_send'])
+                        self.assertFalse(ev['token_sent'])
+                        self.assertEqual(ev['clear_key_count'], 0)
+                        self.assertEqual(ev['override'].get('clear_actions', []), [])
+                        self.assertEqual((pastes, keys, focuses), ([], [], []))
+
+    def test_completed_summary_cli_allows_only_the_owned_non_submitting_probe(self):
+        empty = screen(status='✻ Brewed for 2m 0s')
+        token = 'B1_01234567'
+        code, ev, pastes, keys, focuses = self.probe([empty, with_draft(empty, token), empty])
+        self.assertEqual(code, 0)
+        self.assertTrue(ev['token_sent'])
+        self.assertTrue(ev['clear_confirmed'])
+        self.assertEqual([c.args for c in pastes], [('surface:2', token)])
+        self.assertEqual([c.args[1] for c in keys], ['end'] + ['backspace'] * len(token))
+        self.assertEqual(focuses, [])
+
+    def test_activity_words_inside_composer_cli_preserves_the_actual_draft(self):
+        for draft in ('✻ Stewing…', '✻ Compacting conversation…', '· Stewing...',
+                      '⏺ Bash(sleep 600)', '⎿ Running…'):
+            with self.subTest(draft=draft):
+                value = with_draft(screen(status=SUMMARY), draft)
+                code, ev, pastes, keys, focuses = self.probe(value)
+                self.assertEqual(code, 1)
+                self.assertFalse(ev['active_or_queued_before_send'])
+                self.assertFalse(ev['token_sent'])
+                self.assertEqual(ev['override']['preexisting_compose_preview'], draft)
+                self.assertEqual((pastes, keys, focuses), ([], [], []))
 
 
 if __name__ == "__main__":

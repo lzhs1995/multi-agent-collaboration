@@ -330,14 +330,26 @@ def _publish_observation(bridge, journal, artifact, text, marker, result):
     return result
 
 
+def _secondary_error(original, operation, secondary):
+    """Diagnostics are best effort after failure; they cannot replace its cause."""
+    try:
+        original.add_note(f'{operation} failed: {type(secondary).__name__}: {secondary}')
+    except BaseException:
+        pass
+
+
 def _observe_bounded(bridge, journal, artifact, text, marker, seconds):
     try:
         return observe_receipt(lambda: _observe(bridge, journal, artifact, text, marker),
                                seconds, reconcile_only=True)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-        attempt, _, _ = _original(journal, artifact, text, marker)
-        raise annotate_attempt_error(exc, journal / "attempt.json",
-                                     _attempt_evidence(journal, attempt), reconcile_only=True)
+        try:
+            attempt, _, _ = _original(journal, artifact, text, marker)
+            annotate_attempt_error(exc, journal / "attempt.json",
+                                   _attempt_evidence(journal, attempt), reconcile_only=True)
+        except BaseException as secondary:
+            _secondary_error(exc, 'Original-attempt annotation', secondary)
+        raise
 
 
 def reconcile(bridge, artifact, text, *, marker, state_root=None, wait_seconds=None):
@@ -461,7 +473,14 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                           reconciled_read_only=False, submission_key=actual_key)
             return _publish_observation(bridge, journal, artifact, text, marker, result)
         except BaseException as exc:
-            annotate_attempt_error(exc, journal / "attempt.json", _attempt_evidence(journal, attempt))
-            _event(journal, "ERROR", error=str(exc), error_details=exc.details,
-                   input_operations_attempted=operations)
+            try:
+                annotate_attempt_error(exc, journal / "attempt.json", _attempt_evidence(journal, attempt))
+            except BaseException as secondary:
+                _secondary_error(exc, 'Original-attempt annotation', secondary)
+            try:
+                _event(journal, "ERROR", error=str(exc), error_details=getattr(exc, 'details', {}),
+                       diagnostic_notes=getattr(exc, '__notes__', []),
+                       input_operations_attempted=operations)
+            except BaseException as secondary:
+                _secondary_error(exc, 'ERROR event publication', secondary)
             raise

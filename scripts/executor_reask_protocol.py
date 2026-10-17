@@ -10,9 +10,18 @@ import stat
 import sys
 
 LABEL = 'org.multi-agent-collaboration.executor-reask-scheduler'
-FILES = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
-         'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
-         'scripts/executor_reask_lifecycle.py')
+LEGACY_FILES = ('VERSION', 'scripts/executor_reask.py', 'scripts/executor_ready.py',
+                'scripts/cmux_bridge.py', 'scripts/executor_reply.py',
+                'scripts/executor_reask_lifecycle.py')
+# New consumers pin the code that grants identity/consumption authority. Keep
+# the reviewed historical file set intact: compatibility never upgrades pins.
+FILES = LEGACY_FILES + ('scripts/executor_reask_identity.py',
+                       'scripts/executor_reask_protocol.py',
+                       'scripts/executor_reply_advisory.py',
+                       'scripts/cmux_native_delivery.py',
+                       'scripts/cmux_workspace_guard.py',
+                       'scripts/cmux_daemon_identity.py',
+                       'scripts/cmux_foreground_thread.py')
 SCHEDULER = 'scripts/executor_reask_scheduler.py'
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
@@ -165,7 +174,7 @@ def controller_shape(value):
         return (isinstance(value, dict) and set(value) == {'source', 'python', 'files'}
                 and canonical_path(value['source']) and canonical_path(value['python'])
                 and isinstance(value['files'], dict)
-                and set(value['files']) == set(FILES)
+                and set(value['files']) in (set(FILES), set(LEGACY_FILES))
                 and all(sha256_shape(v) for v in value['files'].values()))
     except (TypeError, KeyError, ValueError, OSError):
         return False
@@ -184,6 +193,8 @@ def continuation_shape(value, state):
             return False
         pin, until, authorized = value['authorization'], value['until_epoch'], value['authorized_epoch']
         return (value.get('enabled') is True and text(value.get('id'), 128)
+                and ('reservation_inquiries' not in value
+                     or type(value['reservation_inquiries']) is bool)
                 and text(value.get('overall_task'), 4096) and text(value.get('status'), 128)
                 and text(value.get('owner'), 128) and value['owner'] == state.get('supervisor')
                 and finite(authorized) and (until is None or finite(until) and until > authorized)
@@ -271,7 +282,7 @@ def _verify_release(source, expected):
     if hashlib.sha256(raw).hexdigest() != expected:
         raise ValueError('untrusted release manifest')
     files = value.get('files')
-    required = {*FILES, SCHEDULER, 'scripts/configuration_guardian.py', 'scripts/manage_install.py'}
+    required = {*LEGACY_FILES, SCHEDULER, 'scripts/configuration_guardian.py', 'scripts/manage_install.py'}
     if (not isinstance(files, dict) or not 1 <= len(files) <= MAX_RELEASE_FILES
             or not required.issubset(files)):
         raise ValueError('incomplete release manifest')
@@ -320,7 +331,7 @@ def _trusted_release(source, checked):
     if name not in LEGACY:
         raise ValueError('unknown historical release is unsupported')
     files = _verify_release(source, LEGACY_MANIFESTS.get(name))
-    if {key: files[key]['sha256'] for key in (*FILES, SCHEDULER)} != LEGACY[name]:
+    if {key: files[key]['sha256'] for key in (*LEGACY_FILES, SCHEDULER)} != LEGACY[name]:
         raise ValueError('unreviewed controller/scheduler combination')
     result = dict(kind='legacy', name=name, files=files)
     checked[source] = result
@@ -331,7 +342,8 @@ def _controller_release(value, checked):
     if not controller_shape(value):
         raise ValueError('invalid controller')
     release = _trusted_release(Path(value['source']), checked)
-    if (value['files'] != {key: release['files'][key]['sha256'] for key in FILES}
+    members = FILES if release['kind'] == 'current' else LEGACY_FILES
+    if (value['files'] != {key: release['files'][key]['sha256'] for key in members}
             or release['kind'] == 'current' and value['python'] != release['python']):
         raise ValueError('controller pins differ from the trusted release')
     return release
@@ -342,6 +354,9 @@ def _supported_state(state, record, checked):
     if value is None or type(state.get('version')) is not int or state['version'] not in (2, 3):
         return False
     release = _controller_release(value, checked)
+    if ('reservation_inquiries' in (state.get('continuation') or {})
+            and release['kind'] != 'current'):
+        return False
     # Old v2 producers and the explicitly reviewed v3 producer have different
     # schemas. A public descriptor never grants support to an unknown release.
     if state['version'] == 2:

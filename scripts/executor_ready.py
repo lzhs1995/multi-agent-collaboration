@@ -352,6 +352,20 @@ def _receipt(bridge, supervisor, text, marker):
     return verified_receipt(bridge, supervisor, text, marker)
 
 
+def _unconfirmed(exc):
+    """Retain the bridge's original diagnostics without granting another send."""
+    original = getattr(exc, 'details', None)
+    details = dict(original) if isinstance(original, dict) else {}
+    details.setdefault('reconcile_guidance', dict(
+        mode='--reconcile-only', input_operations=0, reuse_original_parameters=True,
+        instruction='Preserve the original request, controller, target and marker. '
+                    'Observe an existing attempt only; do not resend or recover input.'))
+    result = dict(outcome='UNCONFIRMED_DO_NOT_RESEND', detail=str(exc)[:400], details=details)
+    if getattr(exc, 'state', None) is not None:
+        result['dispatch_state'] = exc.state
+    return result
+
+
 def _submit(bridge, supervisor, text, marker, reconcile_only=False, recover_stranded=False):
     if recover_stranded:
         return dict(outcome='UNCONFIRMED_DO_NOT_RESEND', detail='AUTOMATIC_RECOVERY_DISABLED')
@@ -366,7 +380,7 @@ def _submit(bridge, supervisor, text, marker, reconcile_only=False, recover_stra
             return dict(outcome='CONFIRMED', receipt=receipt, result=result)
         return dict(outcome='UNCONFIRMED_DO_NOT_RESEND', detail='NATIVE_RECEIPT_REQUIRED')
     except Exception as exc:
-        return dict(outcome='UNCONFIRMED_DO_NOT_RESEND', detail=str(exc)[:400])
+        return _unconfirmed(exc)
 
 
 def prepare_ask(bridge, supervisor, caller_uuid, executor_ref, task_id='', note='', attempt=1,
@@ -439,7 +453,7 @@ def advance_ask(bridge, supervisor, caller_uuid, ask, *, allow_send=False):
         if original.get('body_reference'):
             ask.update(confirmation_scope='reference_notice', body_read_confirmed=False)
     except Exception as exc:
-        ask.update(outcome='UNCONFIRMED_DO_NOT_RESEND', detail=str(exc)[:400])
+        ask.update(_unconfirmed(exc))
     return ask
 
 

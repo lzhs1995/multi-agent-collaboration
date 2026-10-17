@@ -529,7 +529,11 @@ class FormalBoundaryTests(unittest.TestCase):
 
 
 class ConsumeControllerTests(unittest.TestCase):
-    setUp = FormalBoundaryTests.setUp
+    def setUp(self):
+        FormalBoundaryTests.setUp(self)
+        from test_executor_reask_scheduler import consumer_fixture
+        self.stack.enter_context(patch('executor_reask_identity.authenticate',
+                                       side_effect=consumer_fixture))
     fixture = FormalBoundaryTests.fixture
     write_original = FormalBoundaryTests.write_original
     files = FormalBoundaryTests.files
@@ -752,8 +756,11 @@ class ConsumeControllerTests(unittest.TestCase):
         state['continuation']['controller'] = copy.deepcopy(state['controller'])
         self.write_original(state)
         ready.write_json(reask.stop_file(CALLER), {'reason': 'OPERATOR'})
+        # A foreign consumer cannot mutate even a stopped original episode.
+        self.assert_rejected_without_writes(state)
+        # The existing file stop path remains effective without granting consume.
         with patch.object(lifecycle, 'poll_authorization', side_effect=AssertionError('poll after stop')):
-            result = self.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+            result = reask.tick(CALLER, now=1003., file_only=True)
         self.assertEqual(result['state'], reask.STOPPED)
         self.assertEqual(result['exit_reason'], 'OPERATOR_STOP')
         for key in ('controller', 'asks', 'terminal_pending', 'reply', 'reply_history'):

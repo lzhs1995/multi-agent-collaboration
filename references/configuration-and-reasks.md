@@ -174,8 +174,9 @@ ANSWERED records detection, not consumption. Preserve the current business
 episode and original pack while the original authenticated executor consumes the
 exact reply; pending consumption does not authorize repeated dispatch. A TASK
 reply remains separate from a formal task pack. A same-supervisor reservation
-keeps inquiries paused until its exact RELEASE. Neither more asks nor a missing
-marker justifies releasing that reservation or reopening a terminal episode.
+keeps terminal inquiries paused until exact RELEASE. File inquiries during it
+require the explicit current-controller enrollment described below. Neither more
+asks nor a missing marker justifies release or reopening a terminal episode.
 
 Report useful outcomes and observed delays separately:
 
@@ -391,11 +392,13 @@ channels. Authorization/boundary previews use `publish=False` on deep copies.
 Registry operations take the registry lock before the caller lock and reread
 their inputs under those locks.
 
-A same-supervisor formal reservation created before a new episode also rejects
-`start`, for both ordinary and continuing inquiries, including `--file-only`.
+A same-supervisor formal reservation created before a new episode rejects
+`start` unless the current controller validates explicit `--continuing
+--reservation-inquiries` authorization. `--file-only` alone grants no exception.
 Rejection leaves the original marker and any existing state or enrollment intact
 and performs no initial tick. Existing enrolled episodes instead follow the
-pause and bound-reply rules below; creating a replacement is not pause recovery.
+pause and bound-reply rules below. Starting an existing episode with a changed
+reservation-inquiry flag is refused; creating a replacement is not pause recovery.
 
 A PREPARING envelope retains the original active record and proposed enrollment,
 with a pinned intent and complete preimages. The single commit point is live
@@ -451,27 +454,40 @@ rejects enrollment; compatibility cannot grant successor ownership.
 Version 0.4.32 applies this boundary before file compatibility checks, both to
 continuing inquiries and ordinary WAITING, including old 0.4.27 episodes that
 CURRENT cannot file-tick. A valid reservation must bind the original caller and
-workspace. Same-supervisor reservations pause inquiries. A legitimate different
+workspace. Same-supervisor reservations pause terminal inquiries and, unless
+explicitly enrolled as below, file inquiries. A legitimate different
 supervisor's reservation must be newer than the episode to end the old inquiry
 with persistent `STOPPED / FORMAL_OWNER_CHANGED`. It does not migrate the old
 controller, settle a callback or grant the successor old task scope.
 
-A same-supervisor pause blocks new requests, not discovery of the already-bound
-reply. The reply may become ANSWERED while the reservation remains. Only the
-authenticated original executor through its original controller may consume it;
-consumption does not clear the pause or issue a request before matching RELEASE.
-The same rule applies to reviewed cross-release file scheduling. Validate it
-separately from registration, actual scheduler execution, automatic hooks and
-two real continuing rounds in the original sessions.
+A reservation never blocks discovery of the already-bound reply. It may become
+ANSWERED while the reservation remains. The authenticated original executor
+reads the complete body and consumes its exact SHA through its original controller.
+Consumption can rearm authorized continuing file inquiries, but cannot clear the
+reservation or authorize terminal input. Reviewed cross-release file scheduling
+does not grant consumption authority or add new capabilities to old controllers.
 
-While the matching formal reservation remains, a stalled supervisor can leave
-the executor without a next-task request channel. The 60-second reask cadence is
-not promised during this pause. `status` exposes `paused_tasks` for an existing
-episode, but `NO_EPISODE` does not expose the reservation owner, age or pack state.
-This remains a known visibility limitation. The file scheduler neither monitors
-transcripts/API health nor wakes a model; marker age and supervisor silence do
-not authorize a new request or RELEASE. A native-confirmed callback may qualify
-for the separate settlement reminder below, not a next-task inquiry.
+In 0.4.35 the original authenticated executor may explicitly enroll a new
+`start --continuing --reservation-inquiries --overall-task TASK
+--authorization-file /absolute/user-authorization.txt` episode. The flag is part
+of the immutable authorization/enrollment binding and requires the current
+controller. During matching reservations, foreground ticks and the scheduler
+write file-only `RESERVATION_STATUS` requests at the existing 60-second cadence.
+Each includes the exact reservations and requests task, dependency or callback
+status and the next expected action/time. Pending terminal evidence is preserved;
+no transport, terminal reconciliation, automatic ACK or RELEASE is performed.
+An ANSWERED body stops further requests until original-executor consumption.
+
+Installing a release or enrolling an old episode cannot add this capability.
+Legacy and non-opt-in episodes still pause all requests during reservations.
+`run` still returns `FORMAL_RESERVATION_WAIT`, allowing the foreground tool to
+finish while the enrolled file scheduler remains separate. Existing-episode
+`status` exposes `reservation_paused`, `reservation_inquiries_authorized`,
+`inquiries_paused` and `paused_tasks`. `NO_EPISODE` still lacks reservation owner,
+age and pack state. The scheduler does not monitor transcripts/API health or
+wake a model. Marker age and supervisor silence cannot authorize RELEASE.
+Verify registration, actual sweeps, automatic hooks, body reading and two real
+continuing request/reply/consume/rearm rounds separately in the original sessions.
 
 Only the matching supervisor/caller/workspace and exact collaboration/task
 RELEASE removes its reservation; remaining reservations or ended authorization
@@ -492,7 +508,9 @@ TASK/DISPATCHED/ACK mailbox text alone does not dispatch or reserve work.
 
 Version 0.4.35 reuses an exact reservation for the same task, artifact root,
 workspace and native participants under the existing participant/directory locks.
-It does not merge historical duplicate markers. Exact RELEASE cleanup may remove
+The marker must still be fresh; an expired exact marker is refused without
+renewal and requires original-owner settlement. It does not merge historical
+duplicate markers. Exact RELEASE cleanup may remove
 the matching stale pause on a terminal episode, but never restores its waiting
 state or authorization.
 
@@ -544,6 +562,11 @@ File compatibility does not let CURRENT consume an old controller's reply.
 Except for operator stop, a controller mismatch returns
 `ORIGINAL_CONTROLLER_REQUIRED` before authorization, receipt or state writes.
 Consumption requires the authenticated original executor and original controller.
+For new current-controller episodes this checks the pinned original native
+session/thread and process binding, not just the surface/workspace. Both ordinary
+and continuing `consume` require `--reply-sha256` for the exact body. Missing or
+changed original identity refuses consumption; old controllers retain their
+original behavior and cannot be upgraded by CURRENT file compatibility.
 
 After consumption the same authorized episode resumes, no earlier than the
 existing 60-second cadence and the reply's next due time. Each new inquiry has a
@@ -551,11 +574,12 @@ new marker. Previously consumed rounds cannot close it again. An elapsed deadlin
 allows a new inquiry; it never proves a dependency completed. No catch-up burst
 occurs after a delayed sweep. This does not promise model response within 60 seconds.
 
-The [formal reservation boundary](#formal-reservation-boundary) pauses on the
-same supervisor's reservation and ends old inquiries on a legitimate newer
-supervisor's reservation. Only exact release can resume a still-authorized paused
-lifecycle; the former blanket rule that all foreign reservations are ineffective
-does not apply to a valid new formal owner.
+The [formal reservation boundary](#formal-reservation-boundary) retains terminal
+pauses and requires explicit authorization for file status inquiries during a
+same-supervisor reservation. Only exact RELEASE removes that reservation. A
+legitimate newer supervisor's reservation ends the old inquiries; the former
+blanket rule that all foreign reservations are ineffective does not apply to a
+valid new formal owner.
 For overall completion, explicit stop or authorization withdrawal, use
 `stop --reason OVERALL_TASK_COMPLETE` (or the applicable operator reason). Stop
 works even while a reply awaits consumption. An expired/revoked authorization

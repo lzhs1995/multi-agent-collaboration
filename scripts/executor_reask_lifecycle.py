@@ -53,10 +53,16 @@ def validate_authorization(value, controller, now):
     until = value.get('until_epoch')
     if until is not None and (not finite(until) or until <= now):
         raise ValueError('authorization expiry must be a finite future time')
+    reservation_inquiries = value.get('reservation_inquiries', False)
+    if type(reservation_inquiries) is not bool:
+        raise ValueError('reservation inquiries require an explicit boolean authorization')
     pin = authorization_pin(value.get('authorization_file', ''))
-    return dict(enabled=True, id=secrets.token_hex(16), status='ACTIVE',
-                overall_task=task, owner=value['owner'], authorization=pin,
-                authorized_epoch=now, until_epoch=until, controller=controller)
+    result = dict(enabled=True, id=secrets.token_hex(16), status='ACTIVE',
+                  overall_task=task, owner=value['owner'], authorization=pin,
+                  authorized_epoch=now, until_epoch=until, controller=controller)
+    if reservation_inquiries:
+        result['reservation_inquiries'] = True
+    return result
 
 
 def binding(value):
@@ -65,7 +71,25 @@ def binding(value):
         return None
     keys = ('enabled', 'id', 'overall_task', 'owner', 'authorization',
             'authorized_epoch', 'until_epoch', 'controller')
+    # Absence is meaningful for historical authorization. Never add this
+    # capability while comparing or enrolling an existing episode.
+    if 'reservation_inquiries' in value:
+        keys += ('reservation_inquiries',)
     return {key: copy.deepcopy(value[key]) for key in keys}
+
+
+def reservation_inquiries_allowed(state):
+    """Current explicit authority permits file status requests, never release.
+
+    The caller must separately validate the authorization file and enrollment.
+    Historical controllers cannot gain a new capability from a state edit.
+    """
+    import executor_reask as reask
+    value = state.get('continuation')
+    return (isinstance(value, dict) and value.get('enabled') is True
+            and value.get('status') == 'ACTIVE'
+            and value.get('reservation_inquiries') is True
+            and value.get('controller') == reask.controller())
 
 
 def valid_wait_contract(body, state):
@@ -157,8 +181,8 @@ def _consume_result(state, status, *, receipt=None, receipt_path=None):
 def consume(caller, reply_sha256='', *, now=None):
     """The foreground executor acknowledges the complete pinned reply body.
 
-    Scheduler detection never calls this function. The CLI authenticates the
-    original executor before this state mutation and requires its body hash.
+    Authenticate the state reloaded under the episode lock, not an earlier CLI
+    snapshot. A scheduler or advisory interpreter has no consumption authority.
     """
     import executor_reask as reask
     now = time.time() if now is None else now
@@ -167,13 +191,15 @@ def consume(caller, reply_sha256='', *, now=None):
         state = reask.load(caller) or {}
         if not state:
             return _consume_result(dict(outcome='NO_EPISODE'), 'NO_EPISODE')
-        if reask.stop_file(caller).exists():
-            stopped = reask.tick_locked(caller, now, file_only=True)
-            return _consume_result(stopped, 'STOPPED')
         if _consume_controller(state) != reask.controller():
             return _consume_result(
                 dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0),
                 'ORIGINAL_CONTROLLER_REQUIRED')
+        from executor_reask_identity import authenticate
+        consumer = authenticate(state)
+        if reask.stop_file(caller).exists():
+            stopped = reask.tick_locked(caller, now, file_only=True)
+            return _consume_result(stopped, 'STOPPED')
         poll_authorization(state, now)
         if state.get('state') != reask.ANSWERED:
             reask.save(state)
@@ -181,10 +207,10 @@ def consume(caller, reply_sha256='', *, now=None):
                                    else 'NOT_ANSWERED')
         reply = state['reply']
         continuing = bool(state.get('continuation'))
-        if continuing and (not reply_sha256 or reply_sha256 != reply.get('body_sha256')):
+        if not reply_sha256 or reply_sha256 != reply.get('body_sha256'):
             raise ValueError('read the complete reply body and supply its exact --reply-sha256')
         body = reply.get('body', {})
-        if continuing and reask.reply_record(body, reply['source'])['body_sha256'] != reply_sha256:
+        if reask.reply_record(body, reply['source'])['body_sha256'] != reply_sha256:
             raise ValueError('stored reply body changed')
         # Validate every prospective scheduling value before writing a durable
         # consumption receipt. Optional TASK fields do not bypass this check.
@@ -203,13 +229,18 @@ def consume(caller, reply_sha256='', *, now=None):
                        episode_id=state['episode_id'], marker=marker,
                        detected_epoch=reply.get('at_epoch'), consumed_epoch=now,
                        body_sha256=reply.get('body_sha256'), body=body,
-                       consumption='EXPLICIT_FOREGROUND_EXECUTOR_ACK')
+                       consumption='EXPLICIT_FOREGROUND_EXECUTOR_ACK',
+                       executor_authentication=consumer)
         path = reask.root() / 'consumed' / ready.digest(caller) / (ready.digest(
             state['episode_id'] + ':' + marker) + '.json')
         prior = ready.read_json(path)
         if prior:
             if any(prior.get(k) != receipt[k] for k in ('episode_id', 'marker', 'body_sha256')):
                 raise ValueError('original consumption receipt mismatch')
+            prior_consumer = prior.get('executor_authentication', {})
+            if any(prior_consumer.get(key) != consumer[key] for key in (
+                    'schema', 'provider', 'session_id', 'process', 'identity_sha256', 'episode_id')):
+                raise ValueError('original consumption identity proof mismatch')
             require_epoch(prior.get('consumed_epoch'), 'original consumed_epoch')
             receipt = prior
             now = prior['consumed_epoch']

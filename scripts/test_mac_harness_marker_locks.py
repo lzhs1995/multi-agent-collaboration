@@ -1,7 +1,8 @@
 """Real nonblocking locks and bounded races; only temporary file state."""
 import copy
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout, redirect_stderr
 import hashlib
 import io
 import json
@@ -99,6 +100,73 @@ class MarkerLockTests(unittest.TestCase):
         first = self.native_arm()
         self.assertEqual(self.native_arm(label='surface:999'), first)
         self.assert_paused(CALLER, first)
+
+    def test_native_retry_rejects_expired_or_invalid_time_without_releasing_or_writing(self):
+        first = self.native_arm()
+        path = self.path(first)
+        armed = datetime.fromisoformat(first['armed_at']).timestamp()
+        invalid = (
+            dict(armed_at=datetime.fromtimestamp(armed - 7 * 3600, timezone.utc).isoformat()),
+            dict(armed_at=datetime.fromtimestamp(armed + 3600, timezone.utc).isoformat()),
+            dict(armed_at='not-a-time'), dict(armed_at='2026-10-17T12:00:00'),
+            dict(armed_at=None), dict(armed_at=True),
+            *(dict(ttl_seconds=value) for value in
+              (None, True, False, 0, -1, '21600', float('nan'), float('inf'), 10 ** 400)),
+        )
+        for change in invalid:
+            with self.subTest(change=change):
+                altered = dict(first, **change)
+                path.write_text(json.dumps(altered))
+                before = path.read_bytes()
+                state_before = reask.state_path(CALLER).read_bytes()
+                with self.assertRaisesRegex(RuntimeError, 'expired or has invalid timing'):
+                    self.native_arm()
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(reask.state_path(CALLER).read_bytes(), state_before)
+                self.assertEqual(list(path.parent.glob('*.json')), [path])
+        path.write_text(json.dumps(first))
+        self.assertEqual(self.native_arm(), first)
+        self.assert_paused(CALLER, first)
+
+    def test_native_retry_obeys_original_ttl_despite_fresh_heartbeat(self):
+        first = self.native_arm()
+        path = self.path(first)
+        armed = datetime.fromisoformat(first['armed_at']).timestamp()
+        expired = dict(first, last_activity_at=harness._now())
+        path.write_text(json.dumps(expired))
+        before = path.read_bytes()
+        with patch.object(harness.time, 'time', return_value=armed + first['ttl_seconds'] + 1):
+            with self.assertRaisesRegex(RuntimeError, 'expired'):
+                self.native_arm()
+        self.assertEqual(path.read_bytes(), before)
+        self.assert_paused(CALLER, first)
+
+    def test_unrelated_malformed_non_uuid_files_are_isolated_with_diagnostic(self):
+        original = self.native_arm()
+        path = self.active / WORKSPACE / 'unrelated-debris.json'
+        for raw in (b'{broken', b'[]', b'\xff'):
+            with self.subTest(raw=raw):
+                path.write_bytes(raw)
+                before = reask.load(CALLER)
+                diagnostic = io.StringIO()
+                with redirect_stderr(diagnostic):
+                    self.assertEqual(self.native_arm(), original)
+                self.assertIn(path.name, diagnostic.getvalue())
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual(reask.load(CALLER), before)
+
+    def test_corrupted_uuid_marker_remains_unknown_and_cannot_create_new_reservation(self):
+        original = self.native_arm()
+        path = self.path(original)
+        for raw in (b'{broken', b'[]', b'\xff'):
+            with self.subTest(raw=raw):
+                path.write_bytes(raw)
+                before = {str(p): (p.read_bytes(), p.stat().st_ino)
+                          for p in self.home.rglob('*.json')}
+                with self.assertRaisesRegex(RuntimeError, 'unreadable active reservation'):
+                    self.native_arm()
+                self.assertEqual({str(p): (p.read_bytes(), p.stat().st_ino)
+                                  for p in self.home.rglob('*.json')}, before)
 
     def test_native_retry_repairs_only_missing_reservation_after_failed_publication(self):
         with patch.object(lifecycle, 'task_boundary_locked', side_effect=OSError('full')):

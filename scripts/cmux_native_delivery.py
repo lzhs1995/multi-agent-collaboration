@@ -60,7 +60,7 @@ def _provider(p):
         return "claude"
     return None
 
-def _live_session(p, provider):
+def _live_session(p, provider, *, require_native=False):
     if provider == "codex":
         try:
             selected = foreground.read(p)
@@ -90,6 +90,8 @@ def _live_session(p, provider):
                     or reg.get("kind") != "interactive" or reg.get("procStart") not in births):
                 raise NativeDeliveryError("NATIVE_REGISTRATION_PROCESS_MISMATCH")
             return _uuid(reg["sessionId"])
+    if require_native:
+        raise NativeDeliveryError('NATIVE_CLIENT_SESSION_REQUIRED: resume arguments are not live identity')
     selected = _session_argument(p)
     if provider not in ("claude", "codex") or selected is None:
         raise NativeDeliveryError("NATIVE_SESSION_UNRESOLVED: no input; native selector required")

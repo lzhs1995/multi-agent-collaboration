@@ -45,10 +45,10 @@ def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
-def capture_executor(live):
+def capture_executor(live, *, state):
     """Foreground-only identity pin. Called inside new-episode registration."""
-    return capture_target(live['caller_surface_uuid'], live['workspace_uuid'],
-                          live.get('caller_pane_uuid'))
+    from executor_reask_identity import capture_executor as capture_consumer
+    return capture_consumer(live, state=state)
 
 
 def capture_target(surface, workspace, pane):
@@ -74,6 +74,17 @@ def capture_target(surface, workspace, pane):
 
 
 def check_executor(binding, payload=None):
+    from executor_reask_identity import SCHEMA as CONSUMER_SCHEMA, check_live
+    if binding.get('schema') == CONSUMER_SCHEMA:
+        if binding.get('provider') != 'claude':
+            raise ValueError('this observer requires the original Claude executor')
+        check_live(binding)
+        if payload is not None and (
+                payload.get('session_id') != binding['session_id']
+                or payload.get('transcript_path') != binding['transcript']['path']
+                or not maintenance.caller_matches(binding)):
+            raise ValueError('not the original automatic Claude hook')
+        return True
     if (binding.get('schema') != IDENTITY_SCHEMA or binding.get('provider') != 'claude'
             or str(uuid.UUID(binding['session_id'])) != binding['session_id']):
         raise ValueError('original Claude identity required')

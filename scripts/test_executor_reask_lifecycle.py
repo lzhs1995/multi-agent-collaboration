@@ -17,7 +17,11 @@ from test_executor_reask_scheduler import CALLER, SUP, WORKSPACE
 
 
 class LifecycleTests(unittest.TestCase):
-    setUp = fixtures.SchedulerTests.setUp
+    def setUp(self):
+        fixtures.SchedulerTests.setUp(self)
+        self.consumer_auth = self.stack.enter_context(patch(
+            'executor_reask_identity.authenticate', side_effect=fixtures.consumer_fixture))
+
     live = fixtures.SchedulerTests.live
     enroll = fixtures.SchedulerTests.enroll
     def begin(self, caller=CALLER, **kwargs):
@@ -284,7 +288,7 @@ class PausedReplyTests(unittest.TestCase):
     task_marker = LifecycleTests.task_marker
 
     def setUp(self):
-        fixtures.SchedulerTests.setUp(self)
+        LifecycleTests.setUp(self)
         import mac_harness as harness
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', self.home / 'active'))
         self.stack.enter_context(patch.object(ready, 'Tail', side_effect=AssertionError('no transcript')))
@@ -404,11 +408,13 @@ class PausedReplyTests(unittest.TestCase):
         self.paused_wait()
         state = reask.tick(CALLER, now=2000.)
         before = reask.state_path(CALLER).read_bytes()
-        foreign = dict(self.live(), caller_surface_uuid=SUP)
-        bridge = SimpleNamespace(pin_workspace=lambda *_args, **_kwargs: foreign)
-        with patch.object(ready, '_bridge', return_value=bridge), self.assertRaises(ValueError):
+        with patch('executor_reask_identity.authenticate',
+                   side_effect=ValueError('original executor identity changed')) as auth, \
+                self.assertRaises(ValueError):
             reask.main(['consume', '--caller-uuid', CALLER,
                         '--reply-sha256', state['reply']['body_sha256']])
+        auth.assert_called_once()
+        self.assertEqual(auth.call_args.args[0], state)
         self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
 
     def test_paused_reply_is_detected_consumed_and_stays_paused_until_exact_release(self):
@@ -446,7 +452,7 @@ class PausedReplyTests(unittest.TestCase):
         self.assertEqual(answered['state'], reask.ANSWERED)
         self.assertEqual(answered['reply']['body'], body)
         self.assert_preserved_inquiry(original, answered)
-        consumed = lifecycle.consume(CALLER, now=1003.)
+        consumed = lifecycle.consume(CALLER, answered['reply']['body_sha256'], now=1003.)
         self.assertEqual(consumed['state'], reask.CONSUMED)
         self.assert_preserved_inquiry(original, consumed)
         self.assertEqual(scheduler.sweep(now=2000.)['file_posts'], 0)

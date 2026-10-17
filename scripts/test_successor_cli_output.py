@@ -217,6 +217,19 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertEqual(second['maintenance_context']['state'], 'ENROLLMENT_FAILED')
         self.assertEqual(second['queued_proof']['reception_kind'], 'native_queued_command')
         self.assertEqual(Path(first['maintenance_context']['offer']).read_bytes(), before)
+        guidance = second['maintenance_context']['recovery']
+        for required in ('original executor', 'read and consumed', 'original reconcile',
+                         '--replace-completed-offer', 'exact old offer SHA256', 'do not resend'):
+            self.assertIn(required, guidance)
+        original_attempt = Path(second['attempt']).read_bytes()
+        calls = list(self.bridge.operations)
+        _, reconciled, _ = self.invoke('reconcile', output=self.root / 'second-reconcile.json',
+                                      extra=options)
+        self.assertEqual(reconciled['maintenance_context']['state'], 'ENROLLMENT_FAILED')
+        self.assertEqual(reconciled['input_operations'], 0)
+        self.assertEqual(self.bridge.operations, calls)
+        self.assertEqual(Path(second['attempt']).read_bytes(), original_attempt)
+        self.assertEqual(Path(first['maintenance_context']['offer']).read_bytes(), before)
 
     def test_invalid_enrollment_options_refuse_before_transport(self):
         variants = [(['--maintenance-reply', str(self.root / 'reply')], 'submit'),

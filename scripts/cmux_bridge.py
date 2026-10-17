@@ -1555,7 +1555,12 @@ def _queued_or_active_input(screen):
                           or _CLAUDE_GOAL_ROW_RE.fullmatch(before[-1])):
             before.pop()
         screen = before[-1] if before else ""
-        if re.fullmatch(r"\s*[·✻✢✳✶✽◐◑◒◓]\s+[^\n]+(?:…|\.\.\.)\s*\([^\n]+\)\s*", screen):
+        # Claude's live spinner can omit elapsed time, notably while a tool
+        # starts or compaction begins. Its ellipsis still denotes live work;
+        # completed summaries such as 'Brewed for 2m' have no such suffix.
+        if re.fullmatch(r"\s*[·✻✢✳✶✽◐◑◒◓]\s+[^\n]+(?:…|\.\.\.)(?:\s*\([^\n]+\))?\s*", screen):
+            return True
+        if re.match(r"\s*(?:⏺\s+[^\n]+\(|⎿\s+Running(?:…|\.\.\.|\b))", screen):
             return True
         return bool(re.match(
             r"\s*[✻✢✳✶✽◐◑◒◓]\s+(?:thinking|running|waiting|retrying|"

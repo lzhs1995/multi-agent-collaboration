@@ -29,19 +29,38 @@ import mac_harness as harness
 from delivery_receipts import snapshot
 from native_test_support import NativeFixture
 from offline_hook_thread_fixture import native_processes, native_thread
+import test_cmux_daemon_identity as daemon_inputs
 from test_cmux_daemon_identity import S, C, W, P, Q, T
+from test_codex_input import FakeRPC
 
 IDLE = '❯ \n[claude-opus-5]'
 
 
-class HandshakeTests(unittest.TestCase):
+class HandshakeFixture(unittest.TestCase):
+    PROVIDER = 'claude'
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.home = Path(tmp.name).resolve()
-        self.native = NativeFixture.attach(self, home=self.home, provider='claude', identity=dict(
+        self.native = NativeFixture.attach(self, home=self.home, provider=self.PROVIDER, identity=dict(
             caller_surface_uuid=C, target_surface_uuid=T, workspace_uuid=W,
             caller_pane_uuid=P, target_pane_uuid=Q))
+        self.supervisor_session = S
+        if self.PROVIDER == 'codex':
+            self.supervisor_session = C
+            self.daemon_inputs = daemon_inputs.DaemonTests()
+            self.daemon_inputs.setUp()
+            self.native.session_id = S
+            self.native.process_state = self.daemon_inputs.processes[30]
+            self.native.process_state['env']['CMUX_SURFACE_ID'] = T
+            self.native.tty = self.native.process_tty = 'ttys2'
+            self.native.tree['windows'][0]['workspaces'][0]['panes'][0]['surfaces'][0]['tty'] = 'ttys2'
+            payload, _ = native_thread(self.home, actual=S)
+            self.native.transcript = Path(payload['transcript_path'])
+            self.native.native_root = self.home / '.codex/sessions'
+            self.fake_rpc = FakeRPC(self.native, receive=False)
+            self.native.rpc.side_effect = lambda **_: self.fake_rpc
         self.source = self.home / '.local/share/multi-agent-collaboration/releases/test/source'
         self.source.mkdir(parents=True)
         original = Path(__file__).resolve().parents[1]
@@ -69,7 +88,7 @@ class HandshakeTests(unittest.TestCase):
         self.contexts.enter_context(patch.object(advisory.markers.stop_guard, 'ACTIVE_DIR', self.active))
         self.contexts.enter_context(patch.object(ready, 'state_root', return_value=self.home / 'state'))
         self.contexts.enter_context(patch.object(bridge, 'COLLABORATION_SKILL_PATH', self.source / 'SKILL.md'))
-        self.supervisor_payload, _ = native_thread(self.home, actual=S)
+        self.supervisor_payload, _ = native_thread(self.home, actual=self.supervisor_session)
         self.payload = dict(hook_event_name='PostToolUse', session_id=self.native.session_id,
             transcript_path=str(self.native.transcript), tool_name='Bash')
         self.cursor = self.home / 'cursors'
@@ -92,7 +111,7 @@ class HandshakeTests(unittest.TestCase):
         root = self.home / task
         root.mkdir()
         row = dict(task_id=task, supervisor='surface:1', executor='surface:2',
-            executor_provider='claude', ordinal=1, ack_nonce='nonce-' + uuid.uuid4().hex,
+            executor_provider=self.PROVIDER, ordinal=1, ack_nonce='nonce-' + uuid.uuid4().hex,
             executor_ack=False)
         body = evidence.challenge(row, root, self.source / 'SKILL.md')
         prepared = reference.plan(body, row['ack_nonce'])
@@ -103,8 +122,9 @@ class HandshakeTests(unittest.TestCase):
         evidence.record_controller(row, self.sender.__file__, self.source / 'SKILL.md',
             self.source / 'scripts/mac_harness.py', self.source / 'scripts/cmux_bridge.py')
         self.assertEqual(row['dispatch_controller_status'], 'PINNED_BEFORE_INPUT')
-        with patch.object(bridge, 'read_screen', side_effect=self.native.ready_screens(
-                IDLE, self.native.draft(prepared['text'], 'claude'), IDLE)):
+        with (patch.object(bridge, 'read_screen', side_effect=self.native.ready_screens(
+                IDLE, self.native.draft(prepared['text'], 'claude'), IDLE))
+                if self.PROVIDER == 'claude' else nullcontext()):
             with self.assertRaises(bridge.DispatchUnconfirmed) as raised:
                 self.sender.deliver(bridge, T, prepared['text'], row['ack_nonce'], wait_seconds=0)
         evidence.record_dispatch(row, raised.exception.details, failed=True)
@@ -115,10 +135,11 @@ class HandshakeTests(unittest.TestCase):
         with patch.object(harness, '_ACTIVE_DIR', self.active), \
                 patch.object(harness, '_workspace_key', return_value=W):
             marker = harness.arm_task(task, root, 'surface:1', 'surface:2',
-                supervisor_provider='codex', executor_provider='claude', workspace_uuid=W,
+                supervisor_provider='codex', executor_provider=self.PROVIDER, workspace_uuid=W,
                 supervisor_surface_uuid=C, executor_surface_uuid=T,
                 native_participants=[dict(role='supervisor', provider='codex', surface_uuid=C,
-                    native_session_id=S), dict(role='executor', provider='claude', surface_uuid=T,
+                    native_session_id=self.supervisor_session),
+                    dict(role='executor', provider=self.PROVIDER, surface_uuid=T,
                     native_session_id=self.native.session_id)])
         return dict(root=root, row=row, receipt=receipt, wire=prepared['text'], marker=marker,
             markerfile=self.active / W / (marker['collaboration_id'] + '.json'),
@@ -133,7 +154,12 @@ class HandshakeTests(unittest.TestCase):
 
     @contextmanager
     def caller(self, role, foreground=None):
-        if role == 'supervisor':
+        if self.PROVIDER == 'codex' and role == 'executor':
+            with native_processes(self.daemon_inputs, caller=T), (
+                    patch('cmux_daemon_identity.foreground.read',
+                          return_value={'thread_id': foreground}) if foreground else nullcontext()):
+                yield
+        elif role == 'supervisor':
             with native_processes(), (patch('cmux_daemon_identity.foreground.read',
                     return_value={'thread_id': foreground}) if foreground else nullcontext()):
                 yield
@@ -161,6 +187,8 @@ class HandshakeTests(unittest.TestCase):
         case = case or self.case
         self.write(case['receipt'], dict(executors=[case['row']]))
 
+
+class HandshakeTests(HandshakeFixture):
     def test_pending_queued_native_and_ack_share_original_sixty_second_budget(self):
         first = self.discover()[0]
         self.assertEqual(first['notice_native_state'], 'NATIVE_PENDING')
@@ -271,6 +299,44 @@ class HandshakeTests(unittest.TestCase):
         self.assertEqual(set(ids), {c['row']['task_id'] for c in cases})
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_one_marker_more_than_eight_workers_resumes_before_other_markers(self):
+        case = self.case
+        rows = [case['row']]
+        participants = case['marker']['participants']
+        # Missing native evidence is an honest supervisor diagnostic. These
+        # workers are distinct original marker/receipt identities, never a
+        # substituted receiver or a mocked successful identity check.
+        for ordinal in range(2, 12):
+            worker = dict(participants[1], ordinal=ordinal,
+                          surface_uuid=str(uuid.uuid4()), native_session_id=str(uuid.uuid4()),
+                          surface_ref='surface:' + str(ordinal + 1))
+            participants.append(worker)
+            row = dict(case['row'], ordinal=ordinal, executor=worker['surface_ref'],
+                       ack_nonce='missing-original-' + str(ordinal))
+            row.pop('dispatch_attempt')
+            rows.append(row)
+        self.write(case['markerfile'], case['marker'])
+        self.write(case['receipt'], dict(executors=rows))
+        first = self.discover(role='supervisor')
+        self.assertEqual(len(first), 8)
+        cursor = next(self.cursor.glob('*.json'))
+        before = cursor.read_bytes()
+
+        def failed_flush(_):
+            raise BrokenPipeError('closed output')
+
+        self.assertEqual(self.discover(role='supervisor', emit=failed_flush), [])
+        self.assertEqual(cursor.read_bytes(), before)
+        # A newly appeared earlier marker must not delay the unfinished one.
+        self.write(self.active / W / '0000-unrelated.json', {'unrelated': True})
+        second = self.discover(role='supervisor')
+        self.assertEqual([n['ordinal'] for n in first + second], list(range(1, 12)))
+        self.assertEqual(len(second), 3)
+        self.assertTrue(all(n['input_operations'] == 0 for n in first + second))
+        self.assertTrue(all(n['controller_state'] == 'ORIGINAL_EVIDENCE_UNAVAILABLE'
+                            for n in first[1:] + second))
+        self.assertEqual(self.discover(role='supervisor'), [])
+
     def test_deadline_does_not_skip_marker_or_publish_a_native_confirmation(self):
         for i in range(advisory.MAX_MARKERS):
             self.write(self.active / W / ('0000-%03d.json' % i), {'unrelated': True})
@@ -359,6 +425,41 @@ class HandshakeTests(unittest.TestCase):
         self.assertEqual(self.discover(280), [])
         self.assertTrue(case['markerfile'].exists())
         self.assertFalse(Path(pack['completion_receipt']).exists())
+
+
+class CodexExecutorTests(HandshakeFixture):
+    PROVIDER = 'codex'
+
+    def test_original_codex_executor_receives_own_handshake_without_input(self):
+        notice = self.discover()[0]
+        self.assertEqual(notice['controller_state'], 'VERIFIED_ORIGINAL_CONTROLLER')
+        self.assertEqual(notice['executor_uuid'], T)
+        self.assertEqual(notice['executor_session'], S)
+        self.assertEqual(notice['notice_native_state'], 'NATIVE_PENDING')
+        self.native.append_user(self.case['wire'])
+        self.assertTrue(self.discover(160)[0]['notice_native_received'])
+
+    def test_codex_executor_rejects_child_wrong_session_and_foreground(self):
+        for payload in (dict(self.payload, session_id=C),
+                        dict(self.payload, subagent={'parent_thread_id': C}),
+                        dict(self.payload, transcript_path=self.supervisor_payload['transcript_path'])):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.discover(payload=payload), [])
+        self.assertEqual(self.discover(foreground=C), [])
+        self.assertEqual(len(self.discover()), 1)
+
+    def test_codex_hook_process_must_be_the_original_receiver(self):
+        original = self.daemon_inputs.processes[30]
+        for change in (dict(birth=[200, 30]), dict(executable='/changed/codex'),
+                       dict(file_identity=[1, 30, 999, 1])):
+            with self.subTest(change=change), patch.dict(original, change):
+                self.assertEqual(self.discover(), [])
+        with patch.object(self.native, 'process_tty', 'wrong-tty'):
+            self.assertEqual(self.discover(), [])
+        saved = self.native.transcript.with_suffix('.original')
+        self.native.transcript.rename(saved)
+        self.native.transcript.write_bytes(saved.read_bytes())
+        self.assertEqual(self.discover(), [])
 
 
 if __name__ == '__main__':
