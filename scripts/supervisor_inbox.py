@@ -59,7 +59,15 @@ def _frontier(inbox, previous):
                 # An EOF read consumes no entries. Restart here so small inboxes
                 # need no extra empty hook between reminders or new markers.
                 state['round'] = str(uuid.uuid4())
-                names, following = directory.read_page(fd, 0)
+                # ext4 can retain its EOF hash after lseek(0) on this stream.
+                # Reopen relative to the held fd for a fresh stream of the same
+                # inode, even if the inbox path was replaced. dup shares state.
+                rewind_fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY
+                                    | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                try:
+                    names, following = directory.read_page(rewind_fd, 0)
+                finally:
+                    os.close(rewind_fd)
         except OSError as exc:
             if exc.errno != errno.EINVAL or not state['offset']:
                 raise

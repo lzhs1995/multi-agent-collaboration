@@ -179,6 +179,70 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(len(self.discover(now=160.0)), 1, self.discovery_trace)
         self.assertEqual(self.discover(now=160.001), [])
 
+    def test_eof_restart_uses_an_independent_directory_stream(self):
+        _state, path = self.request()
+        previous = inbox._frontier(path.parent, {})
+        previous['pending'] = []
+        self.assertGreater(previous['offset'], 0)
+        native = inbox.directory.read_page
+        first_fd = None
+        pages = []
+
+        def sticky_eof(fd, offset):
+            nonlocal first_fd
+            if first_fd is None:
+                first_fd = fd
+                os.lseek(fd, offset, os.SEEK_SET)
+                result = [], offset
+            else:
+                # Model ext4's per-open-file EOF hash cache. Rewinding the
+                # original stream (including a dup) does not clear that cache.
+                os.lseek(fd, 0, os.SEEK_SET)
+                if os.lseek(first_fd, 0, os.SEEK_CUR) == 0:
+                    result = [], previous['offset']
+                else:
+                    result = native(fd, offset)
+            pages.append(result)
+            return result
+
+        with mock.patch.object(inbox.directory, 'read_page', side_effect=sticky_eof):
+            current = inbox._frontier(path.parent, previous)
+        self.assertEqual(current['pending'], [path.name])
+        self.assertNotEqual(current['round'], previous['round'])
+        self.assertEqual(current['directory'], previous['directory'])
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(sum(bool(names) for names, _offset in pages), 1)
+
+    def test_eof_restart_stays_with_open_inode_when_directory_path_is_replaced(self):
+        _state, path = self.request()
+        root = path.parent
+        previous = inbox._frontier(root, {})
+        previous['pending'] = []
+        archived = root.with_name(root.name + '-previous')
+        replacement_name = '0' * 64 + '.json'
+        native = inbox.directory.read_page
+        reads = 0
+
+        def replace_at_eof(fd, offset):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                root.rename(archived)
+                root.mkdir()
+                (root / replacement_name).touch()
+                return [], offset
+            return native(fd, offset)
+
+        with mock.patch.object(inbox.directory, 'read_page', side_effect=replace_at_eof):
+            current = inbox._frontier(root, previous)
+        self.assertEqual(current['directory'], previous['directory'])
+        self.assertEqual(current['pending'], [path.name])
+        self.assertEqual(reads, 2)
+        # The next event sees the replacement inode and discards the old page.
+        replaced = inbox._frontier(root, current)
+        self.assertNotEqual(replaced['directory'], current['directory'])
+        self.assertEqual(replaced['pending'], [replacement_name])
+
     def test_discovery_cursors_are_isolated_by_actual_thread(self):
         self.request()
         self.assertEqual(len(self.discover()), 1)

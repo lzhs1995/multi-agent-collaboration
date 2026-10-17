@@ -20,17 +20,21 @@
 - Use Standard launchd scheduling only for the reask scheduler; leave the
   configuration guardian Background. Record module-to-sweep and phase timing,
   retain fair cursors, and page inbox directory discovery within bounded work.
+- Restart an exhausted inbox walk with a fresh directory stream of the same
+  held inode. This avoids ext4 retaining its EOF hash after a rewind and hiding
+  new requests or 60-second reminders. Keep page limits and flush-before-commit
+  semantics; regression tests cover shared-stream EOF and path replacement.
 - Recognize measured Claude Monitor/Goal footer layouts and narrowly bounded
   wrapped-path padding. Preserve complete composer checks and all negative
   controls; no global whitespace stripping, draft clearing or new recovery key.
 - Distinguish proven helper NO_INPUT from uncertain input, preserving the
   original request and evidence instead of leaving a false pending send.
 
-Local final validation passes all 2,108 offline tests with zero failures or
-errors, plus 321 targeted tests and 33 adapter checks. The adapter preserved
-its inputs and performed zero live input operations. Documentation checks
-pass for all 14 changed documents across both skill repositories. Original-session
-review, CI, immutable installation and live adoption remain separate checks.
+Validation uses the full offline suite (`python -B scripts/test_all.py`) on
+macOS and Ubuntu with Python 3.10 and 3.14, measured composer fixtures and
+negative controls. Results apply only to their tested source commit; earlier
+candidate counts are not final-release evidence. Original-session review,
+immutable installation and live adoption remain separate checks.
 See [the release contract](references/release-0.4.35.md) for exact boundaries.
 
 ## 0.4.34
