@@ -191,6 +191,40 @@ class ProtocolTests(unittest.TestCase):
                       authorization='EXPLICIT_REASK_ENROLL_EXISTING')
         self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
 
+    def test_reviewed_0442_issuer_preserves_original_authority(self):
+        release42 = '0.4.42-5947b2d1f8aa'
+        release41 = '0.4.41-28b36490b149'
+        release37 = '0.4.37-c7258c383218'
+        for origin, scheduler, expected in (
+                ('0.4.28-ae66245771d0', release42, True),
+                (release37, release42, True),
+                (release41, release42, True),
+                (release42, release42, True),
+                (release42, release41, False),
+                (release42, release37, False)):
+            with self.subTest(controller=origin, issuer=scheduler):
+                state, record = self.episode(origin)
+                original = copy.deepcopy(state)
+                record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[scheduler][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assertEqual(protocol.supports_record(record, state, self.current_scheduler), expected)
+                self.assertEqual(state, original)
+        state, record = self.episode(current=True)
+        record.update(scheduler=issuer(*self.releases[release42][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+        for unsupported in ('0.4.38-unreviewed', '0.4.40-unreviewed'):
+            with self.subTest(unsupported=unsupported):
+                self.releases[unsupported] = self.make_release(unsupported, current=True)
+                state, record = self.episode(unsupported)
+                original = copy.deepcopy(state)
+                record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[release42][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+                self.assertEqual(state, original)
+
     def test_extended_controller_cannot_drop_identity_authority_pins(self):
         for name in protocol.LEGACY_CAPABILITIES:
             with self.subTest(release=name):
