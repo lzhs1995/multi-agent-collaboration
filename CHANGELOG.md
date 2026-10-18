@@ -1,3 +1,24 @@
+## 0.4.38
+
+- Share the formal-marker directory through `cmux_coordination_paths.py` so a
+  file reservation read no longer imports the terminal harness, bridge,
+  interruption handler and helper renderer. Keep authorization, STOP, ownership,
+  reservation, missing-marker and reply behavior unchanged.
+- Pin the new directory module in new controllers. Preserve the reviewed
+  immutable 0.4.37 release's original 13 controller members and reservation-inquiry
+  capability. Recognize explicit historical controller shapes without granting
+  old issuers future authority or loading historical release code.
+- Add fresh-interpreter boundary tests that reject transport imports and observer
+  writes, processes and socket connections, plus compatibility negative controls.
+
+Focused validation passed in two runs: 99 protocol/identity/reask tests and 49
+scheduler/registration/release-verification tests. These are per-run counts.
+Three alternating fresh-interpreter pairs returned identical boundary decisions;
+median import plus first observation fell from 0.257 to 0.085 seconds. The
+synthetic empty-workspace measurement is not a full sweep or a live latency
+guarantee. Actual scheduler, hook and original callback acceptance remain
+separate; see the [release contract](references/release-0.4.38.md).
+
 ## 0.4.37
 
 - Reuse complete release verification within a single file-scheduler sweep.

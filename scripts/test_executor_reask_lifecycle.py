@@ -262,7 +262,8 @@ class LifecycleTests(unittest.TestCase):
         import mac_harness as harness
         self.enroll()
         with patch.object(harness, '_workspace_key', return_value=WORKSPACE), \
-                patch.object(harness, '_ACTIVE_DIR', self.home / 'active'):
+                patch.object(harness, '_ACTIVE_DIR', self.home / 'active'), \
+                patch.object(lifecycle, 'ACTIVE_DIR', self.home / 'active'):
             marker = harness.arm_task('child', self.home / 'report', supervisor_surface_uuid=SUP,
                                       executor_surface_uuid=CALLER, workspace_uuid=WORKSPACE)
             self.assertEqual(scheduler.sweep(now=1001.)['file_posts'], 0)
@@ -291,6 +292,7 @@ class PausedReplyTests(unittest.TestCase):
         LifecycleTests.setUp(self)
         import mac_harness as harness
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', self.home / 'active'))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', self.home / 'active'))
         self.stack.enter_context(patch.object(ready, 'Tail', side_effect=AssertionError('no transcript')))
         self.stack.enter_context(patch.object(reask, 'idle_binding', side_effect=AssertionError('no idle binding')))
 

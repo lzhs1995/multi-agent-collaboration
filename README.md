@@ -1,8 +1,9 @@
-Current source: **0.4.37**. The file scheduler reuses complete release verification
-within one sweep, checking every verified member and parent for changes before
-each reuse. Live authorization and task state are still checked each time.
-Reviewed 0.4.36 file episodes retain their original capability and controller pins.
-See the [0.4.37 release contract](references/release-0.4.37.md).
+Current source: **0.4.38**. File reservation checks read their shared directory
+without loading the terminal harness and bridge. Authorization, STOP, ownership,
+reservation and reply checks remain live. Complete release verification is reused
+within one sweep, with every verified member and parent checked before reuse.
+Reviewed 0.4.37 episodes retain their original capability and controller pins.
+See the [0.4.38 release contract](references/release-0.4.38.md).
 
 New submissions observe native reception for 30 seconds
 by default, with a finite 0–60 second option. Reconciliation defaults to one
@@ -17,7 +18,7 @@ confirmation. The reask scheduler uses Standard scheduling; the configuration
 guardian remains Background. Bounded discovery and measured Claude composer
 layouts preserve original drafts and pending evidence.
 
-The reviewed file protocol includes the complete 0.4.36 release without granting
+The reviewed file protocol includes the complete 0.4.37 release without granting
 historical issuers future authority. See [0.4.35 behavior and evidence boundaries](references/release-0.4.35.md)
 and [validation history](CHANGELOG.md). Source tests, installation, actual
 automatic hooks, full body reading and live native reception are separate checks.

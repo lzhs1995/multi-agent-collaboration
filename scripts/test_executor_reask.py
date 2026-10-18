@@ -19,6 +19,7 @@ import executor_reask as reask  # noqa: E402
 import cmux_executor_reask_stop_guard as guard  # noqa: E402
 import executor_reply as replies
 import mac_harness as harness
+import executor_reask_lifecycle as lifecycle
 
 CALLER = 'E7C1C83C-946C-4E59-8753-F506F2069A12'
 SUP = '2A2CDBE8-DD07-4185-A972-2E56BB3135DF'
@@ -48,6 +49,9 @@ class Base(unittest.TestCase):
         active_patcher = mock.patch.object(harness, '_ACTIVE_DIR', self.home / 'active')
         active_patcher.start()
         self.addCleanup(active_patcher.stop)
+        marker_reader = mock.patch.object(lifecycle, 'ACTIVE_DIR', self.home / 'active')
+        marker_reader.start()
+        self.addCleanup(marker_reader.stop)
         self.channel = self.home / 'channel'
         self.channel.mkdir()
         self.transcript = self.home / 't.jsonl'
