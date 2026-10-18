@@ -1,4 +1,14 @@
-Current source: **0.4.42**. Reply consumption reports episode lock contention as
+Current source: **0.4.44**. Configuration checks close their bounded database
+snapshot before normalization. Unchanged profiles never acquire a writer lock;
+real changes use a short transaction that rolls back on any concurrent edit.
+Busy and budget outcomes are visible. One job watches the live hook files and
+CURRENT manifest, with profile imports discovered on its 60-second interval.
+See the [0.4.44 release contract](references/release-0.4.44.md).
+
+The [original bridge continuation](references/release-0.4.43.md) remains limited
+to a never-typed token under its original supervisor, reservation and controller.
+
+Reply consumption reports episode lock contention as
 `EPISODE_BUSY` JSON with exit code 2. It leaves the reply unconsumed and does not
 read episode state without the lock. Retry the same caller and reply SHA after
 the suggested one-second delay. The command does not retry automatically.

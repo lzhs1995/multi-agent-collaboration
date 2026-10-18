@@ -1,3 +1,25 @@
+## 0.4.44
+
+Fix configuration reconciliation taking a SQLite writer lock before determining
+whether any profile needs repair. Read a bounded snapshot, close the connection,
+and normalize/serialize outside transactions. No-op checks never open a writable
+connection. Actual profile/common changes use one short original-value CAS
+transaction; any conflict or failure rolls back every change. Database replacement
+during planning is refused.
+
+Report `LOCK_BUSY`, `CONCURRENT_EDIT`, `PROFILE_BUDGET_EXHAUSTED` and
+`PROFILE_SNAPSHOT_LIMIT` through status JSON and a nonzero CLI exit. Use a single
+bounded SQLite busy wait, snapshot/phase budgets, and secret-free phase timings.
+Watch only live hook files and CURRENT; discover profile imports on the existing
+60-second interval with a matching launchd throttle, without DB/WAL event triggers.
+
+The 17 focused guardian tests passed locally, including independent writer
+commits during repeated no-op planning, stale profile/common CAS rollback,
+writer and reader contention, budget/exception cleanup, database replacement,
+and preservation of credentials, selection and foreign hooks. Source tests do
+not establish live CC Switch recovery, automatic client hook loading or native
+delivery. See the [release contract](references/release-0.4.44.md).
+
 ## 0.4.43
 
 Add an explicit continuation for a single-Claude bridge probe refused as

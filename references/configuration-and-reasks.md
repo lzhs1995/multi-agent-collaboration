@@ -50,7 +50,10 @@ is necessary guidance but cannot guarantee hook execution.
 
 `scripts/configuration_guardian.py` provides one launchd job,
 `org.multi-agent-collaboration.configuration-guardian`. It runs on login,
-configuration-directory changes and every 60 seconds. It authenticates the full
+changes to `.claude/settings.json`, `.codex/hooks.json` or CURRENT, and every
+60 seconds, with a 60-second launchd throttle. It does not watch configuration
+directories, cc-switch DB/WAL files or request-log writes; newly imported
+profiles are discovered on the interval. It authenticates the full
 release manifest and Python before importing the same-release installer, then
 uses the shared `install.lock`. It makes no terminal input or API request.
 
@@ -58,7 +61,12 @@ The guardian restores only this project's hooks in the live Claude/Codex files
 and all cc-switch Claude profiles, including newly imported profiles. It removes
 duplicate owned registrations from the common Claude snippet. It preserves
 provider selection, credentials, model settings, foreign hooks and other fields.
-Profile changes commit in one SQLite transaction; live JSON replacements compare
+In 0.4.44 a bounded read-only profile snapshot closes before JSON parsing,
+normalization and serialization. An unchanged plan never opens a writable
+connection or reserves the writer. Actual profile/common changes commit in one
+short original-value CAS transaction; any conflict rolls back the whole plan.
+The next invocation replans from a new snapshot, without an in-process busy loop.
+Live JSON replacements compare
 the original bytes before atomic replacement. One previous-hooks snapshot per
 client bounds backup growth. Never copy a provider profile over the live config.
 
@@ -69,8 +77,16 @@ and `manifest_sha256`. Source must be the complete read-only
 MANIFEST.json pins every member's `sha256` and `bytes`. Run the pinned guardian
 with `reconcile` and `install-job` to review, then repeat with `--apply`.
 `install-job` replaces the same job; do not create a watcher per session.
+If its responsible coordinator deliberately paused the job after a defect,
+preserve that pause until a complete corrected release and controlled restoration
+are ready. Do not bootstrap an older job as a side effect of installation.
 
 Read `configuration-guardian-v1/STATUS.json` under the shared state directory.
+`LOCK_BUSY`, `CONCURRENT_EDIT`, `PROFILE_BUDGET_EXHAUSTED` and
+`PROFILE_SNAPSHOT_LIMIT` exit nonzero and record no committed profile repair.
+Snapshot, planning, lock-wait, transaction and total durations contain no profile
+contents. Limits and controlled-restoration evidence are specified in the
+[0.4.44 release contract](release-0.4.44.md).
 `HOOKS_DISABLED_EXTERNALLY`, a manifest mismatch or a concurrent installer is a
 real boundary, not a successful restoration. An explicit disableAllHooks is
 reported, never silently overridden. Changes are eventually repaired; the
