@@ -9,7 +9,19 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.44.** The configuration guardian closes its bounded read snapshot
+**Version: 0.4.45.** An original continuation that typed its own bridge probe but
+failed before any clear key can use `scripts/recover_bridge_probe_clear.py`.
+The default statically verifies the original archive and prints its SHA without
+live inspection. Apply requires that SHA, an exited original harness and the
+authenticated original supervisor. It uses the archived binding and complete
+original controller, preserves the failed evidence, and persists every key
+intent in a single-use slot. Only a complete, stable composer containing the
+exact original token permits clearing; receipt, queue evidence, uncertainty or
+another reservation permits no key. It never pastes, submits, handshakes or
+dispatches. Released or expired tasks may clear but cannot publish usable bridge
+evidence. See the [0.4.45 recovery contract](references/release-0.4.45.md).
+
+The configuration guardian closes its bounded read snapshot
 before parsing and planning. No-op profile checks never reserve the SQLite
 writer. Real changes use a short original-value CAS transaction; contention,
 concurrent edits and exhausted budgets are visible outcomes. The single job
