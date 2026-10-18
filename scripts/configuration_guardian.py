@@ -417,6 +417,102 @@ def reconcile(home, manifest_path, apply=False):
         return result
 
 
+def profile_path(settings):
+    """Explicit existing --settings file only; never follow a profile alias."""
+    path = Path(settings)
+    if (not path.is_absolute() or '..' in path.parts or path.is_symlink()
+            or path.resolve(strict=True) != path):
+        raise ValueError('profile must be a canonical absolute nonsymlink path')
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError('profile must be an owned regular file')
+    return path
+
+
+def profile_backup(home, path, raw):
+    """Keep exact private rollback bytes once per path/content, never in output."""
+    directory = state_root(home) / 'configuration-guardian-v1/profile-backups'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if directory.resolve() != directory:
+        raise ValueError('symlinked profile backup directory refused')
+    backup = directory / (digest(os.fsencode(path)) + '-' + digest(raw) + '.json')
+    try:
+        fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        info = backup.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or read_json(backup)[0] != raw):
+            raise ValueError('existing profile backup is not private and exact')
+    else:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+    return backup
+
+
+def reconcile_profile(home, manifest_path, settings, apply=False, expected_sha256=None):
+    """Preview or CAS-repair one explicit profile, without touching the guardian job."""
+    if expected_sha256 is not None and (
+            len(expected_sha256) != 64
+            or any(c not in '0123456789abcdef' for c in expected_sha256)):
+        raise ValueError('expected SHA256 must be a lowercase complete digest')
+    if apply and expected_sha256 is None:
+        raise ValueError('apply requires the exact preview SHA256')
+    path = profile_path(settings)
+    home = Path(home).expanduser().resolve()
+    root = state_root(home)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(root / 'install.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'r+') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return dict(status='INSTALLER_BUSY', changed=False, input_operations=0)
+        current, manager = load_release(home, manifest_path)
+        profile_path(path)
+        raw, doc = read_json(path)
+        before_sha256 = digest(raw)
+        result = dict(status='PROFILE_PLANNED', path=str(path), source=current['source'],
+                      before_sha256=before_sha256, bytes=len(raw), apply=apply,
+                      changed=False, input_operations=0, guardian_job_changed=False,
+                      runtime_reload_proven=False, hooks_disabled=doc.get('disableAllHooks') is True)
+        if expected_sha256 is not None and expected_sha256 != before_sha256:
+            result['status'] = 'CONCURRENT_EDIT'
+            return result
+        new = normalized(doc, manager, home, True)
+        result.update(change_needed=doc != new, non_hook_fields_preserved=True,
+                      foreign_hooks_preserved=True,
+                      planned_sha256=digest((json.dumps(new, ensure_ascii=False, indent=2) + '\n').encode()))
+        if apply and result['change_needed']:
+            # Retain both original rollback bytes and any later external edits.
+            result['backup'] = str(profile_backup(home, path, raw))
+            profile_path(path)
+            try:
+                atomic_json(path, new, raw, compare=True)
+            except RuntimeError:
+                result['status'] = 'CONCURRENT_EDIT'
+                return result
+            result.update(changed=True, replacement_performed=True)
+            try:
+                profile_path(path)
+                result['after_sha256'] = digest(read_json(path)[0])
+            except (OSError, ValueError):
+                result['status'] = 'POST_WRITE_VERIFICATION_FAILED'
+                return result
+            if result['after_sha256'] != result['planned_sha256']:
+                # A later writer owns these bytes. Never roll them back or
+                # report our planned hooks as the current configuration.
+                result['status'] = 'CONCURRENT_EDIT'
+                return result
+            result['status'] = 'PROFILE_RECONCILED'
+        elif not result['change_needed']:
+            result['status'] = 'PROFILE_UNCHANGED'
+        if result['hooks_disabled']:
+            result['status'] = 'HOOKS_DISABLED_EXTERNALLY'
+        return result
+
+
 def launchd_spec(home, source, python, manifest):
     home = Path(home)
     return dict(Label=LABEL, RunAtLoad=True, StartInterval=60, ThrottleInterval=60,
@@ -467,25 +563,40 @@ def install_job(home, manifest, apply=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['reconcile', 'install-job'])
+    parser.add_argument('mode', choices=['reconcile', 'install-job', 'reconcile-profile'])
     parser.add_argument('--home', type=Path, default=Path.home())
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--settings', type=Path,
+                        help='one explicit absolute Claude --settings JSON; never auto-discovered')
+    parser.add_argument('--expected-sha256', help='exact original profile bytes required for apply')
     args = parser.parse_args(argv)
+    if args.mode == 'reconcile-profile':
+        if args.settings is None or args.apply and args.expected_sha256 is None:
+            parser.error('reconcile-profile requires --settings and apply requires --expected-sha256')
+    elif args.settings is not None or args.expected_sha256 is not None:
+        parser.error('--settings and --expected-sha256 belong only to reconcile-profile')
     manifest = args.manifest or state_root(args.home) / 'CURRENT.json'
     try:
-        result = (reconcile(args.home, manifest, args.apply) if args.mode == 'reconcile'
-                  else install_job(args.home, manifest, args.apply))
+        if args.mode == 'reconcile-profile':
+            result = reconcile_profile(args.home, manifest, args.settings, args.apply,
+                                       args.expected_sha256)
+        else:
+            result = (reconcile(args.home, manifest, args.apply) if args.mode == 'reconcile'
+                      else install_job(args.home, manifest, args.apply))
     except Exception as exc:
         # Do not emit exception text: JSON/provider parsing errors can contain
         # credentials. Record only the class and keep the next reconcile alive.
         result = dict(status='RECONCILE_FAILED', error_type=type(exc).__name__,
                       at_epoch=time.time(), input_operations=0)
-        if args.apply:
+        if args.apply and args.mode != 'reconcile-profile':
             atomic_json(state_root(args.home) / 'configuration-guardian-v1/STATUS.json', result)
     print(json.dumps(result, ensure_ascii=False))
+    if args.mode == 'reconcile-profile' and result['status'] == 'INSTALLER_BUSY':
+        return 2
     return 0 if result['status'] in ('RECONCILED', 'INSTALLER_BUSY', 'JOB_PLANNED',
-                                     'JOB_REGISTERED') else 2
+                                     'JOB_REGISTERED', 'PROFILE_PLANNED',
+                                     'PROFILE_RECONCILED', 'PROFILE_UNCHANGED') else 2
 
 
 if __name__ == '__main__':

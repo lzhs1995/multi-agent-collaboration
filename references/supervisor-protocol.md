@@ -4,6 +4,9 @@ The supervisor owns the task scope, current authorization and final evidence
 review. The executor receives a concrete, bounded deliverable. Shared fixes
 have one maintainer; other supervisors submit the exact failing command,
 version, caller, stage, original result and reply path, then continue their work.
+Use [evidence and handoffs](collaboration-evidence-and-handoffs.md) for task
+notifications, bounded review, independent reply paths and the complete inbox
+ledger. These reporting rules do not add an idle-turn communication gate.
 
 ## Establish current scope once
 
@@ -162,8 +165,11 @@ command returns does not prove a live runner. Current advisory hooks do not
 refresh the legacy idle binding needed by the authenticated-new-dispatch exit.
 Write the bound issued mailbox reply first, let the explicit wait return, then
 perform a fresh preflight and formal dispatch; a TASK reply alone is not dispatch.
-While an original terminal attempt is unconfirmed, subsequent inquiries use files
-only. Preserve old pending attempts even if the original receiver process exits.
+While an original terminal attempt is unconfirmed, reconcile that same message
+without resending. Its automatic reask runner uses file inquiries meanwhile.
+Independent new information may be sent promptly through the supported entrypoint,
+which preserves any actual draft. Preserve old pending attempts even if the
+original receiver process exits.
 
 After dispatch, continue independent work. Use one task-bound sentinel where
 needed: 7200 seconds for stable long work, 1800 for medium risk, and 300–600 only

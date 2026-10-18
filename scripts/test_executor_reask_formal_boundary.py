@@ -581,6 +581,9 @@ class ConsumeControllerTests(unittest.TestCase):
                 stack.enter_context(patch.object(
                     module, name, side_effect=AssertionError(f'rejected consume called {name}')))
             result = self.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+        diagnostic = result.pop('controller_diagnostic')
+        self.assertEqual(diagnostic['invoked_controller'], reask.controller())
+        self.assertIn(diagnostic['original_identity'], ('RECORDED', 'UNKNOWN'))
         self.assertEqual(result, dict(
             outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0,
             consume_result=dict(status='ORIGINAL_CONTROLLER_REQUIRED', consumed=False,
@@ -588,6 +591,7 @@ class ConsumeControllerTests(unittest.TestCase):
                                 input_operations=0)))
         self.assertEqual(self.files(), before)
         self.assertEqual(self.channels.call_count, channel_calls)
+        return diagnostic
 
     def assert_consumed(self, state, *, continuing=False):
         result = self.consume(CALLER, state['reply']['body_sha256'], now=1003.)
@@ -612,7 +616,9 @@ class ConsumeControllerTests(unittest.TestCase):
                 else:
                     state['controller']['files'][part] = '0' * 64
                 self.write_original(state)
-                self.assert_rejected_without_writes(state)
+                diagnostic = self.assert_rejected_without_writes(state)
+                self.assertEqual(diagnostic['original_controller'], state['controller'])
+                self.assertEqual(diagnostic['original_identity'], 'RECORDED')
 
     def test_cross_controller_precedes_authorization_expiry_and_revocation(self):
         for change in ({'until_epoch': 1002.}, {'status': 'REVOKED'}, {}):
@@ -644,7 +650,10 @@ class ConsumeControllerTests(unittest.TestCase):
                     if case.startswith('v2-'):
                         state['version'] = 2
                 self.write_original(state)
-                self.assert_rejected_without_writes(state)
+                diagnostic = self.assert_rejected_without_writes(state)
+                self.assertIsNone(diagnostic['original_controller'])
+                self.assertEqual(diagnostic['original_identity'], 'UNKNOWN')
+                self.assertEqual(diagnostic['next_action'], 'INSPECT_ORIGINAL_EVIDENCE')
 
     def test_current_original_controller_can_consume_and_rearm(self):
         for continuing in (False, True):

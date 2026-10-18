@@ -863,8 +863,12 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
         if not supports_state(state, file_record, verification=verification):
             return dict(outcome='UNSUPPORTED_FILE_PROTOCOL', input_operations=0)
         preserve_legacy_snapshot(state, file_record)
-    elif original != controller():
-        return dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0)
+    else:
+        invoked = controller()
+        if original != invoked:
+            from executor_reask_protocol import controller_diagnostic
+            return dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0,
+                        controller_diagnostic=controller_diagnostic(original, invoked))
     state['check_count'] = state.get('check_count', 0) + 1
     poll_locked(state, now, file_only=file_only)
     poll_end = time.monotonic()

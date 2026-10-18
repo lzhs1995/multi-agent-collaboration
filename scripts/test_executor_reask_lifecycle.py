@@ -392,6 +392,11 @@ class PausedReplyTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertEqual(refused['consume_result']['status'], 'ORIGINAL_CONTROLLER_REQUIRED')
         self.assertFalse(refused['consume_result']['consumed'])
+        diagnostic = refused['controller_diagnostic']
+        self.assertEqual(diagnostic['original_controller'], original['controller'])
+        self.assertEqual(diagnostic['invoked_controller'], reask.controller())
+        self.assertEqual(diagnostic['original_identity'], 'RECORDED')
+        self.assertEqual(diagnostic['next_action'], 'USE_ORIGINAL_CONTROLLER')
         self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
 
     def test_consume_cli_revoked_authorization_does_not_acknowledge_reply(self):
@@ -528,7 +533,10 @@ class PausedReplyTests(unittest.TestCase):
         changed.pop('registration')
         reask.save(changed)
         before = reask.state_path(CALLER).read_bytes()
-        self.assertEqual(reask.tick(CALLER, now=1004.)['outcome'], 'ORIGINAL_CONTROLLER_REQUIRED')
+        refused = reask.tick(CALLER, now=1004.)
+        self.assertEqual(refused['outcome'], 'ORIGINAL_CONTROLLER_REQUIRED')
+        self.assertEqual(refused['controller_diagnostic']['original_controller'], changed['controller'])
+        self.assertEqual(refused['controller_diagnostic']['invoked_controller'], reask.controller())
         self.assertEqual(reask.tick(CALLER, now=1004., file_only=True)['outcome'], 'UNSUPPORTED_FILE_PROTOCOL')
         self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
         self.transport.assert_not_called()

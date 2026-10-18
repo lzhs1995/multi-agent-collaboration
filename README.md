@@ -1,4 +1,11 @@
-Current source: **0.4.46**. Ready prompts can be sent in either direction during
+Current source: **0.4.47**. An explicit `reconcile-profile` command repairs owned
+hooks in the actual `--settings` file with a preview SHA, private backup and
+concurrent-edit checks, preserving a paused guardian. Original-controller
+refusals name both sources; the reviewed 0.4.46 file protocol keeps its original
+authority. See the [0.4.47 release contract](references/release-0.4.47.md) and
+[evidence and handoffs](references/collaboration-evidence-and-handoffs.md).
+
+Ready prompts can be sent in either direction during
 active work and native `/goal` turns. Fresh preflight skips the optional
 input-and-clear probe, so communication requires neither an idle turn nor a Goal
 pause. Real drafts, original-attempt deduplication and native receipt checks remain.
