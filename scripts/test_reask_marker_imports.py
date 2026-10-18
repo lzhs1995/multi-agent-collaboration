@@ -79,6 +79,24 @@ print(json.dumps(state))
 
 
 class MarkerImportTests(unittest.TestCase):
+    def test_harness_loads_by_path_in_an_isolated_interpreter(self):
+        harness = Path(__file__).resolve().with_name('mac_harness.py')
+        probe = '''
+import importlib.util
+from pathlib import Path
+import sys
+assert str(Path(sys.argv[1]).parent) not in sys.path
+spec = importlib.util.spec_from_file_location('isolated_mac_harness', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module._ACTIVE_DIR == Path('/tmp/multi-agent-collaboration/_active')
+'''
+        with tempfile.TemporaryDirectory(prefix='harness-by-path-') as directory:
+            result = subprocess.run(
+                [sys.executable, '-B', '-I', '-c', probe, str(harness)],
+                cwd=directory, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def observe(self, scenario):
         with tempfile.TemporaryDirectory(prefix='marker-imports-') as directory:
             result = subprocess.run(

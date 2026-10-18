@@ -58,11 +58,11 @@ import uuid as _uuid
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from cmux_coordination_paths import ACTIVE_DIR as _ACTIVE_DIR
 
 # Import bridge from same directory
 _dir = Path(__file__).parent
 sys.path.insert(0, str(_dir))
+from cmux_coordination_paths import ACTIVE_DIR as _ACTIVE_DIR
 import cmux_bridge as cmux
 import cmux_claude_interruption as interrupted_probe
 import render_cmux_agent
