@@ -16,12 +16,13 @@ import re
 import stat
 import sys
 import tempfile
+import time
 from uuid import UUID
 
 # Bind imports to this installed release, never a cwd/PYTHONPATH transport.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cmux_bridge as bridge
-from cmux_message_journal import verified_receipt
+from cmux_message_journal import verified_no_input, verified_receipt
 from cmux_evidence_io import snapshot as evidence_snapshot
 import cmux_prompt_reference as prompt_reference
 
@@ -30,9 +31,10 @@ SCHEMA = "cmux-agent-bridge-adapter-v1"
 
 
 class Unconfirmed(RuntimeError):
-    def __init__(self, message, *, intent=None):
+    def __init__(self, message, *, intent=None, details=None):
         super().__init__(message)
         self.intent = str(intent) if intent is not None else None
+        self.details = details or {}
 
 
 def digest(value):
@@ -179,6 +181,33 @@ class Adapter:
             prompt_reference.verify(value["body_reference"], prompt_reference.original_helper_payload(value))
         return value, pin
 
+    def refuse_foreign_pending(self, pending, channel, identity, check_locks):
+        """Explain an intact other-caller pending; never move or adopt it."""
+        pointer, pending_pin = read_json(pending)
+        old_identity, marker = pointer.get('identity'), pointer.get('marker', '')
+        if (not isinstance(old_identity, dict) or set(old_identity) != set(IDENTITY_KEYS)
+                or not re.fullmatch(r'CMUX_HELPER_[0-9a-f]{64}', marker)
+                or pointer != dict(marker=marker, identity=old_identity)):
+            return
+        if (any(uuid(old_identity[k]) != old_identity[k] for k in IDENTITY_KEYS)
+                or old_identity['caller_surface_uuid'] == identity['caller_surface_uuid']
+                or any(old_identity[k] != identity[k] for k in IDENTITY_KEYS if k != 'caller_surface_uuid')):
+            return
+        path = channel / 'intents' / (marker + '.json')
+        _, intent_pin = self.read_request(path, old_identity)
+        check_locks()
+        self.live(identity['target_surface_uuid'], identity)
+        if snapshot(pending) != pending_pin or snapshot(path) != intent_pin:
+            raise Unconfirmed('HELPER_STATE_CHANGED')
+        raise Unconfirmed('HELPER_PENDING_OTHER_CALLER: original pending belongs to another supervisor; zero input',
+            intent=path, details=dict(input_operations=0, original_marker=marker,
+                original_caller_surface_uuid=old_identity['caller_surface_uuid'],
+                current_caller_surface_uuid=identity['caller_surface_uuid'],
+                original_state_preserved=True,
+                recovery='Keep the original pending, intent and controller. For a new explicitly user-authorized '
+                         'maintenance contact use successor-rebind-v2 with exact endpoint UUIDs; '
+                         'do not reconcile, replay or adopt the other caller\'s attempt.'))
+
     def deliver(self, surface, mode, message=None, request_id="", reconcile=False,
                 expected_identity=None, outer_check=None, intent=None):
         if outer_check is not None:
@@ -200,6 +229,7 @@ class Adapter:
                     marker = pointer.get("marker", "")
                     if (not re.fullmatch(r"CMUX_HELPER_[0-9a-f]{64}", marker)
                             or pointer != dict(marker=marker, identity=identity)):
+                        self.refuse_foreign_pending(pending, channel, identity, check_locks)
                         raise Unconfirmed("HELPER_PENDING_CHANGED")
                     path = channel / "intents" / (marker + ".json")
                     self.read_request(path, identity)
@@ -223,6 +253,7 @@ class Adapter:
                 if prior:
                     pointer, _ = read_json(pending)
                     if pointer != dict(marker=value["marker"], identity=identity):
+                        self.refuse_foreign_pending(pending, channel, identity, check_locks)
                         raise Unconfirmed("HELPER_PENDING: reconcile the original request; no new input")
                 existed = path.exists() or path.is_symlink()
                 if existed:
@@ -265,15 +296,57 @@ class Adapter:
                 if body and prompt_reference.verify(body) != body_pin:
                     raise Unconfirmed("HELPER_BODY_CHANGED")
 
+            def settle_no_input():
+                # Only the original caller's exact request can reach this point.
+                # Keep its intent and journal; release just the adapter pointer,
+                # while the canonical journal lock still excludes an input.
+                settlement = channel / 'settlements' / (value['marker'] + '.json')
+
+                def commit(proof):
+                    if (proof.get('source') != 'revalidated_message_no_input_v1'
+                            or proof.get('binding') != dict(identity=identity,
+                                marker=value['marker'], payload_sha256=digest(value['payload']))
+                            or proof.get('input_operations') != 0 or not proof.get('attempts')):
+                        raise Unconfirmed('HELPER_NO_INPUT_PROOF_INVALID')
+                    unchanged()
+                    write_json(settlement, dict(schema='cmux-agent-no-input-settlement-v1',
+                        request=str(path), marker=value['marker'], identity=identity,
+                        no_input_validation=proof, confirmed=False, input_operations=0,
+                        settled_epoch=time.time()))
+                    unchanged()
+                    if has_pending:
+                        pending.unlink()
+
+                proof = verified_no_input(bridge, target, value['payload'], value['marker'],
+                                          commit=commit)
+                if proof is not None:
+                    raise Unconfirmed('HELPER_NO_INPUT_SETTLED: original attempt sent no input; '
+                                      'this is not delivery', intent=path,
+                        details=dict(input_operations=0, pending_cleared=has_pending,
+                            original_state_preserved=True, settlement=str(settlement),
+                            no_input_validation=proof,
+                            recovery='Original intent and journal are retained. Repeating this request '
+                                     'does not resend it. A separately authorized new request uses '
+                                     'its own request id; no native receipt or business acceptance is inferred.'))
+
             unchanged()
             proof = verified_receipt(bridge, target, value["payload"], value["marker"])
             unchanged()
             result = None
             if proof is None:
-                result = bridge.submit_text(target, value["payload"], marker=value["marker"],
-                                            force_compose=False, reconcile_only=reconcile)
+                if reconcile:
+                    settle_no_input()
+                    unchanged()
+                try:
+                    result = bridge.submit_text(target, value["payload"], marker=value["marker"],
+                                                force_compose=False, reconcile_only=reconcile)
+                except Exception:
+                    unchanged()
+                    settle_no_input()
+                    raise
                 unchanged()
                 if not isinstance(result, dict) or result.get("confirmed") is not True:
+                    settle_no_input()
                     raise Unconfirmed("HELPER_NATIVE_RECEIPT_REQUIRED: queued/unknown is not delivery")
                 proof = verified_receipt(bridge, target, value["payload"], value["marker"])
             if (not isinstance(proof, dict)
@@ -394,7 +467,9 @@ def main(argv=None):
     except (Exception, KeyboardInterrupt) as exc:
         print(json.dumps(dict(schema=SCHEMA, confirmed=False, error=str(exc),
                               original_intent=getattr(exc, "intent", None),
-                              recovery="Preserve the original intent; reconcile read-only. No automatic repaste or key."),
+                              details=getattr(exc, 'details', {}),
+                              recovery=getattr(exc, 'details', {}).get('recovery',
+                                  "Preserve the original intent; reconcile read-only. No automatic repaste or key.")),
                          ensure_ascii=False), file=sys.stderr)
         return 75
     print(json.dumps(result, ensure_ascii=False))

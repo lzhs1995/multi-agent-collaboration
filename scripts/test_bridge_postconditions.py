@@ -105,7 +105,8 @@ class PendingReceiptTests(r3.OfflineWorkspaceFixture):
                     "detector unconfirmed", state=H.cmux.DELIVERY_UNVERIFIED_BY_DETECTOR)
                 with (
                     mock.patch.object(H.secrets, "token_hex", return_value="abcd"),
-                    mock.patch.object(H.cmux, "submit_text", side_effect=dispatch_error if late else None) as send,
+                    mock.patch.object(H.cmux, "submit_text", return_value={},
+                                      side_effect=dispatch_error if late else None) as send,
                     mock.patch.object(H.cmux, "wait_for_ack", side_effect=check_wait),
                 ):
                     H.cmd_handshake(r3.args(root))

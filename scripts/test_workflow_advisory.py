@@ -1,7 +1,9 @@
 """The installed workflow entrypoints observe every failure without blocking."""
 import contextlib
+import errno
 import io
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -122,7 +124,9 @@ class SupervisorInboxAdvisoryTests(unittest.TestCase):
     def invoke(self, hook='cmux_supervisor_report_guard.py', event='PostToolUse'):
         payload = dict(self.payload, hook_event_name=event)
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(sys, 'argv', ['advisory', '--hook', hook]), \
+        command = shlex.split(manager.command(Path(hook).stem))
+        self.assertEqual(Path(command[2]).resolve(), Path(advisory.__file__).resolve())
+        with patch.object(sys, 'argv', command[2:]), \
                 patch.object(sys, 'stdin', io.StringIO(json.dumps(payload))), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             self.assertEqual(advisory.main(), 0)
@@ -145,6 +149,43 @@ class SupervisorInboxAdvisoryTests(unittest.TestCase):
     def test_telemetry_failure_does_not_suppress_file_request(self):
         self.record.side_effect = OSError('audit storage unavailable')
         self.assertIn(self.marker, self.invoke())
+
+    def test_reopened_foreign_inbox_emits_nothing_and_preserves_cursors(self):
+        # Establish a real native directory offset through the registered hook.
+        self.assertIn(self.marker, self.invoke())
+        cursor_root = ready.state_root() / 'supervisor-inbox-discovery-v2'
+        before = {path: path.read_bytes() for path in cursor_root.rglob('*.json')}
+        self.assertTrue(before)
+        marker = 'EXECUTOR_READY_after_reopen'
+        result = reask.write_channels(self.state, marker, 'new request', 3.0)
+        self.assertEqual(result['errors'], [])
+        other = self.home / 'foreign-inbox'
+        other.mkdir()
+        # A foreign page with a real request name could otherwise cause exposure
+        # and cursor commits. Its contents are never trusted as request bytes.
+        (other / reask.inbox_path(self.state).name).write_text('{}')
+        native_open = os.open
+        reopened = []
+
+        def replace_reopened_stream(name, flags, *args, **kwargs):
+            if name == '.' and 'dir_fd' in kwargs:
+                fd = native_open(other, flags)
+                reopened.append(fd)
+                return fd
+            return native_open(name, flags, *args, **kwargs)
+
+        with patch.object(inbox.os, 'open', side_effect=replace_reopened_stream):
+            self.assertEqual(self.invoke(), '')
+        self.assertEqual(len(reopened), 1)
+        self.assertEqual({path: path.read_bytes() for path in cursor_root.rglob('*.json')},
+                         before)
+        for fd in reopened:
+            with self.assertRaises(OSError) as closed:
+                os.fstat(fd)
+            self.assertEqual(closed.exception.errno, errno.EBADF)
+        # The failed observation did not lose the request or poison the cursor.
+        self.assertIn(marker, self.invoke())
+        self.assertFalse((ready.state_root() / 'message-dispatch-v1').exists())
 
     def test_discovery_error_never_blocks_or_emits_a_control_response(self):
         with patch.object(inbox, 'discover', side_effect=OSError('inbox unavailable')):

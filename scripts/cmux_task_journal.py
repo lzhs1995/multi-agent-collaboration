@@ -70,7 +70,10 @@ def verified_receipt(bridge, surface, text, marker, task_pack_path):
 
 
 def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=200,
-            force_compose=False, *, reconcile_only=False):
+            force_compose=False, *, reconcile_only=False, wait_seconds=None):
+    from cmux_confirmation import (wait_budget, controller_provenance, attempt_details,
+                                   annotate_attempt_error, observe_attempt)
+    seconds = wait_budget(wait_seconds, reconcile_only=reconcile_only)
     from availability_contract import require_action
     pack = bridge.validate_task_pack_contract(task_pack_path, prompt_text=text)
     require_action(pack['task_id'], 'dispatch', pack)
@@ -153,11 +156,14 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         if reconcile_only:
             if not old or old.get('phase') in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_DISPATCH')
-            result = native.scan_original(bridge, surface, text, attempts[-1], old.get('native_binding'))
+            result = observe_attempt(lambda: native.scan_original(
+                bridge, surface, text, attempts[-1], old.get('native_binding')),
+                attempts[-1], old, seconds, reconcile_only=True)
             observation = journal / ('observation-' + str(time.time_ns()) + '.json')
             write_json(observation, dict(result, input_operations=0, at_epoch=time.time()))
             if result.get('confirmed') is not True:
-                raise bridge.DispatchUnconfirmed('DISPATCH_NOT_YET_CONFIRMED: observe original; no resend')
+                raise bridge.DispatchUnconfirmed('DISPATCH_NOT_YET_CONFIRMED: observe original; no resend',
+                                                 details=result)
             result = dict(result, reconciled_read_only=True, observation=str(observation))
             attempt_path = attempts[-1]
         else:
@@ -169,7 +175,8 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
                     'use resume_task_no_input.py with the original controller, pack and text')
             attempt_path = journal / ('attempt-%04d.json' % (len(attempts) + 1))
             attempt = dict(binding=binding, phase='PREPARED', events=[], started_at_epoch=time.time(),
-                           delivery_lock_identity=delivery_lock_identity)
+                           delivery_lock_identity=delivery_lock_identity,
+                           controller_provenance=controller_provenance(__file__))
             write_json(attempt_path, attempt)
 
             def observe(phase, screen=None, *, evidence=None):
@@ -190,20 +197,24 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
                 write_json(attempt_path, attempt)
                 result = bridge.submit_text(surface, text, marker=marker, confirm_lines=confirm_lines,
                     task_pack_path=task_pack_path, delivery_observer=observe,
-                    native_binding=attempt['native_binding'], native_attempt=attempt_path)
+                    native_binding=attempt['native_binding'], native_attempt=attempt_path,
+                    wait_seconds=seconds)
                 if result.get('confirmed') is not True:
-                    raise bridge.DispatchUnconfirmed('DISPATCH_NOT_CONFIRMED')
+                    raise bridge.DispatchUnconfirmed('DISPATCH_NOT_CONFIRMED', details=result)
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'
-                attempt.update(error=str(exc), ended_at_epoch=time.time())
+                annotate_attempt_error(exc, attempt_path, attempt)
+                attempt.update(error=str(exc), error_details=exc.details, ended_at_epoch=time.time())
                 write_json(attempt_path, attempt)
                 raise
             attempt.update(phase='CONFIRMED', ended_at_epoch=time.time())
             write_json(attempt_path, attempt)
         recheck()
-        if not native.receipt_evidence(bridge, surface, text, json.loads(read_bytes(attempt_path)), result):
-            raise bridge.DispatchUnconfirmed('DISPATCH_NATIVE_PROOF_REQUIRED')
+        original = json.loads(read_bytes(attempt_path))
+        result = attempt_details(result, attempt_path, original, reconcile_only=reconcile_only)
+        if not native.receipt_evidence(bridge, surface, text, original, result):
+            raise bridge.DispatchUnconfirmed('DISPATCH_NATIVE_PROOF_REQUIRED', details=result)
         result = dict(result, binding=binding, attempt=str(attempt_path), at_epoch=time.time())
         fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as handle:

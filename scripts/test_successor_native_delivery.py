@@ -221,6 +221,78 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(result["input_operations"], 0)
         self.assertEqual(self.bridge.operations, ["rpc"])
 
+    def assert_primary_failure_preserved(self, *, fail_annotation, fail_event):
+        self.bridge.fail_paste = True
+        annotate, event = delivery.annotate_attempt_error, delivery._event
+
+        def annotate_or_fail(*args, **kwargs):
+            if fail_annotation:
+                raise OSError('annotation unavailable')
+            return annotate(*args, **kwargs)
+
+        def event_or_fail(journal, phase, **kwargs):
+            if phase == 'ERROR' and fail_event:
+                raise OSError('error journal unavailable')
+            return event(journal, phase, **kwargs)
+
+        with patch.object(delivery, 'annotate_attempt_error', side_effect=annotate_or_fail), \
+                patch.object(delivery, '_event', side_effect=event_or_fail):
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous paste failure') as raised:
+                self.submit()
+        notes = '\n'.join(raised.exception.__notes__)
+        if fail_annotation:
+            self.assertIn('annotation unavailable', notes)
+        if fail_event:
+            self.assertIn('error journal unavailable', notes)
+        events = [json.loads(p.read_text()) for p in self.journal().glob('event-*.json')]
+        self.assertEqual(sum(e['phase'] == 'PASTE_INTENT' for e in events), 1)
+        self.assertFalse(any(e['phase'] == 'KEY_INTENT' for e in events))
+        errors = [e for e in events if e['phase'] == 'ERROR']
+        self.assertEqual(len(errors), int(not fail_event))
+        if errors:
+            self.assertEqual(errors[0]['error'], 'ambiguous paste failure')
+            self.assertEqual(errors[0]['input_operations_attempted'], 1)
+        before = (self.journal() / 'attempt.json').read_bytes()
+        for again in (self.reconcile, self.submit):
+            result = again()
+            self.assertFalse(result['confirmed'])
+            self.assertEqual(result['input_operations'], 0)
+        self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
+        self.assertEqual(self.bridge.operations, ['rpc'])
+
+    def test_annotation_failure_preserves_primary_and_original_input_budget(self):
+        self.assert_primary_failure_preserved(fail_annotation=True, fail_event=False)
+
+    def test_error_event_failure_preserves_primary_and_original_input_budget(self):
+        self.assert_primary_failure_preserved(fail_annotation=False, fail_event=True)
+
+    def test_both_diagnostic_failures_preserve_primary_and_original_input_budget(self):
+        self.assert_primary_failure_preserved(fail_annotation=True, fail_event=True)
+
+    def test_reconcile_annotation_failure_preserves_original_observation_error(self):
+        self.bridge.response = 'none'
+        self.submit()
+        before = (self.journal() / 'attempt.json').read_bytes()
+
+        class LegacyObservationError(delivery.native.NativeDeliveryError):
+            # Python 3.10 has no BaseException.add_note.
+            add_note = None
+
+        for error_type in (delivery.native.NativeDeliveryError, LegacyObservationError):
+            with self.subTest(error_type=error_type.__name__):
+                primary = error_type('original transcript unavailable')
+                primary.__notes__ = ['earlier diagnostic']
+                with patch.object(delivery, '_observe', side_effect=primary), \
+                        patch.object(delivery, 'annotate_attempt_error',
+                                     side_effect=OSError('annotation unavailable')):
+                    with self.assertRaises(delivery.native.NativeDeliveryError) as raised:
+                        self.reconcile()
+                self.assertIs(raised.exception, primary)
+                self.assertEqual(primary.__notes__[0], 'earlier diagnostic')
+                self.assertIn('annotation unavailable', '\n'.join(primary.__notes__))
+                self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
+                self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+
     def test_foreign_draft_has_zero_input_and_no_attempt(self):
         self.bridge.occupied = True
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "COMPOSE_OCCUPIED"):
@@ -252,6 +324,67 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.append_record(self.text)
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "PASTE_FENCE_REQUIRED"):
             delivery.scan_received(self.bridge, self.artifact, binding, self.text)
+
+    def test_reconcile_resumes_partial_line_without_rescanning_old_records(self):
+        self.bridge.response = "none"
+        self.submit()
+        original = (self.journal() / "attempt.json").read_bytes()
+        self.append_record("unrelated complete record")
+        self.append_record(self.text, newline=False)
+        result = self.reconcile()
+        self.assertFalse(result["confirmed"])
+        cursor = json.loads((self.journal() / "native-scan.json").read_text())["next_offset"]
+        self.assertGreater(cursor, json.loads(original)["native_binding"]["transcript"]["offset"])
+        with self.transcript.open("ab") as stream:
+            stream.write(b"\n")
+        result = self.reconcile()
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["input_operations"], 0)
+        self.assertEqual((self.journal() / "attempt.json").read_bytes(), original)
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_cached_proof_is_revalidated_against_exact_record_bytes(self):
+        self.submit()
+        proof = json.loads((self.journal() / "native-scan.json").read_text())["native_proof"]
+        with self.transcript.open("r+b") as stream:
+            stream.seek(proof["offset"])
+            stream.write(b"!")
+        with self.assertRaises(delivery.native.NativeDeliveryError):
+            self.reconcile()
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_transcript_rotation_and_truncation_cannot_reuse_cached_proof(self):
+        self.submit()
+        raw = self.transcript.read_bytes()
+        self.transcript.write_bytes(b"")
+        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "TRUNCATED"):
+            self.reconcile()
+        self.transcript.write_bytes(raw)
+        replacement = self.transcript.with_suffix(".replacement")
+        replacement.write_bytes(raw)
+        replacement.replace(self.transcript)
+        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "REPLACED"):
+            self.reconcile()
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_changed_cursor_binding_refuses_observation_without_new_input(self):
+        self.bridge.response = "none"
+        self.submit()
+        path = self.journal() / "native-scan.json"
+        cursor = json.loads(path.read_text())
+        cursor["intent_sha256"] = "0" * 64
+        path.write_text(json.dumps(cursor))
+        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "SCAN_BINDING_CHANGED"):
+            self.reconcile()
+        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+
+    def test_invalid_window_never_creates_successor_attempt(self):
+        for value in (-1, 61, True, float("nan")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "CONFIRMATION_WINDOW_INVALID"):
+                delivery.submit(self.bridge, self.artifact, self.text, marker=self.marker,
+                                state_root=self.root, wait_seconds=value)
+        self.assertFalse(self.journal().exists())
+        self.assertEqual(self.bridge.operations, [])
 
 
 class SuccessorCliTests(unittest.TestCase):

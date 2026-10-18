@@ -1,9 +1,11 @@
 """File inquiries remain discoverable without arming a research task."""
 import contextlib
 import copy
+import errno
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -30,10 +32,29 @@ class InboxTest(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(Path, 'home', return_value=self.home))
         self.payload, self.proof = native_thread(self.home)
         self.emissions = []
+        self.discovery_trace = []
 
     def discover(self, *, now=100.0, emit=None):
-        return inbox.discover_bound(WORKSPACE, SUP, thread_id=self.payload['session_id'],
-                                    emit=self.emissions.append if emit is None else emit, now=now)
+        # Keep native paging evidence in assertion failures: directory offsets
+        # and EOF behavior differ between the real CI filesystems.
+        frontier = self.cursor() / 'frontier.json'
+        trace = dict(now=now, before=ready.read_json(frontier), pages=[])
+        native = inbox.directory.read_page
+
+        def observe(fd, offset):
+            names, following = native(fd, offset)
+            trace['pages'].append(dict(offset=offset, following=following,
+                                       count=len(names), names=names[:4]))
+            return names, following
+
+        try:
+            with mock.patch.object(inbox.directory, 'read_page', side_effect=observe):
+                return inbox.discover_bound(
+                    WORKSPACE, SUP, thread_id=self.payload['session_id'],
+                    emit=self.emissions.append if emit is None else emit, now=now)
+        finally:
+            trace['after'] = ready.read_json(frontier)
+            self.discovery_trace = (self.discovery_trace + [trace])[-4:]
 
     def request(self, caller=CALLER, marker='EXECUTOR_READY_one'):
         state = reask.start(caller, SUP, 'completed-task', now=1.0, workspace=WORKSPACE)
@@ -51,7 +72,7 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(notices[0]['input_operations'], 0)
         self.assertEqual(self.discover(), [])
         reask.write_channels(state, 'EXECUTOR_READY_two', 'request', 62.0)
-        self.assertEqual(len(self.discover()), 1)
+        self.assertEqual(len(self.discover()), 1, self.discovery_trace)
         self.assertEqual(len(list(path.parent.glob('*.json'))), 1)
 
     def test_wrong_workspace_supervisor_paths_templates_and_inactive_requests_refused(self):
@@ -66,7 +87,7 @@ class InboxTest(unittest.TestCase):
                 ready.write_json(path, dict(body, **change))
                 self.assertEqual(self.discover(), [])
         ready.write_json(path, body)
-        self.assertEqual(len(self.discover()), 1)
+        self.assertEqual(len(self.discover()), 1, self.discovery_trace)
 
     def test_frozen_full_request_can_reply_after_current_path_and_history_rotate(self):
         import mac_harness as harness
@@ -156,8 +177,103 @@ class InboxTest(unittest.TestCase):
         self.request()
         self.assertEqual(len(self.discover(now=100.0)), 1)
         self.assertEqual(self.discover(now=159.999), [])
-        self.assertEqual(len(self.discover(now=160.0)), 1)
+        self.assertEqual(len(self.discover(now=160.0)), 1, self.discovery_trace)
         self.assertEqual(self.discover(now=160.001), [])
+
+    def test_eof_restart_uses_an_independent_directory_stream(self):
+        _state, path = self.request()
+        previous = inbox._frontier(path.parent, {})
+        previous['pending'] = []
+        self.assertGreater(previous['offset'], 0)
+        native = inbox.directory.read_page
+        first_fd = None
+        pages = []
+
+        def sticky_eof(fd, offset):
+            nonlocal first_fd
+            if first_fd is None:
+                first_fd = fd
+                os.lseek(fd, offset, os.SEEK_SET)
+                result = [], offset
+            else:
+                # Model ext4's per-open-file EOF hash cache. Rewinding the
+                # original stream (including a dup) does not clear that cache.
+                os.lseek(fd, 0, os.SEEK_SET)
+                if os.lseek(first_fd, 0, os.SEEK_CUR) == 0:
+                    result = [], previous['offset']
+                else:
+                    result = native(fd, offset)
+            pages.append(result)
+            return result
+
+        with mock.patch.object(inbox.directory, 'read_page', side_effect=sticky_eof):
+            current = inbox._frontier(path.parent, previous)
+        self.assertEqual(current['pending'], [path.name])
+        self.assertNotEqual(current['round'], previous['round'])
+        self.assertEqual(current['directory'], previous['directory'])
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(sum(bool(names) for names, _offset in pages), 1)
+
+    def test_eof_restart_stays_with_open_inode_when_directory_path_is_replaced(self):
+        _state, path = self.request()
+        root = path.parent
+        previous = inbox._frontier(root, {})
+        previous['pending'] = []
+        archived = root.with_name(root.name + '-previous')
+        replacement_name = '0' * 64 + '.json'
+        native = inbox.directory.read_page
+        reads = 0
+
+        def replace_at_eof(fd, offset):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                root.rename(archived)
+                root.mkdir()
+                (root / replacement_name).touch()
+                return [], offset
+            return native(fd, offset)
+
+        with mock.patch.object(inbox.directory, 'read_page', side_effect=replace_at_eof):
+            current = inbox._frontier(root, previous)
+        self.assertEqual(current['directory'], previous['directory'])
+        self.assertEqual(current['pending'], [path.name])
+        self.assertEqual(reads, 2)
+        # The next event sees the replacement inode and discards the old page.
+        replaced = inbox._frontier(root, current)
+        self.assertNotEqual(replaced['directory'], current['directory'])
+        self.assertEqual(replaced['pending'], [replacement_name])
+
+    def test_eof_restart_rejects_a_different_inode_and_closes_both_streams(self):
+        _state, path = self.request()
+        previous = inbox._frontier(path.parent, {})
+        previous['pending'] = []
+        original = copy.deepcopy(previous)
+        other = self.home / 'different-inbox'
+        other.mkdir()
+        native_open = os.open
+        opened = []
+
+        def replace_reopened_stream(name, flags, *args, **kwargs):
+            if name == '.' and 'dir_fd' in kwargs:
+                fd = native_open(other, flags)
+            else:
+                fd = native_open(name, flags, *args, **kwargs)
+            opened.append(fd)
+            return fd
+
+        with mock.patch.object(inbox.os, 'open', side_effect=replace_reopened_stream), \
+                mock.patch.object(inbox.directory, 'read_page', return_value=([], previous['offset'])) as read:
+            with self.assertRaises(OSError) as raised:
+                inbox._frontier(path.parent, previous)
+        self.assertEqual(raised.exception.errno, errno.ESTALE)
+        self.assertEqual(read.call_count, 1)  # The foreign stream was never read.
+        self.assertEqual(previous, original)
+        self.assertEqual(len(opened), 2)
+        for fd in opened:
+            with self.assertRaises(OSError) as closed:
+                os.fstat(fd)
+            self.assertEqual(closed.exception.errno, errno.EBADF)
 
     def test_discovery_cursors_are_isolated_by_actual_thread(self):
         self.request()
@@ -184,6 +300,148 @@ class InboxTest(unittest.TestCase):
         self.assertIn('REQUEST_DISCOVERED', result['additionalContext'])
         self.assertIn('REPLY=', result['additionalContext'])
         self.assertEqual(inbox.discover(dict(hook_event_name='Stop')), [])
+
+    def cursor(self, thread=None):
+        return (ready.state_root() / 'supervisor-inbox-discovery-v2'
+                / ready.digest(json.dumps([WORKSPACE, SUP, thread or self.payload['session_id']])))
+
+    def refuse_whole_inbox_scan(self, root):
+        real_scandir = os.scandir
+
+        def scan(path='.'):
+            if not isinstance(path, int) and Path(os.fsdecode(path)).resolve() == root.resolve():
+                raise AssertionError('no full inbox scan')
+            # Bound reply-mailbox lookup is a separate, legitimate operation.
+            return real_scandir(path)
+
+        return mock.patch.object(os, 'scandir', side_effect=scan)
+
+    def test_large_real_inbox_drains_despite_marker_churn_and_sparse_events(self):
+        states = {}
+        for _ in range(inbox.MAX_ENTRIES + 65):
+            caller = str(uuid.uuid4()).upper()
+            states[caller], _path = self.request(caller)
+        seen = set()
+        first = None
+        calls = []
+        native = inbox.directory.read_page
+
+        def observe(fd, offset):
+            result = native(fd, offset)
+            calls.append(len(result[0]))
+            return result
+
+        with mock.patch.object(inbox.directory, 'read_page', side_effect=observe), \
+                self.refuse_whole_inbox_scan(_path.parent):
+            for index in range(len(states)):
+                calls.clear()
+                batch = self.discover(now=100.0 + index * 60)
+                self.assertLessEqual(len(batch), inbox.MAX_NOTICES)
+                self.assertLessEqual(sum(calls), inbox.MAX_ENTRIES)
+                self.assertLessEqual(len(calls), 2)
+                if first is None and batch:
+                    first = batch[0]['caller_surface_uuid']
+                shown = {notice['caller_surface_uuid'] for notice in batch}
+                # Before the first walk completes, even old requests eligible
+                # for a reminder cannot overtake undiscovered later callers.
+                self.assertFalse(shown & seen)
+                seen.update(shown)
+                if seen == set(states):
+                    break
+                if first:
+                    reask.write_channels(states[first], f'EXECUTOR_READY_churn_{index}',
+                                         'still waiting', 101.0 + index * 60)
+            self.assertEqual(seen, set(states))
+
+    def test_junk_bad_files_and_symlinks_do_not_stop_later_valid_requests(self):
+        _state, valid = self.request()
+        wanted = json.loads(valid.read_bytes())
+        for index in range(inbox.MAX_ENTRIES * 3):
+            name = f'{index:064x}.json'
+            p = valid.parent / name
+            if index % 4 == 0:
+                p.symlink_to(valid)
+            elif index % 4 == 1:
+                p.mkdir()
+            elif index % 4 == 2:
+                p.write_text('{broken')
+            else:
+                p.write_text(json.dumps(dict(wanted, supervisor=CALLER)))
+        for index in range(inbox.MAX_ENTRIES + 1):
+            (valid.parent / f'junk-{index}').touch()
+        batches = []
+        with self.refuse_whole_inbox_scan(valid.parent):
+            for _ in range(100):
+                batch = self.discover()
+                batches.extend(batch)
+                if batch:
+                    break
+        self.assertEqual([notice['caller_surface_uuid'] for notice in batches], [CALLER])
+
+    def test_emit_failure_leaves_frontier_and_reminder_files_unchanged(self):
+        for _ in range(20):
+            self.request(str(uuid.uuid4()))
+        first = self.discover()
+        cursor = self.cursor()
+        before = {p.name: p.read_bytes() for p in cursor.iterdir() if p.suffix == '.json'}
+        observation = inbox.discover_bound(WORKSPACE, SUP,
+            thread_id=self.payload['session_id'], now=160.0)
+        self.assertEqual(len(observation), inbox.MAX_NOTICES)
+        with self.assertRaises(BrokenPipeError):
+            self.discover(now=160.0, emit=mock.Mock(side_effect=BrokenPipeError('flush failed')))
+        self.assertEqual(before, {p.name: p.read_bytes() for p in cursor.iterdir()
+                                  if p.suffix == '.json'})
+        second = self.discover(now=160.0)
+        self.assertEqual(second, observation)
+        self.assertFalse({x['caller_surface_uuid'] for x in first}
+                         & {x['caller_surface_uuid'] for x in second})
+
+    def test_empty_pages_commit_only_after_successful_flush_without_empty_notice(self):
+        _state, path = self.request()
+        path.unlink()
+        (path.parent / 'junk').touch()
+        cursor = self.cursor()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(self.discover(emit=inbox.emit_context), [])
+        self.assertEqual(output.getvalue(), '')
+        frontier = cursor / 'frontier.json'
+        before = frontier.read_bytes()
+        with mock.patch.object(inbox.sys, 'stdout') as stream:
+            stream.flush.side_effect = BrokenPipeError('no client')
+            with self.assertRaises(BrokenPipeError):
+                self.discover(emit=inbox.emit_context)
+        self.assertEqual(frontier.read_bytes(), before)
+
+    def test_replaced_directory_invalidates_saved_backlog_and_symlink_is_refused(self):
+        for _ in range(15):
+            self.request(str(uuid.uuid4()))
+        first = self.discover()
+        root = Path(first[0]['request']).parent
+        archived = root.with_name(root.name + '-previous')
+        root.rename(archived)
+        root.mkdir()
+        caller = str(uuid.uuid4())
+        self.request(caller)
+        self.assertEqual([x['caller_surface_uuid'] for x in self.discover()], [caller])
+        for p in root.iterdir():
+            p.unlink()
+        root.rmdir()
+        root.symlink_to(archived, target_is_directory=True)
+        self.assertEqual(self.discover(), [])
+
+    def test_large_inbox_frontiers_are_independent_between_actual_threads(self):
+        for _ in range(20):
+            self.request(str(uuid.uuid4()))
+        first = self.discover()
+        other = str(uuid.uuid4())
+        another = inbox.discover_bound(WORKSPACE, SUP, thread_id=other,
+                                       emit=self.emissions.append, now=100.0)
+        self.assertEqual([x['request'] for x in first], [x['request'] for x in another])
+        second = self.discover()
+        another_second = inbox.discover_bound(WORKSPACE, SUP, thread_id=other,
+                                              emit=self.emissions.append, now=100.0)
+        self.assertEqual([x['request'] for x in second], [x['request'] for x in another_second])
 
 
 if __name__ == '__main__':

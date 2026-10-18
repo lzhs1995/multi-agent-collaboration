@@ -60,7 +60,7 @@ def _provider(p):
         return "claude"
     return None
 
-def _live_session(p, provider):
+def _live_session(p, provider, *, require_native=False):
     if provider == "codex":
         try:
             selected = foreground.read(p)
@@ -90,6 +90,8 @@ def _live_session(p, provider):
                     or reg.get("kind") != "interactive" or reg.get("procStart") not in births):
                 raise NativeDeliveryError("NATIVE_REGISTRATION_PROCESS_MISMATCH")
             return _uuid(reg["sessionId"])
+    if require_native:
+        raise NativeDeliveryError('NATIVE_CLIENT_SESSION_REQUIRED: resume arguments are not live identity')
     selected = _session_argument(p)
     if provider not in ("claude", "codex") or selected is None:
         raise NativeDeliveryError("NATIVE_SESSION_UNRESOLVED: no input; native selector required")
@@ -471,7 +473,13 @@ def probe(b, text, *, cursor=None, max_bytes=MAX_SCAN, not_before=None, paste_fe
                     "NATIVE_QUEUED" if queued else "NATIVE_PENDING"),
                     queued_proof=queued, next_offset=cursor)
 
-def validate_proof(b, text, proof, *, not_before=None, paste_fence=None):
+def proof_received_at(b, text, proof, *, not_before=None, paste_fence=None):
+    """Return the timestamp from the exact validated native record, or None.
+
+    Receipt publication, RPC acceptance and file mtime are not reception times.
+    Keep the original fence, complete payload and record hash checks together
+    with the timestamp read so callers cannot substitute unverified metadata.
+    """
     try:
         original = b
         b = _fenced_binding(b, text, paste_fence, not_before)
@@ -482,23 +490,32 @@ def validate_proof(b, text, proof, *, not_before=None, paste_fence=None):
                 or any(proof.get(k) != pin[k] for k in ("path", "device", "inode"))
                 or type(proof.get("offset")) is not int or proof["offset"] < pin["offset"]
                 or type(proof.get("length")) is not int or not 0 < proof["length"] <= MAX_RECORD):
-            return False
+            return None
         with _open(pin["path"]) as f:
             _check_file(f, original)
             _check_file(f, b)
             if proof["offset"] > 0:
                 f.seek(proof["offset"]-1)
                 if f.read(1) != b"\n":
-                    return False
+                    return None
             f.seek(proof["offset"])
             raw = f.read(proof["length"])
             if not raw.endswith(b"\n") or _hash(raw) != proof["sha256"]:
-                return False
+                return None
             r = json.loads(raw)
-            return (isinstance(r, dict) and proof.get("reception_kind") == "native_user_message"
-                    and _inbound(r, b, text, not_before, fenced=True) == "native_user_message")
+            if (isinstance(r, dict) and proof.get("reception_kind") == "native_user_message"
+                    and _inbound(r, b, text, not_before, fenced=True) == "native_user_message"):
+                _check_file(f, original)
+                _check_file(f, b)
+                return _timestamp(r["timestamp"])
+            return None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, NativeDeliveryError):
-        return False
+        return None
+
+
+def validate_proof(b, text, proof, *, not_before=None, paste_fence=None):
+    return proof_received_at(b, text, proof, not_before=not_before,
+                             paste_fence=paste_fence) is not None
 
 def confirmed(bridge, surface, binding, text, *, proof=None, paste_fence=None, not_before=None):
     require_bound(bridge, surface, binding, text)
@@ -579,19 +596,29 @@ def scan_original(bridge, surface, text, attempt_path, binding, *, read_only=Fal
                 result["state"] = "NATIVE_QUEUED"
         write_json(state_path, dict(result, binding_sha256=binding_hash,
                                    intent_sha256=intent_hash, attempt=str(path)))
+    from cmux_turn_diagnostic import observe as observe_turn
+    diagnostic = observe_turn(binding, text, attempt['events'], path,
+                              path.with_name('turn-scan-' + path.stem + '.json'))
     require_bound(bridge, surface, binding, text, read_only=read_only)
-    return dict(result, native_binding=binding, confirmation_source="native_user_message_v1")
+    return dict(result, native_binding=binding, confirmation_source="native_user_message_v1",
+                native_turn_diagnostic=diagnostic)
+
+
+def receipt_received_at(bridge, surface, text, attempt, receipt, *, read_only=False):
+    """Read the original native reception time under the live receipt binding."""
+    b = attempt.get("native_binding")
+    if (receipt.get("confirmed") is not True or not b or receipt.get("native_binding") != b
+            or receipt.get("confirmation_source") != "native_user_message_v1"):
+        return None
+    intent_at, fence = _original_intent(attempt, b, text)
+    require_bound(bridge, surface, b, text, read_only=read_only)
+    return proof_received_at(b, text, receipt.get("native_proof"), not_before=intent_at, paste_fence=fence)
 
 
 def receipt_evidence(bridge, surface, text, attempt, receipt, *, read_only=False):
     """只核现有回执，屏幕/按键/排队永不升级为 confirmed。"""
-    b = attempt.get("native_binding")
-    if (receipt.get("confirmed") is not True or not b or receipt.get("native_binding") != b
-            or receipt.get("confirmation_source") != "native_user_message_v1"):
-        return False
-    intent_at, fence = _original_intent(attempt, b, text)
-    require_bound(bridge, surface, b, text, read_only=read_only)
-    return validate_proof(b, text, receipt.get("native_proof"), not_before=intent_at, paste_fence=fence)
+    return receipt_received_at(bridge, surface, text, attempt, receipt,
+                               read_only=read_only) is not None
 
 def register_hook(payload):
     """已退役：普通工具与 hook 共享祖先，手工 payload 不能绑定原生会话。"""

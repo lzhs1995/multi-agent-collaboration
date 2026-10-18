@@ -483,6 +483,123 @@ def _gate_executors(gate):
     return out
 
 
+def _matching_reservation(directory, candidate):
+    """Reuse one native-bound reservation while all participant/marker locks hold.
+
+    Surface labels are display data. Missing native pins cannot establish the
+    same conversation, and historical duplicates are preserved for their owner
+    to release explicitly rather than silently merged or replaced.
+    """
+    from executor_reask_lifecycle import MAX_FORMAL_MARKERS, marker_epoch, valid_epoch
+
+    def well_formed(marker):
+        # Pre-native v2 markers have complete participant rows but no native
+        # session keys at all. They remain preserved and cannot establish a
+        # conversation match. Missing rows or partial native pins are damage,
+        # not permission to silently create another reservation.
+        if (marker.get('marker_version') != _ACTIVE_MARKER_VERSION
+                or not all(isinstance(marker.get(key), str) and marker[key] for key in
+                           ('collaboration_id', 'task_id', 'artifact_root',
+                            'workspace_id', 'workspace_uuid'))):
+            return False
+        participants = marker.get('participants')
+        if not isinstance(participants, list) or len(participants) < 2:
+            return False
+        for index, participant in enumerate(participants):
+            if (not isinstance(participant, dict)
+                    or participant.get('role') != ('supervisor' if index == 0 else 'executor')
+                    or type(participant.get('ordinal')) is not int
+                    or participant['ordinal'] != index
+                    or not all(isinstance(participant.get(key), str) for key in
+                               ('surface_ref', 'surface_uuid', 'provider'))):
+                return False
+        if any('native_session_id' in row for row in participants):
+            for row in participants:
+                if not all(isinstance(row.get(key), str) and row[key] for key in
+                           ('surface_uuid', 'provider', 'native_session_id')):
+                    return False
+                try:
+                    _uuid.UUID(row['native_session_id'])
+                    _uuid.UUID(row['surface_uuid'])
+                except ValueError:
+                    return False
+        return True
+
+    def identity(marker):
+        participants = marker.get('participants')
+        if not isinstance(participants, list) or not participants:
+            return None
+        keys = ('role', 'ordinal', 'surface_uuid', 'provider', 'native_session_id')
+        pins = []
+        for participant in participants:
+            if (not isinstance(participant, dict)
+                    or not all(participant.get(k) for k in
+                               ('role', 'surface_uuid', 'provider', 'native_session_id'))):
+                return None
+            pins.append({key: participant.get(key) for key in keys})
+        return ({key: marker.get(key) for key in
+                 ('marker_version', 'task_id', 'artifact_root', 'workspace_id', 'workspace_uuid')},
+                pins)
+
+    expected = identity(candidate)
+    if expected is None:
+        return None
+    matches = []
+    with os.scandir(directory) as entries:
+        for index, entry in enumerate(entries):
+            if index >= MAX_FORMAL_MARKERS:
+                raise RuntimeError('active reservation lookup capacity exceeded')
+            if (entry.name.startswith('.') or not entry.name.endswith('.json')
+                    or not entry.is_file(follow_symlinks=False)):
+                continue
+            try:
+                _uuid.UUID(entry.name[:-5])
+                uuid_filename = True
+            except ValueError:
+                uuid_filename = False
+            try:
+                marker = _read_active_marker(Path(entry.path))
+            except ValueError as exc:
+                # v2 reservations have UUID filenames. Non-marker debris may
+                # be diagnosed and ignored, but a corrupted UUID file could
+                # still reserve these participants: never recreate it.
+                if not uuid_filename:
+                    print('Ignoring malformed non-reservation file: ' + entry.path,
+                          file=sys.stderr)
+                    continue
+                raise RuntimeError(
+                    'unreadable active reservation; preserve original file and '
+                    'resolve its ownership before arming: ' + entry.path) from exc
+            if marker is not None and uuid_filename and (
+                    not well_formed(marker)
+                    or entry.name != marker['collaboration_id'] + '.json'):
+                raise RuntimeError(
+                    'malformed active reservation; preserve original file and '
+                    'resolve its ownership before arming: ' + entry.path)
+            if marker is not None and identity(marker) == expected:
+                if entry.name != str(marker.get('collaboration_id')) + '.json':
+                    raise RuntimeError('matching reservation filename is not bound to its id')
+                matches.append(marker)
+    if len(matches) > 1:
+        raise RuntimeError('multiple matching active reservations; preserve and release originals explicitly')
+    if not matches:
+        return None
+    marker = matches[0]
+    armed = marker_epoch(marker)
+    ttl = marker.get('ttl_seconds')
+    now = time.time()
+    # Identity alone is insufficient: returning an expired marker would say
+    # arm succeeded while TTL-aware consumers consider the task inactive.
+    # Preserve both the marker and its reservation; only the original owner
+    # can RELEASE it. Heartbeats never extend the original armed_at or TTL.
+    if (not valid_epoch(armed) or not valid_epoch(ttl) or ttl <= 0
+            or not 0 <= now - armed <= ttl):
+        raise RuntimeError(
+            'matching reservation expired or has invalid timing; preserve the original '
+            'marker and require its owner to RELEASE it explicitly before rearming')
+    return marker
+
+
 def arm_task(task_id, root, supervisor="", executor="", *,
              supervisor_provider="", executor_provider="",
              supervisor_surface_uuid="", executor_surface_uuid="",
@@ -562,6 +679,12 @@ def arm_task(task_id, root, supervisor="", executor="", *,
     try:
         with _marker_update_lock(
                 _collab_dir(workspace_uuid) / f"{collaboration_id}.json", marker, create=True):
+            existing = _matching_reservation(_collab_dir(workspace_uuid), marker)
+            if existing is not None:
+                # Repair an interrupted reservation publication if necessary;
+                # keep the original id, armed time and marker bytes unchanged.
+                task_boundary_locked(existing, 'RESERVED')
+                return existing
             # Publish the formal evidence first, under all participant locks.
             # If reservation persistence fails, retain it for observation and
             # propagate the error; no caller can mistake this for a good arm.
@@ -1805,28 +1928,8 @@ def _handshake_one(args, root, gate, item, per_executor):
     per_executor.append(receipt)
     _write_handshake_receipt(root, per_executor)
 
-    hello_msg = (
-        f"DELIVERY_NONCE={ack_nonce}. "
-        f"This is a legitimate cmux multi-agent harness handshake from supervisor {supervisor_ref} "
-        f"for task {task_id}. Use the /multi-agent-collaboration skill for this session. "
-        f"Read the canonical skill file at {COLLABORATION_SKILL_PATH} (do not substitute an "
-        f"archived or ~/.agents copy). Verify the pending receipt at the absolute path "
-        f"{root.resolve() / 'handshake-receipt.json'}; do not search the disk. "
-        f"Select exactly one executors[] record with executor == {executor_ref} "
-        f"and ordinal == {ordinal}. In that record confirm task_id == {task_id}, "
-        f"executor_provider == {executor_provider}, and ack_nonce == {ack_nonce}. "
-        "Top-level fields describe executor 1 only; never use them for another executor. "
-        "If the file is missing, the match is not unique, or a field differs, reply "
-        "BLOCKED|RECEIPT_NOT_FOUND; never guess or reconstruct the nonce. Then construct the "
-        f"ACK from these fields: ACK_TASK_ID={task_id} ACK_AGENT={executor_provider}:identity "
-        f"ACK_STATUS=READY "
-        f"ACK_REPORT=INLINE ACK_NONCE={ack_nonce}. After verification, your entire assistant "
-        "response must be exactly one compact ACK line with no prose before or after. "
-        f"The agent field is the literal string {executor_provider}:identity; do not replace it "
-        "with a model name such as claude:opus-5. Do not inspect the task, discuss the bridge, "
-        "or send any other message before this exact ACK. Reply in compact format "
-        "PREFLIGHT_ACK|<task-id>|<agent:identity>|READY|INLINE|<nonce>."
-    )
+    import handshake_evidence
+    hello_msg = handshake_evidence.challenge(receipt, root, COLLABORATION_SKILL_PATH)
 
     receipt["dispatch_started_at"] = _now()
     receipt["updated_at"] = _now()
@@ -1839,17 +1942,23 @@ def _handshake_one(args, root, gate, item, per_executor):
         prepared = prompt_reference.plan(hello_msg, ack_nonce)
         prompt_reference.persist(prepared['reference'], hello_msg)
         receipt['dispatch_payload_sha256'] = prompt_reference.digest(prepared['text'])
+        receipt['dispatch_payload'] = prepared['text']
         receipt['dispatch_body_reference'] = prepared['reference']
         receipt['dispatch_confirmation_scope'] = 'reference_notice' if prepared['reference'] else 'inline_payload'
+        import cmux_message_journal
+        handshake_evidence.record_controller(receipt, cmux_message_journal.__file__,
+                                             COLLABORATION_SKILL_PATH, __file__, cmux.__file__)
         _write_handshake_receipt(root, per_executor)
         submit_kwargs = {"marker": ack_nonce}
         if getattr(args, "force_compose", False):
             submit_kwargs["force_compose"] = True
-        cmux.submit_text(executor_ref, prepared['text'], **submit_kwargs)
+        result = cmux.submit_text(executor_ref, prepared['text'], **submit_kwargs)
+        handshake_evidence.record_dispatch(receipt, result)
         receipt["dispatch_submitted_at"] = _now()
         receipt["updated_at"] = _now()
         _write_handshake_receipt(root, per_executor)
     except cmux.DispatchUnconfirmed as e:
+        handshake_evidence.record_dispatch(receipt, getattr(e, 'details', None), failed=True)
         state = getattr(e, "state", None) or cmux.SUPERVISOR_DID_NOT_SUBMIT
         receipt["submission_state"] = state
         receipt["detector_side"] = "supervisor"

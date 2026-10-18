@@ -73,8 +73,13 @@ def atomic_json(path, value, expected=None, compare=False):
             os.unlink(pending)
 
 
-def load_release(home, manifest_path):
-    """Authenticate the entire immutable release before importing its installer."""
+def verify_release(home, manifest_path):
+    """Read and authenticate every immutable member, without loading an installer.
+
+    Return the manifest from this verification pass so read-only callers can
+    check their own membership without a second, potentially different read.
+    No cross-invocation cache replaces content verification.
+    """
     _raw, current = read_json(manifest_path)
     source = Path(current['source'])
     base = Path(home) / '.local/share/multi-agent-collaboration/releases'
@@ -107,6 +112,13 @@ def load_release(home, manifest_path):
         raise ValueError('guardian job is not from CURRENT release; reinstall the single job')
     if Path(current['python']).resolve() != Path(sys.executable).resolve():
         raise ValueError('guardian Python does not match CURRENT')
+    return current, manifest
+
+
+def load_release(home, manifest_path):
+    """Only the configuration owner needs to execute the verified installer."""
+    current, _manifest = verify_release(home, manifest_path)
+    source = Path(current['source'])
     spec = importlib.util.spec_from_file_location('guardian_approved_install', source / 'scripts/manage_install.py')
     manager = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(manager)

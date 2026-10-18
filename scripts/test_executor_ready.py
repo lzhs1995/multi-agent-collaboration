@@ -19,6 +19,7 @@ class FakeBridge:
         self.native, self.queued, self.pin_error = native, queued, pin_error
         self.submitted, self.receipts = [], {}
         self.caller = ''
+        self.dispatch_error = None
 
     def pin_workspace(self, surface, **kwargs):
         if self.pin_error:
@@ -37,6 +38,8 @@ class FakeBridge:
         journal = ready.state_root() / 'message-dispatch-v1' / ready.request_key(self.caller, marker)
         if not reconcile_only:
             ready.write_json(journal / 'attempt-0001.json', dict(phase='PASTED'))
+        if self.dispatch_error is not None:
+            raise self.dispatch_error
         if self.queued:
             raise cmux_bridge.DispatchUnconfirmed('queued', state='DELIVERY_QUEUED_AT_RECEIVER')
         if self.native:
@@ -185,6 +188,40 @@ class FiniteReadyTests(unittest.TestCase):
             self.assertEqual(record['started_epoch'], first['started_epoch'])
         self.assertEqual(len(self.bridge.submitted), calls)
         self.assertEqual(len(list(ready.requests_dir().glob('*.json'))), 1)
+
+    def test_uncertain_rpc_details_survive_ask_and_original_reconciliation(self):
+        details = dict(rpc_outcome='ACCEPTED', controller_provenance={'version': '0.4.35'},
+                       reconcile_guidance={'mode': '--reconcile-only', 'input_operations': 0,
+                                           'attempt': '/original/attempt-0001.json'})
+        error = cmux_bridge.DispatchUnconfirmed('native receipt pending', state='NATIVE_PENDING',
+                                               details=details)
+        self.bridge.dispatch_error = error
+        first = self.ask()
+        second = self.run_loop(one_shot=True)
+        for record in (first, second):
+            ask = record['asks'][0]
+            self.assertEqual(ask['outcome'], 'UNCONFIRMED_DO_NOT_RESEND')
+            self.assertEqual(ask['dispatch_state'], 'NATIVE_PENDING')
+            self.assertEqual(ask['details'], details)
+            self.assertEqual(ask['marker'], first['asks'][0]['marker'])
+        self.assertEqual(sum(not s['reconcile_only'] for s in self.bridge.submitted), 1)
+        self.assertTrue(self.bridge.submitted[-1]['reconcile_only'])
+        self.assertEqual(error.details, details)
+
+    def test_preflight_failure_preserves_diagnostics_without_submitting(self):
+        details = dict(reason='receiver turn changed', expected_turn_id='original-turn')
+        self.bridge.pin_error = cmux_bridge.DispatchUnconfirmed(
+            'native preflight unavailable', state='NO_INPUT', details=details)
+        ask = ready.prepare_ask(self.bridge, 'surface:1', self.caller, 'surface:2', 'task-x')
+        result = ready.advance_ask(self.bridge, 'surface:1', self.caller, ask, allow_send=True)
+        self.assertEqual(result['dispatch_state'], 'NO_INPUT')
+        self.assertEqual(result['details']['reason'], details['reason'])
+        self.assertEqual(result['details']['expected_turn_id'], 'original-turn')
+        guidance = result['details']['reconcile_guidance']
+        self.assertEqual(guidance['input_operations'], 0)
+        self.assertTrue(guidance['reuse_original_parameters'])
+        self.assertEqual(self.bridge.submitted, [])
+        self.assertEqual(self.bridge.pin_error.details, details)
 
     def test_observation_error_cannot_reopen_an_episode_ended_by_tick_budget(self):
         first = self.run_loop(max_ticks=1)

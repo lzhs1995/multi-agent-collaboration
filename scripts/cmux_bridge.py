@@ -41,6 +41,12 @@ def _looks_like_task_dispatch(text):
     return bool(re.match(r"^(?:(?:TASK|TASK_PACK|TASK PACK)\s*[:=]|TASK_PACK_V2(?:\s|$))", first, re.I))
 
 
+_TASK_PACK_NOTICE_SUFFIX = (
+    " READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; "
+    "write report then call cmux_bridge.submit_completion_callback(pack)."
+)
+
+
 def _task_pack_notice(path, pack, raw):
     """Exact single-line wire contract; all scope and callback bytes stay in pack."""
     from cmux_prompt_reference import require_inline
@@ -48,8 +54,7 @@ def _task_pack_notice(path, pack, raw):
         "TASK_PACK_V2 TASK=" + json.dumps(pack["task_id"], ensure_ascii=False)
         + " PACK=" + json.dumps(str(path), ensure_ascii=False)
         + " SHA256=" + hashlib.sha256(raw).hexdigest()
-        + " READ_AND_OBEY_REQUIRED_SKILL_FIRST; verify pack SHA; follow only its scope; "
-          "write report then call cmux_bridge.submit_completion_callback(pack)."
+        + _TASK_PACK_NOTICE_SUFFIX
     )
     require_inline(notice)
     return notice
@@ -569,9 +574,10 @@ class DispatchUnconfirmed(RuntimeError):
     "resend blindly".
     """
 
-    def __init__(self, message, state=None):
+    def __init__(self, message, state=None, details=None):
         super().__init__(message)
         self.state = state
+        self.details = dict(details or {})
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +593,7 @@ class DispatchUnconfirmed(RuntimeError):
 SUPERVISOR_DID_NOT_SUBMIT = "SUPERVISOR_DID_NOT_SUBMIT"
 SUBMISSION_ABORTED_BUSY = "SUBMISSION_ABORTED_BUSY"
 COMPOSE_OCCUPIED = "COMPOSE_OCCUPIED"
+COMPOSE_UNPARSED = "COMPOSE_UNPARSED"
 # Enter was sent but our exact payload is still the receiver's draft.
 STRANDED_IN_COMPOSE = "STRANDED_IN_COMPOSE"
 DELIVERY_UNVERIFIED_BY_DETECTOR = "DELIVERY_UNVERIFIED_BY_DETECTOR"
@@ -596,6 +603,7 @@ SUBMISSION_STATES = (
     SUPERVISOR_DID_NOT_SUBMIT,
     SUBMISSION_ABORTED_BUSY,
     COMPOSE_OCCUPIED,
+    COMPOSE_UNPARSED,
     DELIVERY_UNVERIFIED_BY_DETECTOR,
     DELIVERY_QUEUED_AT_RECEIVER,
 )
@@ -751,6 +759,9 @@ _COMPOSE_CHROME_RE = re.compile(
 
 _CLAUDE_BORDER_RE = re.compile(r"─{8,}")
 _CLAUDE_DURATION = r"(?:\d+h(?:\s+\d+m)?|\d+m(?:\s+\d+s)?|\d+s)"
+# Goal's measured long-running display uses whole days. Keep this separate
+# from elapsed/tool-summary durations, whose renderer has not shown that form.
+_CLAUDE_GOAL_DURATION = rf"(?:\d+d|{_CLAUDE_DURATION})"
 _CLAUDE_TOOL = r"[A-Za-z][\w.:-]*"
 _CLAUDE_COUNTS = (rf"✓\s+{_CLAUDE_TOOL}\s+×\d+(?:\s*\|\s*✓\s+{_CLAUDE_TOOL}\s+×\d+)*"
                   r"(?:\s*\|\s*\+[1-9]\d* more)?")
@@ -768,6 +779,23 @@ _CLAUDE_HUD_TOKENS = (
 _CLAUDE_CONTEXT_ROW_RE = re.compile(
     r"上下文\s+[█░▒▓▏▎▍▌▋▊▉▐]+\s+(?:100|\d{1,2})%"
     rf"(?: \(输入: {_CLAUDE_HUD_TOKENS}, 缓存: {_CLAUDE_HUD_TOKENS}\))?")
+_CLAUDE_GOAL_ROW_RE = re.compile(rf"\s*◎ /goal active \({_CLAUDE_GOAL_DURATION}\)\s*")
+_CLAUDE_BYPASS_ROW_RE = re.compile(
+    r"⏵⏵\s+bypass permissions on(?:"
+    r" \(shift\+tab to cycle\)(?:\s*·\s*← for agents)?"
+    # Measured 2026-10-13/14: Monitor or one shell replaces the shift+tab
+    # hint. Recognize only the complete footer below matching borders.
+    r"| · (?:1 (?:monitor|shell)|[2-9][0-9]* monitors|1[0-9]+ monitors) · ← for agents)")
+
+
+def _claude_framed_prompt(screen):
+    """A Claude frame is present, even when its footer cannot be parsed."""
+    rows = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen).splitlines()
+    start = next((i for i in range(len(rows) - 1, -1, -1)
+                  if _PROMPT_GLYPH_RE.match(rows[i])), None)
+    return bool(start is not None and rows[start].lstrip().startswith("❯")
+                and any(_CLAUDE_BORDER_RE.fullmatch(row.strip())
+                        for row in rows[max(0, start - 1):]))
 
 
 def _claude_bordered_compose(screen):
@@ -782,15 +810,24 @@ def _claude_bordered_compose(screen):
                 if rows[i].strip() == rows[start - 1].strip()), None)
     if end is None:
         return None
+    before = rows[:start - 1]
+    current = next((row for row in reversed(before) if row.strip()), "")
+    if (re.match(r"\s*◎\s+/goal\b", current)
+            and not _CLAUDE_GOAL_ROW_RE.fullmatch(current)):
+        # Unknown Goal chrome must not hide an active spinner from the
+        # clearing/submission guards. Preserve the whole frame as unparsed.
+        return None
     footer_rows = [row for row in rows[end + 1:] if row.strip()]
     footer = [row.strip() for row in footer_rows]
     if not footer:
         return None
     # 当前实屏的 model/cwd/time/goal 同行；cwd 可以没有 git 信息。
-    model_row = re.sub(rf"\s+◎\s+/goal active\s+\({_CLAUDE_DURATION}\)$", "", footer[0])
+    model_row = re.sub(rf"\s+◎\s+/goal active\s+\({_CLAUDE_GOAL_DURATION}\)$", "", footer[0])
     fields = [part.strip() for part in model_row.split("│")]
     if (not 1 <= len(fields) <= 3 or not re.fullmatch(
-            r"(?:\[claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
+            # Measured 2026-10-18: provider/model banners retain the same
+            # complete field. Accept one bounded ASCII provider segment only.
+            r"(?:\[(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}/)?claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
             r"\[(?:Opus|Sonnet|Claude)\s+[^\]\n]+\])", fields[0], re.I)):
         return None
     elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
@@ -833,12 +870,17 @@ def _claude_bordered_compose(screen):
         return None
     if len(footer) > 1:
         rest = footer[footer_start:]
+        # The measured Goal HUD may occupy one final physical row after
+        # bypass. Only complete footer rows outside the editor are consumed;
+        # duplicates, unknown Goal forms and draft bytes remain untouched.
+        if rest and _CLAUDE_GOAL_ROW_RE.fullmatch(rest[-1]):
+            rest = rest[:-1]
         # The same measured hint can occupy its own row AFTER the complete
         # footer. Never remove an occurrence inside the composer, or permit
         # arbitrary text after the normal bypass row.
         if rest and re.fullmatch(
                 r"new task\? /clear to save (?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens"
-                rf"(?: · ◎ /goal active \({_CLAUDE_DURATION}\))?",
+                rf"(?: · ◎ /goal active \({_CLAUDE_GOAL_DURATION}\))?",
                 rest[-1]):
             rest = rest[:-1]
         if rest and re.fullmatch(elapsed, rest[0]):
@@ -848,7 +890,7 @@ def _claude_bordered_compose(screen):
                 or not re.fullmatch(
                     r"\d+\s+CLAUDE\.md\s*\|\s*(?:\d+\s+规则\s*\|\s*)?"
                     r"\d+\s+MCPs\s*\|\s*\d+\s+(?:钩子|hooks)", rest[1])
-                or not re.fullmatch(r"⏵⏵\s+bypass permissions on \(shift\+tab to cycle\)(?:\s*·\s*← for agents)?", rest[-1])
+                or not _CLAUDE_BYPASS_ROW_RE.fullmatch(rest[-1])
                 or not all(_CLAUDE_SUMMARY_RE.fullmatch(row)
                            or _CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in rest[2:-1])):
             return None
@@ -857,7 +899,7 @@ def _claude_bordered_compose(screen):
         return None
     first = re.sub(r"^\s*❯[ \u00a0]?", "", rows[start], count=1)
     return {"body": "\n".join([first, *rows[start + 1:end]]),
-            "footer": footer, "before": rows[:start - 1], "start": start, "end": end}
+            "footer": footer, "before": before, "start": start, "end": end}
 
 
 def compose_block_text(screen):
@@ -905,6 +947,8 @@ def compose_rendered_text(screen):
     claude = _claude_bordered_compose(screen)
     if claude is not None:
         return claude["body"].strip(" \t\r\n")
+    if _claude_framed_prompt(screen):
+        return None  # Unknown footer is unobserved, not a fabricated draft.
     body = delivery_compose_text(screen)
     if body is None:
         return None
@@ -1090,6 +1134,85 @@ def _display_cells(value):
                for c in value)
 
 
+def _claude_task_pack_padding_candidate(content, text, border_cells):
+    """Measured formal-notice padding, without reading or altering a pack.
+
+    B0015/B0016 wrap the PACK token at 114 display cells, then add exactly
+    44/52 ASCII cells after its closing quote (at display cell 96). B0018
+    has a 45-cell suffix and 27 ASCII cells, ending at cell 72. B0019
+    has a 47-cell suffix and 49 ASCII cells, ending at cell 96. Restrict
+    equivalence to those observed shapes. B0021/B0022 use 105-cell borders,
+    wrap PACK at 100 cells with a 56/60-cell suffix, and add 11 ASCII cells
+    after the standalone SHA256 token. The caller still checks the entire
+    notice and wrap geometry; draft stability retains every original cell.
+    """
+    if (border_cells, len(content)) not in ((118, 5), (105, 6)):
+        return None
+    prefix = "TASK_PACK_V2 TASK="
+    header, separator, rest = text.partition(" PACK=")
+    if not separator or not header.startswith(prefix) or content[0] != header:
+        return None
+    try:
+        task_id = json.loads(header[len(prefix):])
+        path, end = json.JSONDecoder().raw_decode(rest)
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(task_id, str) or not task_id
+            or header != prefix + json.dumps(task_id, ensure_ascii=False)
+            or not isinstance(path, str) or not path.startswith("/")
+            or rest[:end] != json.dumps(path, ensure_ascii=False)
+            or not re.fullmatch(r" SHA256=[0-9a-f]{64}" +
+                                re.escape(_TASK_PACK_NOTICE_SUFFIX), rest[end:])):
+        return None
+    token = "PACK=" + rest[:end]
+    if (not content[1].startswith("PACK=") or not token.startswith(content[1])
+            or _display_cells(content[1]) != (100 if border_cells == 105 else 114)
+            or not any(unicodedata.east_asian_width(c) in "WF" for c in token)):
+        return None
+    suffix = token[len(content[1]):]
+    suffix_cells = _display_cells(suffix)
+    sha_token = rest[end + 1:].split(" ", 1)[0]
+    if border_cells == 105:
+        if (suffix_cells not in (56, 60) or content[2] != suffix
+                or content[3] != sha_token + " " * 11
+                or content[4:] != _TASK_PACK_NOTICE_SUFFIX[1:].rsplit(" ", 1)):
+            return None
+        return [content[0], content[1], suffix, sha_token, *content[4:]]
+    padding = {44: 52, 52: 44, 45: 27, 47: 49}.get(suffix_cells)
+    if (padding is None or content[2] != suffix + " " * padding
+            or not content[3].startswith(sha_token + " ")):
+        return None
+    return [content[0], content[1], suffix, *content[3:]]
+
+
+def _claude_reference_padding_candidate(content, text, border_cells):
+    """One measured V2 BODY-row rendering; never trim arbitrary draft text.
+
+    A/B's 183-cell bordered editor adds 16/17 ASCII cells after the complete
+    BODY token when the next SHA256 word wraps. This is display equivalence,
+    not native editor-byte proof. The caller still checks every other character
+    and both wrap boundaries. _draft_structure retains the original raw rows.
+    """
+    if border_cells in (105, 118):
+        return _claude_task_pack_padding_candidate(content, text, border_cells)
+    if border_cells != 183 or len(content) < 3:
+        return None
+    from cmux_prompt_reference import SINGLE_LINE_FORMAT, wire_reference
+    try:
+        ref = wire_reference(text)
+    except ValueError:
+        return None
+    if not ref or ref['format'] != SINGLE_LINE_FORMAT:
+        return None
+    token = 'BODY=' + json.dumps(ref['path'], ensure_ascii=False)
+    header, separator, _ = text.partition(' ' + token + ' ')
+    if (not separator or content[0] != header
+            or content[1] not in (token + ' ' * 16, token + ' ' * 17)
+            or not content[2].startswith(f"SHA256={ref['sha256']} BYTES={ref['bytes']} ")):
+        return None
+    return [content[0], token, *content[2:]]
+
+
 def _require_exact_composer_without_cursor_cell(screen, surface, text):
     """Require the expected visible draft, allowing known bordered hard wrapping.
 
@@ -1190,10 +1313,15 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
                            for c in value)
             if not any(unicodedata.category(c).startswith("C")
                        for row in content for c in row):
-                for width in (len(rows[start-1]) - 4, len(rows[start-1]) - 2):
+                layouts = [content]
+                candidate = _claude_reference_padding_candidate(content, text, len(rows[start-1]))
+                if candidate is not None:
+                    layouts.append(candidate)
+                for layout, width in ((layout, width) for layout in layouts
+                                      for width in (len(rows[start-1]) - 4, len(rows[start-1]) - 2)):
                     positions = {0}
                     previous = ""
-                    for number, part in enumerate(content):
+                    for number, part in enumerate(layout):
                         if cells(part) > width:
                             positions = set()
                             break
@@ -1417,6 +1545,11 @@ def _new_activity_after_submit(before, after):
 def _queued_or_active_input(screen):
     """Do not issue a blind second Enter while a queued/active task owns the TUI."""
     claude = _claude_bordered_compose(screen)
+    if claude is None and _claude_framed_prompt(screen):
+        # require_agent_input reports COMPOSE_UNPARSED. Do not attribute an
+        # unknown current UI to a historical completed summary containing
+        # words such as "1 monitor still running".
+        return False
     queue_region = "\n".join(claude["before"]) if claude is not None else screen
     if re.search(r"^[ \t]*Messages? to be submitted after|Press up to edit queued messages", queue_region, re.I | re.M):
         return True
@@ -1424,9 +1557,24 @@ def _queued_or_active_input(screen):
         if any(_CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in claude["footer"]):
             return True
         # 活动只读当前边框前的状态，防止历史 spinner 或输入正文冒充活动。
-        screen = next((row for row in reversed(claude["before"]) if row.strip()), "")
-        if re.fullmatch(r"\s*[✻✢✳✶✽◐◑◒◓]\s+[^\n]+(?:…|\.\.\.)\s*\([^\n]+\)\s*", screen):
+        before = list(claude["before"])
+        while before and (not before[-1].strip()
+                          or _CLAUDE_GOAL_ROW_RE.fullmatch(before[-1])):
+            before.pop()
+        screen = before[-1] if before else ""
+        # Live spinners can omit elapsed time. Match an activity label, not
+        # prose such as '· Note: see README...'. Tool headers have no space
+        # between their identifier and '(', unlike '⏺ Done (12 tests pass).'.
+        if re.fullmatch(r"\s*[·✻✢✳✶✽◐◑◒◓]\s+(?:[A-Za-z][A-Za-z-]*|Compacting (?:conversation|context))(?:…|\.\.\.)(?:\s*\([^\n]+\))?\s*", screen):
             return True
+        if re.match(r"\s*⏺\s+[A-Za-z_][A-Za-z0-9_.:/-]*\(", screen):
+            return True
+        if re.fullmatch(r"\s*⎿\s+Running(?:(?:…|\.\.\.)(?:\s*\([^\n]+\))?)?\s*", screen):
+            return True
+        return bool(re.match(
+            r"\s*[✻✢✳✶✽◐◑◒◓]\s+(?:thinking|running|waiting|retrying|"
+            r"recording|checking|working|processing|executing|loading|tool|bash:|api error)\b",
+            screen, re.I))
     if re.search(r"^[ \t]*•\s+(?:Working|Thinking|Running|Compacting context)\s+\([^\n)]*\besc to interrupt\b", screen, re.I | re.M):
         return True
     # Claude uses the same glyph for active and completed summaries. Restrict
@@ -1544,6 +1692,10 @@ def receiver_input_kind(screen):
 def require_agent_input(screen, surface):
     kind = receiver_input_kind(screen)
     if kind != "AGENT_TUI":
+        if kind == "UNKNOWN" and _claude_framed_prompt(screen):
+            raise DispatchUnconfirmed(
+                f"COMPOSE_UNPARSED surface={surface}; unknown Claude frame/footer; "
+                "preserve original screen and draft; no input sent", state=COMPOSE_UNPARSED)
         raise DispatchUnconfirmed(
             f"AGENT_INPUT_REQUIRED surface={surface} receiver_kind={kind}; "
             "message not submitted; stop further input and inspect the original session",
@@ -1563,8 +1715,11 @@ def require_clearable_agent_input(screen, surface):
 
 def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
                 force_compose=False, delivery_observer=None, *, reconcile_only=False,
-                recover_stranded=False, native_binding=None, native_attempt=None):
+                recover_stranded=False, native_binding=None, native_attempt=None,
+                wait_seconds=None):
     """公开发送统一落原 journal；屏幕变化和按键返回不构成送达。"""
+    from cmux_confirmation import wait_budget
+    seconds = wait_budget(wait_seconds, reconcile_only=reconcile_only)
     if recover_stranded and (task_pack_path is not None or delivery_observer is not None):
         raise TaskPackContractError('RECOVER_STRANDED_MESSAGE_ONLY')
     if delivery_observer is not None:
@@ -1572,15 +1727,17 @@ def submit_text(surface, text, marker=None, confirm_lines=200, task_pack_path=No
             raise TaskPackContractError('RECONCILE_WITH_ORIGINAL_CONTROLLER')
         return _submit_text_once(surface, text, marker, confirm_lines, task_pack_path,
                                  force_compose, delivery_observer,
-                                 native_binding=native_binding, native_attempt=native_attempt)
+                                 native_binding=native_binding, native_attempt=native_attempt,
+                                 wait_seconds=seconds)
     if task_pack_path is not None:
         return submit_task_pack(surface, text, task_pack_path, marker, confirm_lines,
-                                force_compose, reconcile_only=reconcile_only)
+                                force_compose, reconcile_only=reconcile_only, wait_seconds=seconds)
     if force_compose:
         raise TaskPackContractError('MESSAGE_PRESERVE_COMPOSE: no forced replacement')
     from cmux_message_journal import deliver
     return deliver(sys.modules[__name__], surface, text, marker, confirm_lines,
-                   reconcile_only=reconcile_only, recover_stranded=recover_stranded)
+                   reconcile_only=reconcile_only, recover_stranded=recover_stranded,
+                   wait_seconds=seconds)
 
 
 def _delivery_delay(name, default, maximum=5.0):
@@ -1634,20 +1791,20 @@ def _stable_owned_draft(surface, text, confirm_lines, observer, *, expected_stru
 
 
 def _wait_native_after_key(surface, text, marker, confirm_lines, observer,
-                           native_binding, native_attempt, observed):
+                           native_binding, native_attempt, observed, wait_seconds=None):
     """有限等待同一次输入的原生记录；不重贴、不发键、不按静屏推定失败。"""
+    from cmux_confirmation import observe_receipt
     screen = ""
-    result = {}
-    for _ in range(4):
-        time.sleep(_delivery_delay("CMUX_AGENT_POST_SUBMIT_DELAY", 0.75))
+    def observe():
+        nonlocal screen
         screen = read_screen(surface, lines=confirm_lines)
         if observer:
             observer(observed, screen)
         result = _observe_native(surface, text, native_binding, native_attempt)
-        if result.get("confirmed") is True:
-            return screen, result
-        if pending_queue_holds(screen, marker) or result.get("state") == "NATIVE_QUEUED":
-            break
+        if pending_queue_holds(screen, marker):
+            result = dict(result, queued_at_receiver=True)
+        return result
+    result = observe_receipt(observe, wait_seconds, stop_when_queued=True)
     return screen, result
 
 
@@ -1660,14 +1817,16 @@ def _unconfirmed_native(screen, marker, result):
         state = DELIVERY_UNVERIFIED_BY_DETECTOR
     raise DispatchUnconfirmed(
         "NATIVE_DELIVERY_UNCONFIRMED: original attempt preserved; key/queue is not reception; "
-        "reconcile original without repasting", state=state)
+        "reconcile original without repasting", state=state, details=result)
 
 
 def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
                       force_compose=False, delivery_observer=None, *,
-                      native_binding=None, native_attempt=None):
+                      native_binding=None, native_attempt=None, wait_seconds=None):
     """Codex 原生直投；Claude 保留一次粘贴。唯有原生 user 记录证明接收。"""
     from cmux_native_delivery import require_bound
+    from cmux_confirmation import wait_budget
+    seconds = wait_budget(wait_seconds)
     _validate_submission(surface, text, task_pack_path, force_compose,
                          delivery_observer, native_binding, native_attempt)
     if native_binding["provider"] == "codex":
@@ -1675,10 +1834,11 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
         return send_once(native_binding, text,
             recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
             emit=delivery_observer,
-            observe=lambda: _observe_native(surface, text, native_binding, native_attempt))
+            observe=lambda: _observe_native(surface, text, native_binding, native_attempt),
+            wait_seconds=seconds)
     return _submit_terminal_once(surface, text, marker, confirm_lines, task_pack_path,
         force_compose, delivery_observer, native_binding=native_binding,
-        native_attempt=native_attempt)
+        native_attempt=native_attempt, wait_seconds=seconds)
 
 
 def _validate_submission(surface, text, task_pack_path, force_compose,
@@ -1704,9 +1864,11 @@ def _validate_submission(surface, text, task_pack_path, force_compose,
 
 def _submit_terminal_once(surface, text, marker=None, confirm_lines=200, task_pack_path=None,
                           force_compose=False, delivery_observer=None, *,
-                          native_binding=None, native_attempt=None):
+                          native_binding=None, native_attempt=None, wait_seconds=None):
     """Claude terminal path; old Codex attempts are exercised only by fixtures."""
     from cmux_native_delivery import require_bound
+    from cmux_confirmation import wait_budget
+    seconds = wait_budget(wait_seconds)
     before = read_screen(surface, lines=confirm_lines)
     require_agent_input(before, surface)
     if not compose_block_is_empty(before):
@@ -1735,7 +1897,7 @@ def _submit_terminal_once(surface, text, marker=None, confirm_lines=200, task_pa
     if not queue:
         delivery_observer("ENTER_SENT")
     screen, result = _wait_native_after_key(surface, text, marker, confirm_lines,
-        delivery_observer, native_binding, native_attempt, observed)
+        delivery_observer, native_binding, native_attempt, observed, seconds)
     if result.get("confirmed") is True:
         return dict(result, retries=0, submission_key=key)
     if queue or pending_queue_holds(screen, marker) or result.get("state") == "NATIVE_QUEUED":
@@ -1750,6 +1912,8 @@ def recover_stranded_once(surface, text, marker, before, confirm_lines=200,
                           native_binding=None, native_attempt=None):
     """原 attempt 最多补一个键；原生绑定缺失不允许补造，也不重新粘贴。"""
     from cmux_native_delivery import require_bound
+    from cmux_confirmation import wait_budget
+    seconds = wait_budget(wait_seconds)
     if native_attempt is None or delivery_observer is None:
         raise TaskPackContractError("ORIGINAL_NATIVE_JOURNAL_REQUIRED")
     original = json.loads(Path(native_attempt).read_text())
@@ -1775,18 +1939,19 @@ def recover_stranded_once(surface, text, marker, before, confirm_lines=200,
     require_bound(sys.modules[__name__], surface, native_binding, text)
     send_key(surface, key)
     screen, result = _wait_native_after_key(surface, text, marker, confirm_lines,
-        delivery_observer, native_binding, native_attempt, observed)
+        delivery_observer, native_binding, native_attempt, observed, seconds)
     if result.get("confirmed") is True:
         return dict(result, retries=0, recovered=key)
     _unconfirmed_native(screen, marker, result)
 
 
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
-                     force_compose=False, *, reconcile_only=False):
+                     force_compose=False, *, reconcile_only=False, wait_seconds=None):
     """Durable task dispatch; ambiguous attempts are observed, never repasted."""
     from cmux_task_journal import deliver
     return deliver(sys.modules[__name__], surface, text, task_pack_path, marker,
-                   confirm_lines, force_compose, reconcile_only=reconcile_only)
+                   confirm_lines, force_compose, reconcile_only=reconcile_only,
+                   wait_seconds=wait_seconds)
 
 
 def _sha256_file(path):
@@ -1797,11 +1962,13 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False, resume_queue_only=False):
+def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False,
+                               resume_queue_only=False, wait_seconds=None):
     """Report-bound delivery with durable attempts and zero-input reconciliation."""
     from cmux_callback_journal import deliver
     return deliver(sys.modules[__name__], task_pack_path, confirm_lines,
-                   reconcile_only=reconcile_only, resume_queue_only=resume_queue_only)
+                   reconcile_only=reconcile_only, resume_queue_only=resume_queue_only,
+                   wait_seconds=wait_seconds)
 
 
 def read_screen(surface, lines=200):
@@ -2028,6 +2195,9 @@ def _cli_main(argv=None):
     read.add_argument("--surface", required=True)
     read.add_argument("--lines", type=int, default=200)
 
+    probe = subs.add_parser("probe", help="authenticate a Codex receiver and read metadata; zero input")
+    probe.add_argument("--surface", required=True)
+
     submit = subs.add_parser("submit-text", aliases=["submit_text"])
     submit.add_argument("--surface", required=True)
     submit.add_argument("--text", required=True)
@@ -2068,6 +2238,11 @@ def _cli_main(argv=None):
     completion.add_argument("--reconcile-only", action="store_true",
                             help="verify an existing callback attempt without sending input")
 
+    for sender in (submit, pack, completion):
+        sender.add_argument("--wait-seconds", type=float, default=None,
+            help="native observation budget 0–60 seconds; default 30 for new input, "
+                 "0 for --reconcile-only; never retries input")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "ping":
@@ -2079,6 +2254,9 @@ def _cli_main(argv=None):
         elif args.command == "task-notice":
             print(task_pack_notice(args.task_pack))
             return 0
+        elif args.command == "probe":
+            from cmux_codex_input import probe_target
+            result = {"command": "probe", **probe_target(sys.modules[__name__], args.surface)}
         elif args.command in {"read-screen", "read_screen"}:
             # Screen text is intentionally not JSON-escaped into a nested
             # field: callers use it as the raw input to the classifier.
@@ -2092,6 +2270,7 @@ def _cli_main(argv=None):
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
                 reconcile_only=args.reconcile_only,
+                wait_seconds=args.wait_seconds,
                 **({"recover_stranded": True} if args.recover_stranded else {}),
             )
             result = {"command": "submit_text", "surface": args.surface, **result}
@@ -2104,6 +2283,7 @@ def _cli_main(argv=None):
                 confirm_lines=args.confirm_lines,
                 force_compose=args.force_compose,
                 reconcile_only=args.reconcile_only,
+                wait_seconds=args.wait_seconds,
             )
             result = {
                 "command": "submit_task_pack",
@@ -2117,7 +2297,7 @@ def _cli_main(argv=None):
         }:
             result = submit_completion_callback(
                 args.task_pack, confirm_lines=args.confirm_lines,
-                reconcile_only=args.reconcile_only
+                reconcile_only=args.reconcile_only, wait_seconds=args.wait_seconds
             )
             result = {"command": "submit_completion_callback", **result}
         else:  # pragma: no cover - argparse makes this unreachable
@@ -2129,13 +2309,14 @@ def _cli_main(argv=None):
             "confirmed": False,
             "error": str(exc),
             "delivery_state": getattr(exc, "state", None),
+            "details": getattr(exc, "details", {}),
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         return 75
     except (TaskPackContractError, OSError, RuntimeError, ValueError) as exc:
         print(
             json.dumps(
-                {"confirmed": False, "error": str(exc)},
+                {"confirmed": False, "error": str(exc), "details": getattr(exc, "details", {})},
                 ensure_ascii=False,
                 sort_keys=True,
             ),

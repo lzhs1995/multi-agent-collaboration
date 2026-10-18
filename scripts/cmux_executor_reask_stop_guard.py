@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Stop hook：空闲 executor 在主管答复前不得结束，必须继续 60 秒一轮的主动求派。
+"""Legacy explicit Stop diagnostic; automatic hooks use the advisory wrapper.
 
 - 求派段 WAITING_REPLY：一律拦 Stop（含 stop_hook_active 重入），要求运行
   `executor_reask.py run`；只有主管答复、新派发或 operator stop 放行。
-- 段内已收到答复 ANSWERED：拦一次，要求按答复执行，随后记 CONSUMED 放行。
+- 段内已收到答复 ANSWERED：保留原状态；只有执行端显式核全文与 hash 后可消费。
 - 无段但 idle binding 显示本 executor 刚空闲（原任务 marker 已 disarm）：自动开段并拦。
 hook 自身只读写状态文件，不读屏、不发送任何输入。
 """
@@ -66,13 +66,12 @@ def decide_locked(payload, caller, now=None, workspace=''):
         reask.save(state)
     if state and state.get('state') == reask.ANSWERED:
         reply = state.get('reply') or {}
-        state['state'] = reask.CONSUMED
-        reask.save(state)
-        return True, ('[executor-reask] 主管已答复（来源 %s%s）。立刻按答复执行：派了任务就开工，'
-                      'WAITING_DEPENDENCY/SOLO 就按其触发条件推进，不要停在空等。\n答复摘录：%s'
+        return False, ('[executor-reask] 主管回件已发现但尚未消费（来源 %s%s）。'
+                      '原执行端须读取完整回件并显式 consume --reply-sha256；'
+                      'Stop 检查不代读、不消费、不重启求派。\n正文 SHA256：%s'
                       % (reply.get('source', '?'),
                          (' ' + reply['path']) if reply.get('path') else '',
-                         str(reply.get('text', ''))[:600]))
+                         reply.get('body_sha256', 'UNKNOWN')))
     if reask.stop_file(caller).exists() or state and state.get('state') == reask.STOPPED:
         return False, ''
     if not state or state.get('state') == reask.CONSUMED:

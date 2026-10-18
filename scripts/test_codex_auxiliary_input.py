@@ -6,6 +6,7 @@ Only fake external observations and temporary journals/transcripts are used.
 The real binding, dispatch, intent, receipt and reconciliation code executes.
 """
 import copy
+from datetime import datetime, timezone
 import hashlib
 import itertools
 import json
@@ -232,6 +233,28 @@ class SuccessorCodexRouteTests(OfflineRouteCase):
         self.assertEqual(self.originals(), originals)
         self.fixture.rpc.assert_not_called()
 
+    def test_successor_abort_and_late_receipt_use_original_events_and_one_input(self):
+        self.rpc.receive = False
+        self.assertFalse(self.submit()['confirmed'])
+        originals = self.originals()
+        self.forbid_further_rpc()
+        self.fixture.append_record(dict(timestamp=datetime.now(timezone.utc).isoformat(),
+            type='event_msg', payload=dict(type='turn_aborted', turn_id=self.rpc.turn,
+                                          reason='interrupted')))
+        pending = self.reconcile()
+        self.assertFalse(pending['confirmed'])
+        self.assertEqual(pending['native_turn_diagnostic']['status'], 'ORIGINAL_TURN_ABORTED')
+        self.fixture.append_user(self.text)
+        received = self.reconcile()
+        self.assertTrue(received['confirmed'])
+        self.assertEqual(received['input_operations'], 0)
+        self.assertEqual(received['native_turn_diagnostic']['status'], 'ORIGINAL_TURN_ABORTED')
+        self.assertFalse(received['native_turn_diagnostic']['replay_authorized'])
+        self.assertEqual(self.originals(), originals)
+        self.assertEqual(len(self.rpc.mutations), 1)
+        self.assertTrue((self.journal() / 'turn-scan.json').exists())
+        self.fixture.rpc.assert_not_called()
+
     def test_timeout_without_receipt_never_retries_or_falls_back_to_tab(self):
         self.rpc.receive = False
         self.rpc.mutation_error = TimeoutError("offline ambiguous timeout")
@@ -307,10 +330,21 @@ class SuccessorCodexRouteTests(OfflineRouteCase):
 class ExecutorReaskCodexRouteTests(OfflineRouteCase):
     def setUp(self):
         super().setUp()
+        self.now = 1000.0
+        self.fixture.stack.enter_context(patch.object(
+            reask.time, "time", side_effect=lambda: self.now))
+        append_user = self.fixture.append_user
+
+        def receive(text, **kwargs):
+            kwargs.setdefault("timestamp", datetime.fromtimestamp(self.now, timezone.utc).isoformat())
+            return append_user(text, **kwargs)
+
+        self.fixture.stack.enter_context(patch.object(self.fixture, "append_user", side_effect=receive))
         reask.start(CALLER, TARGET, task_id="offline-task", now=1000.0,
                     workspace=WORKSPACE, channels=[str(self.fixture.home / "offline-channel")])
 
     def tick(self, now=1001.0):
+        self.now = now
         return reask.tick(CALLER, now)
 
     def original(self, ask):
@@ -459,14 +493,19 @@ class ExecutorReaskCodexRouteTests(OfflineRouteCase):
         self.assertEqual(len(self.rpc.mutations), 1)
         self.fixture.rpc.assert_not_called()
 
-    def test_late_pending_receipt_allows_only_a_fresh_marker_to_send(self):
+    def test_late_pending_receipt_waits_sixty_seconds_before_fresh_marker(self):
         self.rpc.receive = False
         first = self.tick()
         old = first["asks"][-1]
         wire = self.original(old)["text"]
+        self.now = 1041.0
         self.fixture.append_user(wire)
         self.rpc.receive = True
         state = self.tick(1001.0 + reask.INTERVAL)
+        self.assertEqual(state["asks"][-1]["outcome"], "SKIPPED_NATIVE_RECEIPT_INTERVAL")
+        self.assertEqual(state["terminal_next_due_epoch"], 1041.0 + reask.INTERVAL)
+        self.assertEqual(len(self.rpc.mutations), 1)
+        state = self.tick(1001.0 + 2 * reask.INTERVAL)
         new = state["asks"][-1]
         self.assertNotEqual(new["marker"], old["marker"])
         self.assertEqual(new["outcome"], "CONFIRMED")

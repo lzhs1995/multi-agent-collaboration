@@ -151,15 +151,38 @@ class ClaudeMaintenanceContextTests(unittest.TestCase):
             stream.write(json.dumps(dict(type='assistant', sessionId=self.SESSION)) + '\n')
         self.assertEqual(len(self.invoke()), 1)
 
-    def test_registry_symlink_and_exclusive_enrollment(self):
-        with self.assertRaises(FileExistsError):
-            context.enroll(self.attempt, self.transcript['offset'], len(self.queue), self.request, self.reply)
+    def test_registry_symlink_and_idempotent_enrollment(self):
+        before = self.offer_path.read_bytes()
+        path, offer = context.enroll(self.attempt, self.transcript['offset'], len(self.queue), self.request, self.reply)
+        self.assertEqual((path, offer), (self.offer_path, self.offer))
+        self.assertEqual(self.offer_path.read_bytes(), before)
         original = self.offer_path.read_bytes()
         replacement = self.home / 'copy.json'
         replacement.write_bytes(original)
         self.offer_path.unlink()
         self.offer_path.symlink_to(replacement)
         self.assertEqual(self.invoke(), [])
+        with self.assertRaises((OSError, RuntimeError, ValueError)):
+            context.enroll(self.attempt, self.transcript['offset'], len(self.queue), self.request, self.reply)
+
+    def test_repeat_after_read_preserves_reply_cursor_and_original_attempt(self):
+        self.invoke()
+        self.completed_reply()
+        paths = [self.offer_path, self.reply, self.attempt,
+                 context.root() / (self.SESSION + '.cursor.json')]
+        before = {p: (p.stat().st_ino, p.read_bytes()) for p in paths}
+        context.enroll(self.attempt, self.transcript['offset'], len(self.queue), self.request, self.reply,
+                       replace_completed=self.offer['offer_id'])
+        self.assertEqual({p: (p.stat().st_ino, p.read_bytes()) for p in paths}, before)
+
+    def test_repeat_refuses_invalid_or_unrelated_replacement_id(self):
+        self.completed_reply()
+        before = self.offer_path.read_bytes()
+        for value in ['invalid', '../outside', 'f' * 64]:
+            with self.subTest(value=value), self.assertRaises((ValueError, OSError)):
+                context.enroll(self.attempt, self.transcript['offset'], len(self.queue),
+                               self.request, self.reply, replace_completed=value)
+            self.assertEqual(self.offer_path.read_bytes(), before)
 
     def test_original_queue_must_follow_intent_and_match_whole_wire(self):
         for change in [dict(offset=0), dict(bytes=0), dict(sha256='0' * 64)]:

@@ -6,13 +6,22 @@ Enrollment occurs only after executor_reask start authenticates its live pair.
 The background job preserves that authorization, never supplies a foreground
 identity, and never reconciles or repeats an original transport attempt.
 """
+import time
+
+# Earliest Python module boundary; interpreter startup and time before this
+# module was scheduled are NOT measured. Keep heavy imports below this fence.
+_MODULE_ENTRY_EPOCH = time.time()
+_MODULE_ENTRY_MONOTONIC = time.monotonic()
+
 import argparse
 import copy
 from bisect import bisect_right
 from contextlib import contextmanager
 import fcntl
+from functools import wraps
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import plistlib
@@ -20,7 +29,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 
 import configuration_guardian as guardian
@@ -29,6 +37,8 @@ import executor_reask as reask
 import executor_reask_protocol as protocol
 from cmux_evidence_io import read_bytes
 
+_IMPORTS_FINISHED_MONOTONIC = time.monotonic()
+
 LABEL = 'org.multi-agent-collaboration.executor-reask-scheduler'
 SCHEMA = 'executor-reask-enrollment-v2'
 LEGACY_SCHEMA = 'executor-reask-enrollment-v1'
@@ -36,6 +46,7 @@ TRANSACTION_SCHEMA = 'executor-reask-registration-transaction-v1'
 MAX_ENROLLMENTS = 256
 MAX_CHANNELS = 8
 MAX_SWEEP_SECONDS = 10.0
+SWEEP_INTERVAL_SECONDS = 60.0
 BINDING_KEYS = ('caller_surface_uuid', 'supervisor', 'workspace_uuid', 'task_id',
                 'purpose', 'episode_id', 'channels', 'mailbox')
 LIVE_KEYS = ('workspace_uuid', 'caller_surface_uuid', 'target_surface_uuid', 'target_pane_uuid')
@@ -57,14 +68,33 @@ def secure_directory(path):
         raise ValueError('scheduler state must be a private canonical directory')
 
 
+class RegistryBusy(BlockingIOError):
+    """Only failure to acquire the scheduler registry lock."""
+
+
 @contextmanager
 def registry_lock():
     """Serialize registrations so simultaneous callers cannot exceed the cap."""
     secure_directory(root())
     fd = os.open(root() / 'registry.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+') as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RegistryBusy('scheduler registry is busy') from exc
         yield
+
+
+def registration_result(function):
+    """Expose lock contention without reclassifying failures inside the body."""
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except RegistryBusy:
+            return dict(outcome='REGISTRY_BUSY', input_operations=0,
+                        retry_same_arguments=True)
+    return invoke
 
 
 def check_capacity(directory):
@@ -88,10 +118,9 @@ def provenance():
 
 def approved_release(manifest=None):
     """Verify CURRENT and all immutable members, including this scheduler."""
-    current, _manager = guardian.load_release(
+    current, pins = guardian.verify_release(
         Path.home(), manifest or ready.state_root() / 'CURRENT.json')
     path = Path(current['source']) / 'scripts/executor_reask_scheduler.py'
-    _raw, pins = guardian.read_json(path.parents[1].parent / 'MANIFEST.json')
     if (path != Path(__file__).resolve()
             or 'scripts/executor_reask_scheduler.py' not in pins['files']):
         raise ValueError('scheduler is not pinned in CURRENT; do not migrate episodes')
@@ -100,6 +129,10 @@ def approved_release(manifest=None):
 
 def binding(state):
     value = {key: state.get(key) for key in BINDING_KEYS}
+    # An old enrollment must compare exactly as issued. Never infer or add a
+    # native identity when registering/reusing a historical inquiry.
+    if 'executor_identity' in state:
+        value['executor_identity'] = copy.deepcopy(state['executor_identity'])
     if state.get('continuation'):
         from executor_reask_lifecycle import binding as lifecycle_binding
         value['continuation'] = lifecycle_binding(state['continuation'])
@@ -277,11 +310,13 @@ def _continuing(state):
 def _available(state, pins, now):
     if not _pair_matches(state, pins) or state.get('state') != reask.WAITING:
         raise ValueError('live pair and waiting episode do not match')
-    from executor_reask_lifecycle import poll_authorization, observe_formal_tasks
+    from executor_reask_lifecycle import (poll_authorization, observe_formal_tasks,
+                                         reservation_inquiries_allowed)
     preview = copy.deepcopy(state)
     poll_authorization(preview, now, publish=False)
     observe_formal_tasks(preview, now, publish=False)
-    if preview.get('state') != reask.WAITING or preview.get('paused_tasks'):
+    if (preview.get('state') != reask.WAITING or preview.get('paused_tasks')
+            and not reservation_inquiries_allowed(preview)):
         raise ValueError('inquiry authorization ended or a formal task owns the executor')
 
 
@@ -357,6 +392,10 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
         raise ValueError('registration changed before commit')
     old_record = json.loads(registration_raw) if registration_raw is not None else None
     active = _bound_record(old_record, previous, path) if previous else None
+    if (previous and previous.get('episode_id') == state.get('episode_id')
+            and (state.get('continuation') or {}).get('reservation_inquiries') is True
+            and active is None):
+        raise ValueError('reservation inquiries require the original enrollment or a new authenticated episode')
     token = uuid.uuid4().hex
     registration = dict(token=token, enrollment=str(path))
     candidate = copy.deepcopy(state)
@@ -403,7 +442,8 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
     return candidate
 
 
-def start(live, *, now=None, **kwargs):
+@registration_result
+def start(live, *, now=None, authenticate_executor=False, **kwargs):
     """Atomically register an explicitly authenticated new inquiry episode."""
     now = time.time() if now is None else now
     caller = canonical_uuid(live['caller_surface_uuid'])
@@ -431,12 +471,22 @@ def start(live, *, now=None, **kwargs):
                 return previous
             if record:
                 raise ValueError('use explicit enroll-existing for the original registration')
+        elif authenticate_executor:
+            # Capture only a genuinely new episode, inside both locks and
+            # before the registration transaction commits. This is the
+            # foreground CLI; the background scheduler never reads transcripts.
+            from executor_reply_advisory import capture_executor
+            native_identity = capture_executor(live, state=state)
+            if not isinstance(native_identity, dict):
+                raise ValueError('new foreground inquiry requires its original executor identity')
+            state['executor_identity'] = native_identity
         _available(state, pins, now)
         return _commit(state, pins, previous, raw, authorization='EXPLICIT_REASK_START',
                        original=reask.controller(), now=now,
                        resume_stopped=kwargs.get('resume_stopped', False))
 
 
+@registration_result
 def enroll(state, live, *, now=None):
     """Compatibility API for already authenticated, locally created episodes."""
     now = time.time() if now is None else now
@@ -474,6 +524,7 @@ def enroll(state, live, *, now=None):
         return _select(ready.read_json(path), result, path)
 
 
+@registration_result
 def enroll_existing(live, episode, enrollment_sha256, *, now=None):
     """Original executor explicitly registers exact old evidence; never ticks."""
     now = time.time() if now is None else now
@@ -494,6 +545,17 @@ def enroll_existing(live, episode, enrollment_sha256, *, now=None):
             if record and record.get('schema') == TRANSACTION_SCHEMA:
                 return dict(outcome='REGISTRATION_UNCOMMITTED', input_operations=0)
         old = _bound_record(record, state, path) if record is not None else None
+        if record is not None and old is None:
+            prior_binding = record.get('binding') if isinstance(record, dict) else None
+            prior_episode = prior_binding.get('episode_id') if isinstance(prior_binding, dict) else None
+            # An authenticated original episode may replace a pinned enrollment
+            # left by a different episode. It cannot repair a changed binding
+            # for this episode or acquire reservation privileges by re-enrolling.
+            if (not isinstance(record, dict) or record.get('schema') not in (SCHEMA, LEGACY_SCHEMA)
+                    or not isinstance(prior_episode, str) or not prior_episode
+                    or prior_episode == state['episode_id']
+                    or (state.get('continuation') or {}).get('reservation_inquiries') is True):
+                raise ValueError('existing enrollment belongs to its original controller/binding')
         if (reask.stop_file(caller).exists() or state.get('state') != reask.WAITING
                 or old and old.get('status') == 'FINISHED'):
             raise ValueError('stopped or finished inquiries cannot be re-enrolled')
@@ -511,6 +573,81 @@ def enroll_existing(live, episode, enrollment_sha256, *, now=None):
 
 def never_send(*_args, **_kwargs):
     raise AssertionError('file scheduler must never invoke transport')
+
+
+def _finite(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _cadence(previous, now):
+    result = dict(status='FIRST_OBSERVATION', interval_seconds=SWEEP_INTERVAL_SECONDS)
+    before = previous.get('at_epoch')
+    if _finite(before) and _finite(now):
+        gap = now - before
+        result.update(previous_sweep_epoch=before, interval_observed_seconds=gap,
+                      late_by_seconds=max(0, gap - SWEEP_INTERVAL_SECONDS),
+                      status=('CLOCK_REGRESSED' if gap < 0 else 'SWEEP_LATE'
+                              if gap > 2 * SWEEP_INTERVAL_SECONDS else 'ON_TIME'))
+    return result
+
+
+def _release_observation(state, previous, now):
+    """Observe the latest exact RELEASE; bounded history is not a full ledger.
+
+    A new boundary carries an atomic file-post watermark. Without that proof,
+    or once multiple posts have already passed, report only the first *visible*
+    post. Never infer RELEASE from marker expiry/absence or an idle screen.
+    """
+    boundary = state.get('last_task_boundary')
+    if (not isinstance(boundary, dict) or boundary.get('event') != 'RELEASED'
+            or not _finite(boundary.get('at_epoch')) or not _finite(now)):
+        return None
+    if (isinstance(previous, dict) and previous.get('boundary') == boundary
+            and previous.get('first_visible_post')):
+        return copy.deepcopy(previous)
+    result = dict(boundary=copy.deepcopy(boundary), observed_epoch=now,
+                  episode_state=state.get('state'), first_is_actual_first=False,
+                  proof='EPISODE_RECORDED_CHANNEL_SUCCESS', input_operations=0)
+    released = boundary['at_epoch']
+    watermark = boundary.get('file_posts_at_release')
+    attempt_at_release = boundary.get('attempt_count_at_release')
+    has_watermark = (type(watermark) is int and watermark >= 0
+                     and type(attempt_at_release) is int and attempt_at_release >= 0)
+    posts = []
+    for ask in state.get('asks', []):
+        if (not isinstance(ask, dict) or not _finite(ask.get('at_epoch'))
+                or not isinstance(ask.get('channels'), dict)
+                or not ask['channels'].get('written')):
+            continue
+        if has_watermark:
+            if type(ask.get('attempt')) is not int or ask['attempt'] <= attempt_at_release:
+                continue
+        elif ask['at_epoch'] < released:
+            continue
+        posts.append(ask)
+    if posts:
+        first = posts[0]  # retain issued order, not wall-clock sort order
+        delay = first['at_epoch'] - released
+        exact = has_watermark and state.get('file_posts') == watermark + 1
+        result.update(status='FIRST_RESUMED_POST_OBSERVED' if exact
+                      else 'FIRST_VISIBLE_POST_OBSERVED', first_is_actual_first=exact,
+                      first_visible_post={k: copy.deepcopy(first.get(k))
+                                          for k in ('marker', 'attempt', 'at_epoch', 'channels')},
+                      first_visible_delay_seconds=delay,
+                      delay_status=('CLOCK_REGRESSED' if delay < 0 else 'RESUME_LATE'
+                                    if delay > 2 * SWEEP_INTERVAL_SECONDS else 'ON_TIME'))
+        if exact:
+            result['release_to_first_file_post_seconds'] = delay
+    else:
+        from executor_reask_lifecycle import reservation_inquiries_allowed
+        eligible = (state.get('state') == reask.WAITING
+                    and (not state.get('paused_tasks') or reservation_inquiries_allowed(state)))
+        elapsed = now - released
+        result.update(status='AWAITING_FILE_POST' if eligible else 'RESUME_NOT_CURRENTLY_ELIGIBLE',
+                      elapsed_since_release_seconds=elapsed,
+                      delay_status=('CLOCK_REGRESSED' if elapsed < 0 else 'RESUME_LATE'
+                                    if eligible and elapsed > 2 * SWEEP_INTERVAL_SECONDS else 'PENDING'))
+    return result
 
 
 def _sweep_one(path, now, execution):
@@ -570,10 +707,18 @@ def _sweep_one(path, now, execution):
                                next_due_epoch=state.get('next_due_epoch'))
                     if state.get('paused_tasks'):
                         row['paused_tasks'] = copy.deepcopy(state['paused_tasks'])
+                        from executor_reask_lifecycle import reservation_inquiries_allowed
+                        row['reservation_inquiries_authorized'] = reservation_inquiries_allowed(state)
                 else:
                     return dict(row, status='BINDING_OR_CONTROLLER_MISMATCH')
                 if ready.read_json(path) != record:
                     return dict(row, status='ENROLLMENT_CHANGED')
+                observation = _release_observation(
+                    state, record.get('release_resume_observation'),
+                    time.time() if now is None else now)
+                if observation is not None:
+                    row['release_resume_observation'] = observation
+                    record['release_resume_observation'] = observation
                 record['last_execution'] = dict(execution, state=state['state'],
                                                file_posts=row['file_posts'], input_operations=0)
                 if state['state'] != reask.WAITING and not (
@@ -587,13 +732,20 @@ def _sweep_one(path, now, execution):
     return row
 
 
-def sweep(*, manifest=None, now=None):
+def sweep(*, manifest=None, now=None, observe_startup=False):
     """A bounded zero-input sweep, skipping busy/mismatched/unenrolled episodes."""
     started = time.monotonic()
     result = dict(status='SWEPT', label=LABEL, at_epoch=time.time() if now is None else now,
                   input_operations=0, file_posts=0, episodes=[],
                   hook_exposure_proven=False, model_reading_proven=False,
                   native_reception_proven=False, phase='LOCK', phase_seconds={})
+    if observe_startup:
+        result['startup_observation'] = dict(
+            boundary='PYTHON_MODULE_ENTRY_AFTER_TIME_IMPORT',
+            module_entry_epoch=_MODULE_ENTRY_EPOCH,
+            module_to_sweep_seconds=max(0, started - _MODULE_ENTRY_MONOTONIC),
+            module_import_seconds=max(0, _IMPORTS_FINISHED_MONOTONIC - _MODULE_ENTRY_MONOTONIC),
+            interpreter_start_observed=False, pid=os.getpid())
     phase_started = started
     cursor_loaded = False
 
@@ -619,6 +771,7 @@ def sweep(*, manifest=None, now=None):
                 # An early verification deadline must not reset a prior cursor.
                 phase('LOAD_CURSOR')
                 previous = ready.read_json(root() / 'STATUS.json') or {}
+                result['cadence'] = _cadence(previous, result['at_epoch'])
                 last = previous.get('last_enrollment', '')
                 if not isinstance(last, str):
                     last = ''
@@ -676,7 +829,10 @@ def launchd_spec(home, source, python, manifest):
     return dict(Label=LABEL, RunAtLoad=True, StartInterval=60, ThrottleInterval=10,
                 ProgramArguments=[str(python), '-B', str(Path(source) / 'scripts/executor_reask_scheduler.py'),
                                   'sweep', '--manifest', str(manifest)],
-                StandardOutPath='/dev/null', StandardErrorPath='/dev/null', ProcessType='Background')
+                # A 60-second coordination deadline should not inherit the
+                # CPU/I/O throttling of discretionary Background work. Retain
+                # the bounded sweep, nonblocking locks and normal QoS.
+                StandardOutPath='/dev/null', StandardErrorPath='/dev/null', ProcessType='Standard')
 
 
 def install_job(manifest=None, *, apply=False):
@@ -725,11 +881,11 @@ def main(argv=None):
     parser.add_argument('--apply', action='store_true', help='install-job only')
     args = parser.parse_args(argv)
     try:
-        result = (sweep(manifest=args.manifest) if args.mode == 'sweep'
+        result = (sweep(manifest=args.manifest, observe_startup=True) if args.mode == 'sweep'
                   else install_job(args.manifest, apply=args.apply))
     except Exception as exc:
         result = dict(status='SCHEDULER_FAILED', error_type=type(exc).__name__, input_operations=0)
-    print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False), flush=True)
     return 2 if result['status'] == 'SCHEDULER_FAILED' else 0
 
 
