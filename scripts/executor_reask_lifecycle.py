@@ -203,9 +203,12 @@ def consume(caller, reply_sha256='', *, now=None):
         state = reask.load(caller) or {}
         if not state:
             return _consume_result(dict(outcome='NO_EPISODE'), 'NO_EPISODE')
-        if _consume_controller(state) != reask.controller():
+        original, invoked = _consume_controller(state), reask.controller()
+        if original != invoked:
+            from executor_reask_protocol import controller_diagnostic
             return _consume_result(
-                dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0),
+                dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0,
+                     controller_diagnostic=controller_diagnostic(original, invoked)),
                 'ORIGINAL_CONTROLLER_REQUIRED')
         from executor_reask_identity import authenticate
         consumer = authenticate(state)

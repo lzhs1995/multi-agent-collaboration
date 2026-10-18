@@ -72,7 +72,9 @@ delivery, acceptance or disarm; installed PostToolUse does not do it automatical
 Explicit `executor_ready.py persist` observes one original request and bound reply
 for at most 300 seconds. The separately authorized `executor_reask.py` loop
 issues a new marker every 60 seconds, using files only while an earlier terminal
-attempt is unconfirmed. Stop neither starts nor forces that loop. CCC and native
+attempt is unconfirmed. That runner policy does not prohibit independent ready
+messages through the supported entrypoint. The original is only reconciled,
+never replayed. Stop neither starts nor forces that loop. CCC and native
 Goal behavior require their own evidence; neither is certified by this observer.
 
 The historical mixed-version findings below are retained verbatim. They do not

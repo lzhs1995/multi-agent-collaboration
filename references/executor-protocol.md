@@ -1,6 +1,9 @@
 # Executor Protocol
 
 The executor owns implementation inside the task pack boundaries.
+Use [evidence and handoffs](collaboration-evidence-and-handoffs.md) when reporting
+child tasks, sharing a review or distinguishing notice reception from acceptance.
+Normal work and Goal continuation do not prevent ready messages in either direction.
 
 Before inspecting or changing source, the executor must read and obey the
 `multi-agent-collaboration` skill named by the task pack. The handshake ACK is

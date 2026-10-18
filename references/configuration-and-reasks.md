@@ -94,6 +94,44 @@ guardian cannot guarantee uninterrupted registration during every external write
 Alternate config roots require explicit registration; do not claim coverage of
 uninspected roots or a client started with settings sources disabled.
 
+## Explicit settings profile repair
+
+A Claude process started with an explicit `--settings` JSON may use a profile
+outside the live config and cc-switch database. From 0.4.47, inspect its actual
+launch arguments and use `reconcile-profile` for that one existing profile.
+This is an explicit operation, not automatic profile discovery. Use the exact
+`python` and complete immutable `source` from CURRENT.json; in the example below,
+`collab_python`, `collab_source` and `collab_profile` contain those verified
+absolute paths:
+
+```sh
+"$collab_python" -B "$collab_source/scripts/configuration_guardian.py" \
+  reconcile-profile --settings "$collab_profile"
+"$collab_python" -B "$collab_source/scripts/configuration_guardian.py" \
+  reconcile-profile --settings "$collab_profile" \
+  --expected-sha256 "$collab_preview_sha256" --apply
+```
+
+Set `collab_preview_sha256` to the preview's complete `before_sha256`, after
+reviewing `change_needed` and the intended source. Apply requires that exact
+original-byte hash. The command verifies the whole CURRENT release, takes the
+shared installation lock, accepts only a canonical absolute owned regular file,
+and saves private exact rollback bytes before a change. It updates owned hook
+registrations while preserving foreign hooks, provider/model/environment values
+and all other fields. It never starts, resumes or reinstalls the guardian job;
+an operator's pause remains in force. An explicit `disableAllHooks` is retained
+and reported as `HOOKS_DISABLED_EXTERNALLY`.
+
+`INSTALLER_BUSY`, `CONCURRENT_EDIT` and `POST_WRITE_VERIFICATION_FAILED` return
+nonzero. A conflict before replacement leaves the file untouched. A conflict
+or invalid readback after replacement does not overwrite a later writer;
+`replacement_performed` and the recorded hashes distinguish these cases.
+Preview and unchanged results do not rewrite the profile. No profile contents
+or credentials are printed. A repaired file proves only configuration on disk;
+actual hook invocation, thread authentication and successful communication each
+need their own evidence. Do not restart or replace an existing conversation
+merely to make a repaired profile take effect.
+
 ## Explicitly authorized 60-second inquiries
 
 The default `executor_ready.py persist` observes one request for a finite budget.
@@ -139,8 +177,10 @@ Other I/O errors retain their actual failure rather than reporting contention.
 Each inquiry gets a new issued marker, preserving the same task/episode binding.
 The original unconfirmed terminal attempt remains durable even after the bounded
 history rotates. Read that original journal first. While it remains queued,
-stranded or uncertain, later inquiries use files only: never paste another prompt
-over it, change its nonce, or treat queue status as native receipt.
+stranded or uncertain, this automatic runner's later inquiries use files only:
+never paste over the original, change its nonce, or treat queue status as native
+receipt. Independent ready messages remain permitted through the supported
+entrypoint; they must preserve the actual draft and cannot replay the original.
 
 Each round updates configured file channels plus one durable supervisor inbox
 entry. Track checks, attempts, successful file writes, actual pastes and exact
@@ -590,6 +630,11 @@ consumption fields instead of treating exit code 0 as proof.
 File compatibility does not let CURRENT consume an old controller's reply.
 Except for operator stop, a controller mismatch returns
 `ORIGINAL_CONTROLLER_REQUIRED` before authorization, receipt or state writes.
+From 0.4.47, tick and consume also return `controller_diagnostic`: the recorded
+original controller, invoked controller and a suggested next action. Source,
+Python and pins describe those records; they do not authenticate a new caller,
+execute old code or grant consumption authority. An unknown original is reported
+as `UNKNOWN / INSPECT_ORIGINAL_EVIDENCE`, never filled from CURRENT.
 Consumption requires the authenticated original executor and original controller.
 For new current-controller episodes this checks the pinned original native
 session/thread and process binding, not just the surface/workspace. Both ordinary

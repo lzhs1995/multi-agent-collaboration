@@ -193,15 +193,26 @@ class ProtocolTests(unittest.TestCase):
 
     def test_reviewed_0444_issuer_preserves_original_authority(self):
         release44 = '0.4.44-2b9bce3b41eb'
+        # This is the issuer's original reviewed scope, not today's registry.
+        allowed = {
+            '0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+            '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+            '0.4.33-09de16ceb823', '0.4.34-d333557fb498',
+            '0.4.35-e62f35828c7a', '0.4.36-8ab59dbb5a5a',
+            '0.4.37-c7258c383218', '0.4.41-28b36490b149',
+            '0.4.42-5947b2d1f8aa', release44,
+        }
+        self.assertNotIn('0.4.46-37e945dea2e3', allowed)
         for origin in REVIEWED:
             with self.subTest(controller=origin, issuer=release44):
                 state, record = self.episode(origin)
-                original = copy.deepcopy(state)
                 record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
                               scheduler=issuer(*self.releases[release44][:2]),
                               authorization='EXPLICIT_REASK_ENROLL_EXISTING')
-                self.assertTrue(protocol.supports_record(record, state, self.current_scheduler))
-                self.assertEqual(state, original)
+                original = copy.deepcopy((state, record))
+                self.assertEqual(protocol.supports_record(record, state, self.current_scheduler),
+                                 origin in allowed)
+                self.assertEqual((state, record), original)
         for older in ('0.4.42-5947b2d1f8aa', '0.4.37-c7258c383218'):
             state, record = self.episode(release44)
             record.update(scheduler=issuer(*self.releases[older][:2]),
@@ -218,6 +229,55 @@ class ProtocolTests(unittest.TestCase):
                       scheduler=issuer(*self.releases[release44][:2]),
                       authorization='EXPLICIT_REASK_ENROLL_EXISTING')
         self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
+    def test_reviewed_0446_issuer_preserves_original_authority(self):
+        release46 = '0.4.46-37e945dea2e3'
+        allowed = {
+            '0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+            '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+            '0.4.33-09de16ceb823', '0.4.34-d333557fb498',
+            '0.4.35-e62f35828c7a', '0.4.36-8ab59dbb5a5a',
+            '0.4.37-c7258c383218', '0.4.41-28b36490b149',
+            '0.4.42-5947b2d1f8aa', '0.4.44-2b9bce3b41eb', release46,
+        }
+        self.assertEqual(set(protocol.LEGACY_FILE_PROTOCOL[release46]['controllers']), allowed)
+        for origin in REVIEWED:
+            with self.subTest(controller=origin, issuer=release46):
+                state, record = self.episode(origin)
+                record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[release46][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                original = copy.deepcopy((state, record))
+                self.assertTrue(protocol.supports_state(state, record))
+                self.assertEqual(protocol.supports_record(record, state, self.current_scheduler),
+                                 origin in allowed)
+                self.assertEqual((state, record), original)
+
+    def test_reviewed_0446_rejects_reverse_future_and_unreviewed_authority(self):
+        release46 = '0.4.46-37e945dea2e3'
+        # Older issuers never acquire the newly reviewed controller's authority.
+        for older in REVIEWED_V3:
+            if older == release46:
+                continue
+            with self.subTest(older_issuer=older):
+                state, record = self.episode(release46)
+                record.update(scheduler=issuer(*self.releases[older][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                original = copy.deepcopy((state, record))
+                self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+                self.assertEqual((state, record), original)
+        # Reviewed 0.4.46 cannot enroll a future CURRENT or an unreviewed release.
+        for origin in (None, '0.4.43-unreviewed', '0.4.45-unreviewed'):
+            with self.subTest(controller=origin):
+                if origin:
+                    self.releases[origin] = self.make_release(origin, current=True)
+                state, record = self.episode(origin, current=origin is None)
+                record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[release46][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                original = copy.deepcopy((state, record))
+                self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+                self.assertEqual((state, record), original)
 
     def test_reviewed_0442_issuer_preserves_original_authority(self):
         release42 = '0.4.42-5947b2d1f8aa'

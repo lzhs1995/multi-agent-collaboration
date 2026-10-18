@@ -9,7 +9,13 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.46.** Send a ready prompt in either direction through the supported
+**Version: 0.4.47.** Explicit profile repair preserves user configuration and a
+paused guardian; controller refusals name the original and invoked sources.
+Reviewed 0.4.46 file episodes retain their original authority. See the
+[0.4.47 release contract](references/release-0.4.47.md) and
+[evidence and handoffs](references/collaboration-evidence-and-handoffs.md).
+
+Send a ready prompt in either direction through the supported
 guarded entrypoint, including while the receiver works or its native `/goal`
 continues. Do not wait for an idle turn or pause `/goal` to communicate.
 Fresh preflight performs identity, handshake and validation without the optional
@@ -242,6 +248,8 @@ receipt, executor ACK, callback and acceptance are separate observations.
 1. Read [supervisor protocol](references/supervisor-protocol.md) when coordinating,
    [executor protocol](references/executor-protocol.md) when receiving work, and
    [review standard](references/consensus-audit-standard.md) when conducting review.
+   Use [evidence and handoffs](references/collaboration-evidence-and-handoffs.md)
+   to distinguish child execution, notification, receipt and integration.
    This entrypoint overrides historical personal defaults in those references.
 2. Run `scripts/mac_harness.py preflight` with an explicit task id, absolute
    artifact root, and the existing executor surface. This covers setup, identity,

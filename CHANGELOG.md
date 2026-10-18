@@ -1,3 +1,30 @@
+## 0.4.47
+
+- Add explicit `configuration_guardian.py reconcile-profile` preview/apply for
+  one actual Claude `--settings` file. Verify complete CURRENT, use the shared
+  install lock, require the original byte SHA, retain a private exact backup,
+  and check the written hash. Preserve non-hook fields, foreign hooks and any
+  deliberate guardian pause; configuration repair does not prove client loading.
+- Report original and invoked source/Python/pins on `ORIGINAL_CONTROLLER_REQUIRED`
+  from tick and consume, without consuming, sending or changing old state.
+- Recognize the completely verified `0.4.46-37e945dea2e3` file protocol and its
+  original 13-controller issuer scope. Historical issuers gain no future
+  authority; old release code is neither imported nor executed.
+- Consolidate accepted child-task, receipt, provenance, peer-check, inbox and
+  handoff lessons. Normal work and Goal continuation remain compatible with
+  immediate communication; an unconfirmed original does not ban independent
+  new information. Keep original attempts and shared write ownership.
+
+Local Python 3.14 validation passed 2,391 offline tests and 6 handshake-schema
+checks. The paired thesis-refiner suite passed all 205 tests with this repository's
+real resource broker configured; no cross-repository test was skipped.
+
+The inherited Claude review remains
+`NO_BLOCKER_FOUND_IN_REVIEWED_SCOPE_PARTIAL`, not an overall PASS for this
+release. Offline validation, publication, installation, automatic hook adoption
+and original-session delivery are separate evidence. See the
+[release contract](references/release-0.4.47.md).
+
 ## 0.4.46
 
 Allow ready prompts in both directions during normal work and native Goal
