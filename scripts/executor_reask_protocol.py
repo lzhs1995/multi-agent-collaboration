@@ -29,6 +29,7 @@ MAX_RELEASE_FILES = 2048
 # Raw immutable manifests reviewed with LEGACY; never learn trust from a record
 # or from a manifest's self-reported version/tree hash.
 LEGACY_MANIFESTS = {
+    '0.4.35-e62f35828c7a': '0084ec08de7195a4ba2b8d5bc22e6495b56da387113d9c1308e380c5d9abf53b',
     '0.4.28-ae66245771d0': '31579cfab68b908561a6b6833079c5942bc27e05fe097f6f3249b3cef81cac6e',
     '0.4.30-ff75100795a9': '80f925fb74964f2cc0d72d7464f418e23ab637d504f78c79e4dd47fb26fe815f',
     '0.4.31-79ae83e9d5da': 'bc369ef7c81e7a4c34c4001736df61a99b634350248a2299def68e92efa098f5',
@@ -39,6 +40,22 @@ LEGACY_MANIFESTS = {
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
 LEGACY = {
+    "0.4.35-e62f35828c7a": {
+        "VERSION": "b51c07322891392fdf1955c07b13172c07a6e10529a0ce6dea46559d6247c9ac",
+        "scripts/cmux_bridge.py": "8a34327d4031d3f55fc6d7f71f5ec5f8a023f64fafef2eaf1d5c2c78cd52015a",
+        "scripts/cmux_daemon_identity.py": "886ef37091b1d6279c351c5ae2a62d2e3bf1980bb4c2524da406927918dd06eb",
+        "scripts/cmux_foreground_thread.py": "892cd5f401703e8b7f833cc1dd3a2aba2886fc1859b56b7bed681f5fd92b39b3",
+        "scripts/cmux_native_delivery.py": "6a8a936f36a54bacfabd491b1b84f33c8703da1fe2d7400d2e3e345106c49a7d",
+        "scripts/cmux_workspace_guard.py": "93894510540c9b6eaa0518e57b09652c7dd08727edbdad57f04e1e4379d211c2",
+        "scripts/executor_ready.py": "1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79",
+        "scripts/executor_reask.py": "8498b4e2963508e2ecff978165917ee218bcfb067238b46e862296c3641b5ba2",
+        "scripts/executor_reask_identity.py": "2e68a94bd1c0acba6a5f292568cb8f039bc25932cecb2fc89e809b6f093df7b1",
+        "scripts/executor_reask_lifecycle.py": "f7d3dc7b1713bd4dc8d6db8aca0990b3c8bdb186fd24d6ed5902d146a5c08426",
+        "scripts/executor_reask_protocol.py": "7c050be2cc7101805e2e60daeba9d17d36f1f258d474432052a2cfa995114337",
+        "scripts/executor_reask_scheduler.py": "d0600c52aabd38c11bff8a50a9e2b07dc720cb82c004ddfca602151e563fb071",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reply_advisory.py": "e13c052c8c75cf54682a74666e3cbda70ce797974436b57a585f39b2093b452a"
+    },
     "0.4.30-ff75100795a9": {
         "VERSION": "6028dc76386f65f57a4e92607c78ea99f5fa4085426ee6f3c7fe0564dc2b2485",
         "scripts/executor_reask.py": "0a99a8737f689bccbe30e759c94ba9389226c208ab879b2160b7db9c704e0aa4",
@@ -98,6 +115,14 @@ LEGACY = {
 # A historical issuer can only have enrolled controllers supported when it ran;
 # it cannot claim to have enrolled a future CURRENT or a subsequently added release.
 LEGACY_FILE_PROTOCOL = {
+    '0.4.35-e62f35828c7a': {
+        'descriptor': {'id': 'executor-reask-file-v1',
+                       'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+        'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+                        '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+                        '0.4.33-09de16ceb823', '0.4.34-d333557fb498',
+                        '0.4.35-e62f35828c7a'),
+    },
     '0.4.32-c7338a400bf4': {
         'descriptor': {'id': 'executor-reask-file-v1',
                        'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
@@ -119,6 +144,33 @@ LEGACY_FILE_PROTOCOL = {
                         '0.4.33-09de16ceb823', '0.4.34-d333557fb498'),
     },
 }
+# Historical abilities are explicit and never inherit future FILES changes.
+LEGACY_CAPABILITIES = {
+    '0.4.35-e62f35828c7a': {
+        'controller_files': (
+            "VERSION",
+            "scripts/cmux_bridge.py",
+            "scripts/cmux_daemon_identity.py",
+            "scripts/cmux_foreground_thread.py",
+            "scripts/cmux_native_delivery.py",
+            "scripts/cmux_workspace_guard.py",
+            "scripts/executor_ready.py",
+            "scripts/executor_reask.py",
+            "scripts/executor_reask_identity.py",
+            "scripts/executor_reask_lifecycle.py",
+            "scripts/executor_reask_protocol.py",
+            "scripts/executor_reply.py",
+            "scripts/executor_reply_advisory.py",
+        ),
+        'reservation_inquiries': True,
+    },
+}
+
+
+def historical_files(name):
+    return LEGACY_CAPABILITIES.get(name, {}).get('controller_files', LEGACY_FILES)
+
+
 CONTRACT = dict(id='executor-reask-file-v1', version=1,
                 operations=['bound-file-request', 'bound-file-reply-detection',
                             'authorization-stop', 'formal-reservation'],
@@ -331,7 +383,7 @@ def _trusted_release(source, checked):
     if name not in LEGACY:
         raise ValueError('unknown historical release is unsupported')
     files = _verify_release(source, LEGACY_MANIFESTS.get(name))
-    if {key: files[key]['sha256'] for key in (*LEGACY_FILES, SCHEDULER)} != LEGACY[name]:
+    if {key: files[key]['sha256'] for key in (*historical_files(name), SCHEDULER)} != LEGACY[name]:
         raise ValueError('unreviewed controller/scheduler combination')
     result = dict(kind='legacy', name=name, files=files)
     checked[source] = result
@@ -342,7 +394,7 @@ def _controller_release(value, checked):
     if not controller_shape(value):
         raise ValueError('invalid controller')
     release = _trusted_release(Path(value['source']), checked)
-    members = FILES if release['kind'] == 'current' else LEGACY_FILES
+    members = FILES if release['kind'] == 'current' else historical_files(release['name'])
     if (value['files'] != {key: release['files'][key]['sha256'] for key in members}
             or release['kind'] == 'current' and value['python'] != release['python']):
         raise ValueError('controller pins differ from the trusted release')
@@ -355,7 +407,8 @@ def _supported_state(state, record, checked):
         return False
     release = _controller_release(value, checked)
     if ('reservation_inquiries' in (state.get('continuation') or {})
-            and release['kind'] != 'current'):
+            and release['kind'] != 'current'
+            and not LEGACY_CAPABILITIES.get(release['name'], {}).get('reservation_inquiries')):
         return False
     # Old v2 producers and the explicitly reviewed v3 producer have different
     # schemas. A public descriptor never grants support to an unknown release.

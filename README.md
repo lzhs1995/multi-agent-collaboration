@@ -1,4 +1,10 @@
-Current source: **0.4.35**. New submissions observe native reception for 30 seconds
+Current source: **0.4.36**. Late ACK reconciliation now authenticates an embedded
+original Codex supervisor using its kernel ancestry, native foreground and live
+cmux identity. Claude Tip rows no longer hide an active spinner. Reviewed 0.4.35
+file episodes retain their original capability and controller pins. See the
+[0.4.36 release contract](references/release-0.4.36.md).
+
+New submissions observe native reception for 30 seconds
 by default, with a finite 0–60 second option. Reconciliation defaults to one
 read-only observation and retains the original attempt, controller and RPC
 diagnostic. A timeout or aborted turn never authorizes another input.
@@ -11,7 +17,7 @@ confirmation. The reask scheduler uses Standard scheduling; the configuration
 guardian remains Background. Bounded discovery and measured Claude composer
 layouts preserve original drafts and pending evidence.
 
-The reviewed file protocol includes the complete 0.4.34 release without granting
+The reviewed file protocol includes the complete 0.4.35 release without granting
 historical issuers future authority. See [0.4.35 behavior and evidence boundaries](references/release-0.4.35.md)
 and [validation history](CHANGELOG.md). Source tests, installation, actual
 automatic hooks, full body reading and live native reception are separate checks.

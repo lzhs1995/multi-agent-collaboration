@@ -1557,9 +1557,12 @@ def _queued_or_active_input(screen):
         if any(_CLAUDE_ACTIVE_TOOL_RE.fullmatch(row) for row in claude["footer"]):
             return True
         # 活动只读当前边框前的状态，防止历史 spinner 或输入正文冒充活动。
+        # Claude may render a Tip below the current spinner. It is a hint,
+        # not a replacement status; composer text is never filtered here.
         before = list(claude["before"])
         while before and (not before[-1].strip()
-                          or _CLAUDE_GOAL_ROW_RE.fullmatch(before[-1])):
+                          or _CLAUDE_GOAL_ROW_RE.fullmatch(before[-1])
+                          or re.fullmatch(r"\s*⎿\s+Tip:[ \t]+[^\r\n]+", before[-1])):
             before.pop()
         screen = before[-1] if before else ""
         # Live spinners can omit elapsed time. Match an activity label, not
