@@ -9,7 +9,16 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.42.** When another operation holds the episode lock, `consume`
+**Version: 0.4.43.** An original single-Claude bridge probe that stopped at
+`COMPOSE_OCCUPIED` before typing its token can continue once through
+`scripts/continue_bridge_probe.py`. Preview is static and read-only. Only the
+original supervisor may apply, with the unchanged reservation, session, token
+and complete original controller after the original harness exits. A durable
+archive and fresh probe fence precede input; any existing continuation slot
+prevents another attempt. It submits no handshake or task. See the
+[0.4.43 release contract](references/release-0.4.43.md).
+
+When another operation holds the episode lock, `consume`
 returns `EPISODE_BUSY` JSON and exits 2 without reading or consuming the reply.
 The episode and reservation state are unknown in that result. Retry the same
 caller and reply SHA after the suggested one-second delay; the command does not

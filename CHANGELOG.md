@@ -1,3 +1,19 @@
+## 0.4.43
+
+Add an explicit continuation for a single-Claude bridge probe refused as
+`COMPOSE_OCCUPIED` before its original token was typed. The default checks
+original evidence and reservation pins without live inspection or writes.
+Apply authenticates the original supervisor and executor session under the
+original directory and pane locks, preserves the failed evidence, persists a
+single-use slot and fresh fence, and invokes the complete original controller's
+non-submitting probe and writer. Changed, expired, already-started or uncertain
+attempts authorize no replay. See the [release contract](references/release-0.4.43.md).
+
+Retain the fully verified installed 0.4.42 file producer when CURRENT advances.
+Its original manifest and controller pins, including coordination paths, remain
+required. Its historical issuer retains only its original supported controllers;
+compatibility grants no future, reverse or unreviewed authority.
+
 ## 0.4.42
 
 Return structured `EPISODE_BUSY` with exit code 2 when `consume` cannot acquire
