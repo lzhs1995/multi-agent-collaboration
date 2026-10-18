@@ -189,7 +189,17 @@ def consume(caller, reply_sha256='', *, now=None):
     import executor_reask as reask
     now = time.time() if now is None else now
     require_epoch(now, 'consumed_epoch')
-    with reask.episode_lock(caller):
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(reask.episode_lock(caller))
+        except reask.EpisodeBusy:
+            # No unlocked episode read, acknowledgement, or automatic retry.
+            result = _consume_result(dict(outcome='EPISODE_BUSY', input_operations=0),
+                                     'EPISODE_BUSY')
+            result['consume_result'].update(reservation_paused=None,
+                                            retry_same_arguments=True,
+                                            retry_after_seconds=1)
+            return result
         state = reask.load(caller) or {}
         if not state:
             return _consume_result(dict(outcome='NO_EPISODE'), 'NO_EPISODE')

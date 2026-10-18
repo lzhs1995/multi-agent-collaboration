@@ -1,6 +1,11 @@
-Current source: **0.4.41**. This documentation patch corrects the capacity rule:
-retain at least 10GB after installation and rollback costs; below 20GB, start
-proactive space management. Runtime behavior is unchanged from 0.4.40.
+Current source: **0.4.42**. Reply consumption reports episode lock contention as
+`EPISODE_BUSY` JSON with exit code 2. It leaves the reply unconsumed and does not
+read episode state without the lock. Retry the same caller and reply SHA after
+the suggested one-second delay. The command does not retry automatically.
+See the [0.4.42 release contract](references/release-0.4.42.md).
+
+Retain at least 10GB after installation and rollback costs; below 20GB, start
+proactive space management.
 Verified historical episodes retain file reservation
 inquiries only when their original enrollment explicitly authorized them.
 The scheduler uses the existing complete-release protocol checks and the same

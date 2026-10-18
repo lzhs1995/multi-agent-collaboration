@@ -132,7 +132,7 @@ class ProtocolTests(unittest.TestCase):
                     state['continuation']['reservation_inquiries'] = value
                     self.assert_rejected(state, record)
 
-    def test_coordination_path_pin_is_required_only_by_new_controller(self):
+    def test_coordination_path_pin_keeps_each_original_controller_contract(self):
         member = 'scripts/cmux_coordination_paths.py'
         current, record = self.episode(current=True)
         self.assert_supported(current, record)
@@ -143,17 +143,19 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(release=name):
                 state, record = self.episode(name)
                 original = copy.deepcopy((state, record))
-                self.assertNotIn(member, record['controller']['files'])
                 self.assert_supported(state, record)
                 self.assertEqual((state, record), original)
                 for value in (state['controller'], state['continuation']['controller'], record['controller']):
-                    value['files'][member] = self.current[1][member]['sha256']
+                    if member in protocol.historical_files(name):
+                        value['files'].pop(member)
+                    else:
+                        value['files'][member] = self.current[1][member]['sha256']
                 self.assert_rejected(state, record)
 
     def test_reviewed_0437_issuer_cannot_grant_reverse_or_future_authority(self):
         release37 = '0.4.37-c7258c383218'
         for older in REVIEWED_V3:
-            if older == release37:
+            if older == release37 or older not in protocol.LEGACY_FILE_PROTOCOL[release37]['controllers']:
                 continue
             for origin, scheduler, expected in ((older, release37, True),
                                                  (release37, older, False)):
@@ -166,6 +168,26 @@ class ProtocolTests(unittest.TestCase):
                     self.assertEqual(state, original)
         state, record = self.episode(current=True)
         record.update(scheduler=issuer(*self.releases[release37][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
+    def test_reviewed_0441_issuer_keeps_original_and_rejects_reverse_or_future_authority(self):
+        release41 = '0.4.41-28b36490b149'
+        release37 = '0.4.37-c7258c383218'
+        for origin, scheduler, expected in (
+                ('0.4.28-ae66245771d0', release41, True),
+                (release37, release41, True),
+                (release41, release37, False)):
+            with self.subTest(controller=origin, issuer=scheduler):
+                state, record = self.episode(origin)
+                original = copy.deepcopy(state)
+                record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[scheduler][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assertEqual(protocol.supports_record(record, state, self.current_scheduler), expected)
+                self.assertEqual(state, original)
+        state, record = self.episode(current=True)
+        record.update(scheduler=issuer(*self.releases[release41][:2]),
                       authorization='EXPLICIT_REASK_ENROLL_EXISTING')
         self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
 

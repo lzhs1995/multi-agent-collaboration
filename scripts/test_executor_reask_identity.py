@@ -355,12 +355,42 @@ class ExecutorIdentityIntegrationTests(unittest.TestCase):
         self.assertEqual(self.files(), locked_bytes[0])
 
     def test_real_episode_lock_contention_writes_nothing(self):
-        self.begin()
+        self.begin(continuing=True)
         state = self.answered()
         before = self.files()
         with reask.episode_lock(CALLER):
-            with self.assertRaises(BlockingIOError):
+            output = io.StringIO()
+            with redirect_stdout(output), patch.object(reask, 'load') as load, \
+                    patch.object(identity, 'authenticate') as authenticate:
+                code = reask.main(['consume', '--caller-uuid', CALLER,
+                                   '--reply-sha256', state['reply']['body_sha256']])
+            self.assertEqual(code, 2)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result['outcome'], 'EPISODE_BUSY')
+            self.assertEqual(result['input_operations'], 0)
+            self.assertEqual(result['consume_result']['status'], 'EPISODE_BUSY')
+            self.assertFalse(result['consume_result']['consumed'])
+            self.assertIsNone(result['consume_result']['episode_state'])
+            self.assertIsNone(result['consume_result']['reservation_paused'])
+            self.assertTrue(result['consume_result']['retry_same_arguments'])
+            self.assertEqual(result['consume_result']['retry_after_seconds'], 1)
+            load.assert_not_called()
+            authenticate.assert_not_called()
+        self.assertEqual(self.files(), before)
+        consumed = lifecycle.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+        self.assertTrue(consumed['consume_result']['consumed'])
+        self.assertEqual(consumed['consume_result']['body_sha256'], state['reply']['body_sha256'])
+        self.assertEqual(consumed['rearm_count'], 1)
+
+    def test_consume_body_io_failure_is_not_lock_contention(self):
+        self.begin()
+        state = self.answered()
+        before = self.files()
+        failure = BlockingIOError('downstream I/O, not lock acquisition')
+        with patch.object(identity, 'authenticate', side_effect=failure):
+            with self.assertRaises(BlockingIOError) as raised:
                 lifecycle.consume(CALLER, state['reply']['body_sha256'], now=1003.)
+        self.assertIs(raised.exception, failure)
         self.assertEqual(self.files(), before)
 
     def test_ordinary_consumption_requires_exact_body_sha(self):

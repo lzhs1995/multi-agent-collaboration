@@ -9,10 +9,17 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.41.** Documentation correction: retain at least 10GB after the
+**Version: 0.4.42.** When another operation holds the episode lock, `consume`
+returns `EPISODE_BUSY` JSON and exits 2 without reading or consuming the reply.
+The episode and reservation state are unknown in that result. Retry the same
+caller and reply SHA after the suggested one-second delay; the command does not
+retry automatically. Authentication and exact body checks still run under the
+lock. See the [0.4.42 release contract](references/release-0.4.42.md).
+
+Retain at least 10GB after the
 installation and rollback budget; below 20GB, begin proactive space management.
-The 20GB trigger is not an installation floor. Runtime behavior is unchanged
-from 0.4.40. Historical file reservation inquiries retain only their
+The 20GB trigger is not an installation floor. Historical file reservation
+inquiries retain only their
 original, explicit enrollment authority after complete protocol verification.
 Tick, summary and scheduler share that decision and the current sweep's verified
 release cache. Never edit an old episode to add permission or migrate its
