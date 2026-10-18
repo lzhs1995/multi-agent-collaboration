@@ -1,4 +1,13 @@
-Current source: **0.4.44**. Configuration checks close their bounded database
+Current source: **0.4.45**. A failed original continuation can clear its own
+unsubmitted probe through `scripts/recover_bridge_probe_clear.py` when it sent
+the token but issued zero clear keys. Preview is static; apply belongs to the
+original supervisor, pins the archive and uses the complete original controller.
+Each key has a durable intent and fresh identity, native-log and composer checks.
+An interrupted or uncertain attempt cannot replay. Clearing submits no message;
+publishing bridge evidence additionally requires the original active reservation.
+See the [0.4.45 recovery contract](references/release-0.4.45.md).
+
+Configuration checks close their bounded database
 snapshot before normalization. Unchanged profiles never acquire a writer lock;
 real changes use a short transaction that rolls back on any concurrent edit.
 Busy and budget outcomes are visible. One job watches the live hook files and

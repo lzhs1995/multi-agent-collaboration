@@ -1,3 +1,34 @@
+## 0.4.45
+
+Add a separate recovery entrypoint for an original single-Claude continuation
+that sent its probe token but failed with zero clear keys and no handshake.
+Static preview validates the unchanged original evidence and continuation archive
+and returns an archive SHA. Apply requires that pin, original-harness exit and
+original-supervisor authentication through the complete original controller.
+
+Preserve the original native binding and paste fence. Reject native reception,
+queued attachments, token-bearing queue operations, incomplete logs, changed
+files, another reservation and any incomplete, busy or changed composer. Hold
+the task, pane and reservation participant locks. Persist a single-use recovery
+slot and each key intent before sending one End followed by individually checked
+Backspaces; delayed observation never retries a key. No paste or submit is issued.
+Default cleanup preserves the failed bridge file. Optional publication uses the
+original writer only while the original reservation remains valid; handshake is
+a separate action by the original supervisor. Released tasks cannot publish PASS.
+
+Retain the complete, verified installed 0.4.44 file producer after CURRENT
+advances. Existing enrollments keep their original controllers and explicit
+inquiry permissions. Historical issuers gain no future or unreviewed authority.
+
+The same 35 recovery tests passed with the working-tree controller and the
+complete original 0.4.37 and 0.4.42 controllers. They cover interruption before and
+after keys/publication, altered evidence, native/queue/partial-log rejection,
+lock contention and writer heartbeat, delayed observation and a key with no effect.
+External I/O and sleeps are fixtures; their runtimes are not live latency.
+Both reported real archives passed static preview with zero input. Their original
+clear-failure causes remain undetermined. See the
+[recovery contract](references/release-0.4.45.md).
+
 ## 0.4.44
 
 Fix configuration reconciliation taking a SQLite writer lock before determining

@@ -191,6 +191,34 @@ class ProtocolTests(unittest.TestCase):
                       authorization='EXPLICIT_REASK_ENROLL_EXISTING')
         self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
 
+    def test_reviewed_0444_issuer_preserves_original_authority(self):
+        release44 = '0.4.44-2b9bce3b41eb'
+        for origin in REVIEWED:
+            with self.subTest(controller=origin, issuer=release44):
+                state, record = self.episode(origin)
+                original = copy.deepcopy(state)
+                record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[release44][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assertTrue(protocol.supports_record(record, state, self.current_scheduler))
+                self.assertEqual(state, original)
+        for older in ('0.4.42-5947b2d1f8aa', '0.4.37-c7258c383218'):
+            state, record = self.episode(release44)
+            record.update(scheduler=issuer(*self.releases[older][:2]),
+                          authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+            self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+        state, record = self.episode(current=True)
+        record.update(scheduler=issuer(*self.releases[release44][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+        unsupported = '0.4.43-unreviewed'
+        self.releases[unsupported] = self.make_release(unsupported, current=True)
+        state, record = self.episode(unsupported)
+        record.update(schema='executor-reask-enrollment-v2', file_protocol=protocol.descriptor(),
+                      scheduler=issuer(*self.releases[release44][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
     def test_reviewed_0442_issuer_preserves_original_authority(self):
         release42 = '0.4.42-5947b2d1f8aa'
         release41 = '0.4.41-28b36490b149'
