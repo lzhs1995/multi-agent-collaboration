@@ -1,6 +1,8 @@
 """固定 helper 的完整字节和同版 adapter 路由核验，不执行任何终端输入。"""
+import hashlib
 import json
 import shlex
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -106,6 +108,54 @@ class HelperRouteParityTests(unittest.TestCase):
                 expected_sha256=renderer.BASELINE_SHA256, python=other,
                 adapter=self.release / 'scripts/cmux_agent_adapter.py'))
             self.assertFalse(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
+
+    def hook_command(self, script, command):
+        return subprocess.run(
+            [sys.executable, '-B', str(self.release / 'scripts' / script)],
+            input=json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': 'Bash',
+                              'tool_input': {'command': command}}),
+            text=True, capture_output=True, timeout=15)
+
+    def test_real_hook_entrypoints_accept_exact_helper_without_running_it(self):
+        for script in ('cmux_workspace_guard.py', 'cmux_agent_panel_guard.py'):
+            with self.subTest(script=script):
+                result = self.hook_command(script, 'rtk proxy ' + shlex.quote(str(self.helper))
+                                           + ' ask surface:2 "STATUS: busy receiver update"')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {})
+
+    def test_real_hook_rejection_identifies_actual_entrypoint_and_full_helper(self):
+        sentinel = self.root / 'MUST_NOT_RUN'
+        self.helper.write_bytes(self.raw + ('\ntouch ' + shlex.quote(str(sentinel)) + '\n').encode())
+        for script in ('cmux_workspace_guard.py', 'cmux_agent_panel_guard.py'):
+            with self.subTest(script=script):
+                result = self.hook_command(script, shlex.quote(str(self.helper))
+                                           + ' ask surface:2 "PRIVATE_PAYLOAD_DO_NOT_LOG"')
+                self.assertEqual(result.returncode, 2, result.stdout)
+                diagnostic = json.JSONDecoder().raw_decode(
+                    result.stderr.split('HELPER_ROUTE_REJECTED ', 1)[1])[0]
+                self.assertFalse(diagnostic['verified'])
+                self.assertEqual(diagnostic['guard_entrypoint'],
+                                 str(self.release / 'scripts' / script))
+                self.assertEqual(diagnostic['guard_controller'], str(self.release))
+                self.assertEqual(diagnostic['guard_python_resolved'], str(Path(sys.executable).resolve()))
+                self.assertEqual(diagnostic['helper_sha256'], hashlib.sha256(self.helper.read_bytes()).hexdigest())
+                self.assertNotEqual(diagnostic['reason'], 'HELPER_VERIFIED')
+                self.assertNotIn('PRIVATE_PAYLOAD_DO_NOT_LOG', result.stdout + result.stderr)
+                self.assertFalse(sentinel.exists())
+
+    def test_real_hook_parse_error_preserves_rejection_without_payload(self):
+        for script in ('cmux_workspace_guard.py', 'cmux_agent_panel_guard.py'):
+            with self.subTest(script=script):
+                result = self.hook_command(script, shlex.quote(str(self.helper))
+                                           + ' ask surface:2 "PRIVATE_UNCLOSED_PAYLOAD')
+                self.assertEqual(result.returncode, 2, result.stdout)
+                diagnostic = json.JSONDecoder().raw_decode(
+                    result.stderr.split('HELPER_ROUTE_REJECTED ', 1)[1])[0]
+                self.assertEqual(diagnostic['reason'], 'HELPER_COMMAND_PARSE_ERROR')
+                self.assertEqual(diagnostic['guard_entrypoint'],
+                                 str(self.release / 'scripts' / script))
+                self.assertNotIn('PRIVATE_UNCLOSED_PAYLOAD', result.stderr)
 
 
 if __name__ == "__main__":

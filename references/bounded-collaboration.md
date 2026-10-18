@@ -17,16 +17,17 @@ Two authorized context-bearing executors can help when both tasks meet that test
 Their task IDs, nonces and output roots stay separate. Input to surfaces sharing
 a pane is serialized and the exact UUID is checked each time. Shared Word/Zotero
 access remains serial; a second agent does not create a second application lease.
-An idle executor is appropriate when no valuable independent task remains or its
-previous task has not safely closed. Do not fill the panel with busywork.
+An executor may remain idle when no valuable independent task remains.
+Do not fill the panel with busywork. Closing a prior task's shared write scope
+does not prevent either agent from receiving new information.
 
 While a useful task is running, prepare the next unresolved question and its
-stable inputs locally. At verified closeout, actively check whether that work is
-still needed and dispatch it through the normal lifecycle; do not wait for the
-user to notice an idle executor. Keep one active task per executor. A healthy
-ACK should lead promptly to finalization and dispatch of the prepared pack, not
-a second discovery or research phase. Never paste the next task during callback
-recovery or another active command.
+stable inputs. Send ready prompts through the supported entrypoint promptly,
+including during callback observation, normal work or native Goal continuation.
+The receiver coordinates execution order. A healthy ACK should lead promptly
+to finalization and dispatch through the normal task lifecycle. Preserve each
+task's evidence and agree on shared write ownership before changing writers;
+neither task closeout nor an idle turn is a prerequisite for communication.
 
 State the independence of a review precisely. Grouping or recounting a table
 derived by the supervisor verifies that summary, not its derivation. If the
@@ -107,8 +108,8 @@ diagnostics and finite idle/CCC waiting follow
 ## Close callback work instead of engineering indefinitely
 
 Completion has separate facts: business report accepted, original callback
-verified, task monitor/marker disarmed, executor at a safe boundary, and any
-shared resource released. None implies the others.
+verified, task monitor/marker disarmed, shared writes handed over, and any shared
+resource released. None implies the others or gates ordinary communication.
 
 The initial callback is followed, if needed, by one bounded read-only recovery
 window under the existing attempt. At its end, preserve unresolved transport
@@ -117,15 +118,18 @@ second, lengthen the retry budget, delete the journal, or rewrite a frozen repor
 An ordinary honest handoff may end in WAITING_SUPERVISOR under the bound closeout
 checks; it creates no receipt, acceptance or disarm.
 The supervisor continues independent authorized work while resolving the missing
-fact through the existing lifecycle, without stacking a new task on the executor.
+fact through the existing lifecycle. Both agents may exchange ready prompts;
+the receiver schedules separately scoped work without replaying the pending input.
 
 When the original callback is verified and the supervisor has disarmed the
 task's marker/monitor, end that task's callback probes. Do not require another ACK
 of the closeout notice. Do not reopen it to improve a classifier or collect more
 conformance measurements. If the runtime still blocks or restarts work, retain
 that failure and make it a separate maintenance scope; do not claim a prose rule
-fixed runtime enforcement. Safely finish an active command; do not raw Ctrl-C it.
-Before reusing the executor, verify its actual safe boundary.
+fixed runtime enforcement. Use supported message delivery during an active
+command; do not use raw Ctrl-C to clear a draft. Reuse the original executor
+without waiting for an idle turn. Verify shared-write handoff before a different
+writer edits those same files.
 
 Persistent provider failures follow SKILL.md and the
 [failure-window evidence rule](availability-and-resources.md#retryable-claude-api-failures-evidence-before-takeover):
@@ -135,7 +139,8 @@ actual API success. Counts, queued input and unknown outcomes do not prove this
 interval. Billing/auth/quota failures permit no blind retries; an explicit user
 stop is separately classified. Continue independent research during the wait.
 Authorized SOLO takeover still requires frozen executor writes and a verified
-safe boundary; this rule does not lengthen callback probes or release resources.
+shared-write handoff. That requirement does not restrict communication, lengthen
+callback probes or release resources.
 
 ## Measure benefit and state the limits
 

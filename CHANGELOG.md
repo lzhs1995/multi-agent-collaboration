@@ -1,3 +1,30 @@
+## 0.4.46
+
+Allow ready prompts in both directions during normal work and native Goal
+continuation. Fresh preflight performs identity, handshake and validation
+without the optional input-and-clear bridge probe. The existing sender supports
+busy Claude delivery and native Codex steer/start; this release does not add a
+second sender or require pausing Goal. Shared-write ownership, exact drafts,
+original-attempt deduplication and native reception remain distinct checks.
+
+Receipts explicitly mark an omitted probe as `optional-probe-v1 / NOT_RUN`,
+with null clear fields. Late ACK recovery verifies the complete original
+controller's capability and never grants that capability to an older release.
+Schema checks cover emitted pending, successful, failed and multi-executor receipts.
+
+Add opt-in, original-controller cursor observation for owned probe cleanup:
+Home/End coordinates and body come from the same frame, and each key consumes
+its persistent budget before input. Default cleanup is unchanged. Helper
+refusals identify the actual guard/controller, interpreter and helper SHA
+without printing the message body.
+
+Local full regression ran 2,376 tests with one failure in the quoted-launch
+fixture. The fixture now renders a complete candidate helper in an isolated
+directory instead of comparing changed dependencies to the installed release;
+its 11 tests then passed. Final commit verification is recorded by CI.
+Source tests, installation, actual automatic hooks and original-session
+delivery remain separate evidence. See [release contract](references/release-0.4.46.md).
+
 ## 0.4.45
 
 Add a separate recovery entrypoint for an original single-Claude continuation

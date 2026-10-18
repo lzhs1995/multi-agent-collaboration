@@ -735,7 +735,7 @@ def validate_command(command: str) -> tuple[bool, str]:
     if not command:
         return True, "no command"
 
-    ok, message = validate_workspace_command(command)
+    ok, message = validate_workspace_command(command, _guard_entrypoint=__file__)
     if not ok:
         return False, message
 

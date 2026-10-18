@@ -65,6 +65,60 @@ class ProviderGoalFooterTests(unittest.TestCase):
                         paste.assert_not_called()
                         key.assert_not_called()
 
+    def test_new_message_reaches_busy_goal_without_pausing_or_clearing(self):
+        for position in ("inline", "final"):
+            with self.subTest(position=position), NativeFixture(provider="claude") as native:
+                before = frame(goal_position=position, tool=True)
+                self.assertTrue(b._queued_or_active_input(before))
+                text = "STATUS: busy-goal-new-message"
+                current = {"screen": before}
+
+                def paste(surface, payload):
+                    self.assertEqual((surface, payload), ("offline-peer", text))
+                    current["screen"] = with_draft(before, payload)
+
+                def receive(surface, key):
+                    self.assertEqual((surface, key), ("offline-peer", "enter"))
+                    native.append_user(text)
+                    current["screen"] = before
+
+                native.send.side_effect = paste
+                native.key.side_effect = receive
+                with patch.object(b, "read_screen", side_effect=lambda *a, **k: current["screen"]):
+                    result = b.submit_text("offline-peer", text,
+                                           marker="busy-goal-new-message", wait_seconds=0)
+                self.assertTrue(result["confirmed"])
+                self.assertEqual(result["confirmation_source"], "native_user_message_v1")
+                native.send.assert_called_once_with("offline-peer", text)
+                native.key.assert_called_once_with("offline-peer", "enter")
+                self.assertEqual(current["screen"], before)
+
+    def test_busy_goal_queue_is_pending_and_original_attempt_is_not_resent(self):
+        with NativeFixture(provider="claude") as native:
+            before = frame(tool=True)
+            text = "STATUS: busy-goal-queue-message"
+            current = {"screen": before}
+
+            def paste(surface, payload):
+                current["screen"] = with_draft(before, payload)
+
+            def queue(surface, key):
+                native.append_queued(text)
+                current["screen"] = before
+
+            native.send.side_effect = paste
+            native.key.side_effect = queue
+            with patch.object(b, "read_screen", side_effect=lambda *a, **k: current["screen"]):
+                with self.assertRaises(b.DispatchUnconfirmed):
+                    b.submit_text("offline-peer", text,
+                                  marker="busy-goal-queue-message", wait_seconds=0)
+                with self.assertRaises(b.DispatchUnconfirmed):
+                    b.submit_text("offline-peer", text,
+                                  marker="busy-goal-queue-message", reconcile_only=True,
+                                  wait_seconds=0)
+            native.send.assert_called_once_with("offline-peer", text)
+            native.key.assert_called_once_with("offline-peer", "enter")
+
     def test_activity_and_queue_protection_survive_both_shapes(self):
         for position in ("inline", "final"):
             for status, tool in (("✻ Compacting conversation…", False),

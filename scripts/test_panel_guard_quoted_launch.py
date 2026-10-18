@@ -1,16 +1,16 @@
 """8701 regression: inspect commands as data; never execute the supplied command."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
-import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 
 import cmux_agent_panel_guard as guard
+import render_cmux_agent as renderer
 
 
 GUARD = Path(__file__).with_name("cmux_agent_panel_guard.py").resolve()
@@ -120,18 +120,8 @@ class QuotedLaunchTests(unittest.TestCase):
         command = "printf '%s' " + "$(printf '%s' " * 40 + "$(codex)" + ")" * 40
         self.assertTrue(guard._shell_starts_agent_launch(command))
 
-    def check_entrypoints(self, command, allowed, *, dependencies=None):
+    def check_entrypoints(self, command, allowed, *, rejection="direct agent CLI launch"):
         argv = [sys.executable, "-B", str(GUARD)]
-        if dependencies is not None:
-            # Run the candidate's real main with CURRENT's untouched dependency
-            # context. This preserves the installed helper's exact route checks;
-            # it is not installation or evidence of automatic hook loading.
-            bootstrap = (
-                "import runpy,sys; source,root=sys.argv[1:3]; "
-                "sys.argv=[source]+sys.argv[3:]; sys.path.insert(0,root); "
-                "runpy.run_path(source,run_name='__main__')"
-            )
-            argv = [sys.executable, "-B", "-c", bootstrap, str(GUARD), str(dependencies)]
         dry = subprocess.run(argv + ["--check-command", command, "--json"],
                              capture_output=True, text=True, timeout=20)
         self.assertEqual(dry.returncode, 0 if allowed else 2, dry.stdout + dry.stderr)
@@ -144,7 +134,7 @@ class QuotedLaunchTests(unittest.TestCase):
             if allowed:
                 self.assertEqual(json.loads(result.stdout), {})
             else:
-                self.assertIn("direct agent CLI launch", result.stderr)
+                self.assertIn(rejection, result.stderr)
 
     def test_real_dry_run_and_hook_entries(self):
         self.check_entrypoints("printf '%s' 'status; Codex alone'", True)
@@ -155,19 +145,28 @@ class QuotedLaunchTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.check_entrypoints(command, False)
 
-    @unittest.skipUnless(HELPER.is_file(), "8701 installed helper unavailable")
-    def test_exact_original_at_real_entries_with_current_dependencies(self):
-        raw = HELPER.read_bytes()
-        routes = re.findall(r'^    exec (.+) "\$@"$', raw.decode(), re.M)
-        self.assertEqual(len(routes), 1)
-        adapter = Path(shlex.split(routes[0])[-1])
-        dependencies = adapter.parent
-        # Do not accept an unrelated or modified workspace guard for this probe.
-        local = GUARD.with_name("cmux_workspace_guard.py").read_bytes()
-        installed = (dependencies / "cmux_workspace_guard.py").read_bytes()
-        self.assertEqual(hashlib.sha256(local).digest(), hashlib.sha256(installed).digest())
-        self.check_entrypoints(ORIGINAL, True, dependencies=dependencies)
-        self.assertEqual(HELPER.read_bytes(), raw)
+    def test_exact_original_body_at_same_release_real_entries(self):
+        # Render the complete helper for this candidate, as installation does.
+        # The real CLI/hook loads only its own release's dependencies; no live
+        # installation or send is needed to test the original quoted message.
+        release = GUARD.parents[1]
+        raw = renderer.render(
+            (release / "tests/fixtures/cmux-agent-legacy.sh").read_bytes(),
+            expected_sha256=renderer.BASELINE_SHA256, python=sys.executable,
+            adapter=release / "scripts/cmux_agent_adapter.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary).resolve() / "cmux-agent"
+            helper.write_bytes(raw)
+            helper.chmod(0o755)
+            original_prefix = "rtk proxy " + str(HELPER)
+            self.assertTrue(ORIGINAL.startswith(original_prefix + " send "))
+            command = "rtk proxy " + shlex.quote(str(helper)) + ORIGINAL[len(original_prefix):]
+            self.assertEqual(shlex.split(command)[3:], shlex.split(ORIGINAL)[3:])
+            self.assertIn("; Codex alone", command)
+            self.check_entrypoints(command, True)
+            self.check_entrypoints(command + "; codex resume deadbeef", False,
+                                   rejection="HELPER_COMPOUND_OR_REDIRECT_REFUSED")
+            self.assertEqual(helper.read_bytes(), raw)
 
 
 if __name__ == "__main__":

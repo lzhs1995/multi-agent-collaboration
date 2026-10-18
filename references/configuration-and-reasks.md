@@ -201,8 +201,10 @@ ANSWERED records detection, not consumption. Preserve the current business
 episode and original pack while the original authenticated executor consumes the
 exact reply; pending consumption does not authorize repeated dispatch. A TASK
 reply remains separate from a formal task pack. A same-supervisor reservation
-keeps terminal inquiries paused until exact RELEASE. File inquiries during it
-require the explicit current-controller enrollment described below. Neither more
+keeps the reask runner's automatic terminal inquiries paused until exact RELEASE.
+This cadence rule does not prevent either agent from sending a ready prompt
+through the supported entrypoint during normal work or native Goal continuation.
+File inquiries require the explicit enrollment described below. Neither more
 asks nor a missing marker justifies release or reopening a terminal episode.
 
 Report useful outcomes and observed delays separately:

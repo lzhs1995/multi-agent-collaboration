@@ -669,7 +669,13 @@ def reconcile(args, modules=None):
                     result['status'] = 'ALREADY_ACKED'
                     return result
                 if selected.get('bridge_clear_confirmed') is not True:
-                    raise ValueError('ACK_ORIGINAL_BRIDGE_CLEAR_REQUIRED')
+                    # Capability belongs to the complete original controller.
+                    # Old releases retain their clear requirement; a new label
+                    # cannot waive a failed/missing original probe retroactively.
+                    without_probe = getattr(harness, 'handshake_without_probe', None)
+                    if (not callable(without_probe) or not without_probe(selected,
+                            bridge_evidence_present=originals[root / 'bridge-test-evidence.json'] is not None)):
+                        raise ValueError('ACK_ORIGINAL_BRIDGE_CLEAR_REQUIRED')
 
                 def recheck(ignore=()):
                     check_locks()

@@ -167,6 +167,56 @@ class HandshakeReconciliationTests(unittest.TestCase):
         self.assertEqual(before, self.files())
         self.assertFalse((self.root / 'handshake-reconciliations').exists())
 
+    def prepare_no_probe(self, **changes):
+        self.rows[0].update(bridge_probe_policy='optional-probe-v1',
+            bridge_probe_status='NOT_RUN', bridge_clear_confirmed=None,
+            bridge_clear_recovery=None)
+        self.rows[0].update(changes)
+        self.save()
+        (self.root / 'bridge-test-evidence.json').unlink()
+        self.fixture.append_queued(self.text)
+        self.append_ack()
+
+    def test_original_no_probe_ack_preview_and_apply_keep_clear_unclaimed(self):
+        if not callable(getattr(harness, 'handshake_without_probe', None)):
+            self.skipTest('original controller predates optional probes')
+        self.prepare_no_probe()
+        original_attempt = self.attempt_path.read_bytes()
+        before = self.files()
+        result = self.run_reconcile()
+        self.assertEqual(result['status'], 'READY_ZERO_INPUT_ACK_RECONCILIATION', result)
+        self.assertEqual(before, self.files())
+        result = self.run_reconcile(apply=True)
+        self.assertEqual(result['status'], 'ACK_RECONCILED', result)
+        self.assertEqual(result['validation']['status'], 'PASS')
+        receipt = json.loads(self.receipt_path.read_bytes())
+        self.assertEqual(receipt['bridge_probe_status'], 'NOT_RUN')
+        self.assertIsNone(receipt['bridge_clear_confirmed'])
+        self.assertIsNone(receipt['bridge_clear_recovery'])
+        validation = json.loads((self.root / 'validation.json').read_bytes())
+        self.assertEqual(validation['checks']['bridge_test']['status'], 'NOT_RUN')
+        self.assertFalse((self.root / 'bridge-test-evidence.json').exists())
+        self.assertEqual(self.attempt_path.read_bytes(), original_attempt)
+
+    def test_no_probe_label_cannot_bypass_existing_probe_evidence(self):
+        self.prepare_no_probe()
+        (self.root / 'bridge-test-evidence.json').write_text(json.dumps({
+            'task_id': self.task, 'executor': self.target, 'clear_confirmed': False}))
+        self.assert_unavailable('ACK_ORIGINAL_BRIDGE_CLEAR_REQUIRED')
+
+    def test_malformed_no_probe_state_cannot_waive_original_clear(self):
+        variants = [dict(bridge_probe_policy=None), dict(bridge_probe_status='CLEARED'),
+                    dict(bridge_clear_confirmed=False), dict(bridge_clear_recovery={})]
+        for changes in variants:
+            with self.subTest(changes=changes):
+                self.prepare_no_probe(**changes)
+                self.assert_unavailable('ACK_ORIGINAL_BRIDGE_CLEAR_REQUIRED')
+
+    def test_old_controller_does_not_gain_no_probe_capability_from_receipt(self):
+        self.prepare_no_probe()
+        with mock.patch.object(harness, 'handshake_without_probe', None, create=True):
+            self.assert_unavailable('ACK_ORIGINAL_BRIDGE_CLEAR_REQUIRED')
+
     def test_apply_real_ack_archives_and_validates_without_native_receipt(self):
         self.fixture.append_queued(self.text)
         self.append_ack()

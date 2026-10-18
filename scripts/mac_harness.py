@@ -79,6 +79,10 @@ import render_cmux_agent
 # supervisor's, not the executor's.
 PHASE_MINIMUM_BUDGET_SECONDS = {"handshake": 600, "round": 180}
 
+# Communication is admitted by the guarded sender, including working turns.
+# A destructive idle-only probe is an explicit diagnostic, never a preflight step.
+HANDSHAKE_PROBE_POLICY = "optional-probe-v1"
+
 # A receiver can consume a prompt after the bridge's detector gives up (for
 # example while Claude is recovering from a 429).  Give the same nonce a
 # bounded, read-only grace period before declaring the round failed.  This is
@@ -1807,6 +1811,43 @@ def _write_handshake_receipt(root, per_executor):
     _write(root / "handshake-receipt.json", receipt)
 
 
+def handshake_without_probe(receipt, *, bridge_evidence_present):
+    """Recognize this controller's honest no-probe receipt, never a legacy bypass."""
+    return (not bridge_evidence_present
+            and receipt.get("bridge_probe_policy") == HANDSHAKE_PROBE_POLICY
+            and receipt.get("bridge_probe_status") == "NOT_RUN"
+            and "bridge_clear_confirmed" in receipt
+            and receipt["bridge_clear_confirmed"] is None
+            and "bridge_clear_recovery" in receipt
+            and receipt["bridge_clear_recovery"] is None)
+
+
+def _handshake_bridge_context(args, root, gate, executor_ref):
+    """Keep any explicit probe's postcondition; absence grants no clear proof."""
+    path = root / "bridge-test-evidence.json"
+    context = {"bridge_probe_policy": HANDSHAKE_PROBE_POLICY,
+               "bridge_probe_status": "NOT_RUN", "bridge_clear_confirmed": None,
+               "bridge_clear_recovery": None}
+    if not path.exists() and not path.is_symlink():
+        return context
+    bridge_all = _read(path)
+    if not isinstance(bridge_all, dict) or bridge_all.get("task_id") != args.task_id:
+        raise ValueError("BRIDGE_TEST_ORIGINAL_EVIDENCE_INVALID_OR_DIFFERENT_TASK")
+    rows = bridge_all["executors"] if "executors" in bridge_all else [bridge_all]
+    if not isinstance(rows, list) or not rows or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("BRIDGE_TEST_ORIGINAL_EXECUTORS_INVALID")
+    matched = [row for row in rows if row.get("executor") == executor_ref]
+    if len(matched) != 1:
+        raise ValueError("BRIDGE_TEST_ORIGINAL_EXECUTOR_MISSING_OR_DUPLICATED")
+    if matched[0].get("clear_confirmed") is True:
+        context.update(bridge_probe_status="CLEARED", bridge_clear_confirmed=True)
+    else:
+        recovery = _recovered_bridge_clear(args, root, gate)
+        context.update(bridge_probe_status="CLEAR_RECOVERED", bridge_clear_confirmed=True,
+                       bridge_clear_recovery=recovery)
+    return context
+
+
 def _handshake_one(args, root, gate, item, per_executor):
     """One full challenge-ACK cycle against one executor.
 
@@ -1821,47 +1862,13 @@ def _handshake_one(args, root, gate, item, per_executor):
     executor_provider = item.get("provider") or "agent"
     task_id = args.task_id
 
-    # Hard precondition: bridge-test must have proven its own token is gone.
-    #
-    # This is the enforcement SKILL.md:218 always described in prose. Without it,
-    # `preflight` runs bridge-test and handshake back-to-back (1 ms apart in this
-    # task's own receipts), the busy detector reads OUR token as executor input,
-    # and the abort is then misread as executor silence.
-    #
-    # Deliberately NOT implemented by whitelisting the bridge token in the busy
-    # detector: a stale token from an earlier run, a token concatenated with a
-    # real user prompt, or another task's token must all still fail closed. The
-    # fix is proving the buffer is clean, not teaching the detector to ignore one
-    # string. (R3 item 3, adopting Codex's refinement.)
-    bridge_all = _read(root / "bridge-test-evidence.json") or {}
-    if bridge_all.get("task_id") != task_id:
-        _fail(
-            "bridge-test-evidence.json missing or bound to a different task — "
-            f"expected {task_id}, found {bridge_all.get('task_id')!r}. Run bridge-test first."
-        )
+    # Fresh handshakes send directly through the guarded bridge. Existing
+    # diagnostic evidence is never ignored, rewritten or credited to a peer.
+    try:
+        bridge_context = _handshake_bridge_context(args, root, gate, executor_ref)
+    except (OSError, ValueError, RuntimeError) as exc:
+        _fail("BRIDGE_TEST_CLEAR_UNCONFIRMED — " + str(exc))
         sys.exit(1)
-    # THIS executor's bridge evidence, not just the file's top-level record.
-    # Reading the top level for every executor would let executor 1's clean
-    # buffer vouch for executor 2's, so each surface must find its own entry.
-    bridge_ev = {}
-    for cand in bridge_all.get("executors") or [bridge_all]:
-        if cand.get("executor") == executor_ref:
-            bridge_ev = cand
-            break
-    if not bridge_ev:
-        _fail(
-            "bridge-test evidence is bound to a different surface — "
-            f"expected {executor_ref}, found "
-            f"{[c.get('executor') for c in (bridge_all.get('executors') or [bridge_all])]!r}."
-        )
-        sys.exit(1)
-    clear_recovery = None
-    if bridge_ev.get("clear_confirmed") is not True:
-        try:
-            clear_recovery = _recovered_bridge_clear(args, root, gate)
-        except (OSError, ValueError, RuntimeError) as exc:
-            _fail("BRIDGE_TEST_CLEAR_UNCONFIRMED — " + str(exc))
-            sys.exit(1)
 
     # One fresh nonce per executor. secrets.token_hex is called once per
     # executor, so two executors cannot be issued the same challenge.
@@ -1901,8 +1908,7 @@ def _handshake_one(args, root, gate, item, per_executor):
         "ack_source": None,
         "ack_response_marker": False,
         "prompt_contains_literal_ack": False,
-        "bridge_clear_confirmed": True,
-        "bridge_clear_recovery": clear_recovery,
+        **bridge_context,
         "budget_source": budget_source,
         "budget_seconds": handshake_timeout,
         "phase_minimum_seconds": phase_minimum,
@@ -2086,11 +2092,11 @@ def cmd_validate(args):
         "prompt_contains_literal_ack": handshake_data.get("prompt_contains_literal_ack"),
     }
 
-    # bridge_test: advisory only — file exists or not
+    # Optional diagnostic: absence is not a failed probe or proof of clearing.
     bridge_data = _read(root / "bridge-test-evidence.json")
     bridge_ok = bridge_data is not None
     checks["bridge_test"] = {
-        "status": "present" if bridge_ok else "MISSING",
+        "status": "present" if bridge_ok else "NOT_RUN",
         "advisory": True,
         "observed": bridge_data.get("observed_in_screen", False) if bridge_data else False,
     }
@@ -3765,7 +3771,7 @@ def cmd_disarm(args):
 
 
 # ---------------------------------------------------------------------------
-# Full preflight (setup-check → identity-gate → name-surfaces → bridge-test → handshake → validate)
+# Full preflight (setup-check → identity-gate → name-surfaces → handshake → validate)
 # ---------------------------------------------------------------------------
 
 def cmd_preflight(args):
@@ -3779,7 +3785,8 @@ def cmd_preflight(args):
     cmd_helper_parity(args)
     cmd_identity_gate(args)
     cmd_name_surfaces(args)
-    cmd_bridge_test(args)
+    # Optional `bridge-test` is deliberately not run: /goal and ordinary work
+    # may continue while the guarded sender delivers the handshake prompt.
     cmd_handshake(args)
     cmd_validate(args)
     print("\n✓ PREFLIGHT COMPLETE — all gates passed, ready for task dispatch")
