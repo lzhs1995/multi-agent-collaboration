@@ -53,6 +53,9 @@
   controls; no global whitespace stripping, draft clearing or new recovery key.
   Refuse active/unknown spinner, compaction and tool-running forms. Historical
   completed prose is not an active tool header or spinner.
+  Recognize one provider segment in a complete Claude model banner and one
+  complete final Goal row below bypass (B0023/B0024). Preserve draft bytes,
+  malformed-footer refusal and active/queued input protection.
   Padding evidence has two distinct screens read 20 times each and 34 distinct
   negative controls; busy-screen evidence is a separate pair of v202 screens.
   Repeated reads are not independent samples or live native receipt evidence.

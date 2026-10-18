@@ -825,7 +825,9 @@ def _claude_bordered_compose(screen):
     model_row = re.sub(rf"\s+◎\s+/goal active\s+\({_CLAUDE_GOAL_DURATION}\)$", "", footer[0])
     fields = [part.strip() for part in model_row.split("│")]
     if (not 1 <= len(fields) <= 3 or not re.fullmatch(
-            r"(?:\[claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
+            # Measured 2026-10-18: provider/model banners retain the same
+            # complete field. Accept one bounded ASCII provider segment only.
+            r"(?:\[(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}/)?claude-[\w.-]+(?:\[\d+[mM]\])?\]|"
             r"\[(?:Opus|Sonnet|Claude)\s+[^\]\n]+\])", fields[0], re.I)):
         return None
     elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
@@ -868,6 +870,11 @@ def _claude_bordered_compose(screen):
         return None
     if len(footer) > 1:
         rest = footer[footer_start:]
+        # The measured Goal HUD may occupy one final physical row after
+        # bypass. Only complete footer rows outside the editor are consumed;
+        # duplicates, unknown Goal forms and draft bytes remain untouched.
+        if rest and _CLAUDE_GOAL_ROW_RE.fullmatch(rest[-1]):
+            rest = rest[:-1]
         # The same measured hint can occupy its own row AFTER the complete
         # footer. Never remove an occurrence inside the composer, or permit
         # arbitrary text after the normal bypass row.

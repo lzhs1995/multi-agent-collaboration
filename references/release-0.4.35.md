@@ -115,6 +115,15 @@ queues and compaction remain protected. This is not global strip/rstrip
 normalization and grants no additional recovery key. The withdrawn original-probe
 recovery proposal is outside this release.
 
+The B0023/B0024 footer captures additionally establish a single ASCII provider
+segment before `claude-...` (for example, `[linxi/claude-opus-5-5[1M]]`) and
+one complete `◎ /goal active (59m)` row after the bypass footer. The parser
+recognizes these only outside matching complete editor borders. Invalid or
+multi-segment prefixes, partial model fields, unknown or repeated final Goal
+rows and extra footer text remain unparsed. Public synthetic regressions retain
+footer-shaped drafts verbatim and preserve activity/queue protection; the two
+original private captures supply offline replay evidence, not native delivery.
+
 Historical padding evidence consists of two distinct B0021/B0022 screens read
 20 times each, with 34 distinct negative controls. Those repeated reads do not
 establish 40 independent samples or 680 independent controls. Busy-state evidence
