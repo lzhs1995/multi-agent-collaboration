@@ -1,3 +1,22 @@
+## 0.4.49
+
+- Fix explicit stop/resume inquiry registration failing its read-only preview
+  because the old stop file is correctly still present before commit. Only a
+  genuinely new episode with `--resume-stopped` may bypass that file in the
+  unpublished preview; the existing transaction archives and clears it on commit.
+- Preserve recorded formal reservations when the same caller, supervisor and
+  workspace start a new inquiry episode, including when a marker is absent.
+  Missing markers and stopped inquiry episodes do not release formal tasks.
+- Preserve the complete reviewed `0.4.48-3b4304d24f90` file protocol: its original
+  14 controller members, explicit reservation-inquiry capability, and 15-controller
+  issuer scope. Earlier issuers gain no reverse or future authority.
+
+The original 102-check regression and 45 protocol/release checks passed. Four isolated adoption checks passed;
+the released baseline reproduced the stop/resume failure. These checks preserve
+original pending input and produce file requests only; they are not live executor
+adoption or communication-latency acceptance. See the
+[release contract](references/release-0.4.49.md).
+
 ## 0.4.48
 
 - Recognize the measured `0–100% until auto-compact · /model opus[1m]` hint

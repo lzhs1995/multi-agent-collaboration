@@ -220,6 +220,94 @@ class ReservationInquiryIntegrationTests(unittest.TestCase):
         self.assertEqual(state['exit_reason'], 'OPERATOR_STOP')
         self.assertEqual(len(state['paused_tasks']), 1)
 
+    def test_stop_resume_reauthenticates_and_preserves_reservation_and_pending(self):
+        self.begin(enabled=False)
+        self.reserve(at=1001., notify=True)
+        frozen = self.preserve_pending()
+        with self.files_only():
+            reask.stop(CALLER)
+        previous = reask.state_path(CALLER).read_bytes()
+        registration = scheduler.enrollment_path(CALLER).read_bytes()
+        stop = reask.stop_file(CALLER).read_bytes()
+        changed = dict(self.continuation, reservation_inquiries=True)
+        state = scheduler.start(self.live(), task_id='reservation-integration', now=1003.,
+                                authenticate_executor=True, continuing=True, continuation=changed,
+                                resume_stopped=True)
+        self.assertTrue(scheduler.registered(state))
+        self.assertEqual(state['executor_identity']['session_id'], fixtures.SESSION)
+        self.assertNotEqual(state['episode_id'], ready.read_json(
+            next(p for p in scheduler.root().glob('transactions/*/*/previous-state.json')
+                 if p.read_bytes() == previous))['episode_id'])
+        preserved = next(p.parent for p in scheduler.root().glob(
+            'transactions/*/*/previous-state.json') if p.read_bytes() == previous)
+        self.assertEqual((preserved / 'previous-enrollment.json').read_bytes(), registration)
+        self.assertEqual((preserved / 'previous-stop.json').read_bytes(), stop)
+        self.assertFalse(reask.stop_file(CALLER).exists())
+        self.assert_preserved(frozen)
+        with self.files_only():
+            for now, posts in ((1004., 1), (1063., 0), (1064., 1)):
+                result = scheduler.sweep(now=now)
+                self.assertEqual(result['file_posts'], posts)
+                self.assertEqual(result['input_operations'], 0)
+        self.assertEqual(reask.load(CALLER)['ask_count'], 2)
+        self.assert_preserved(frozen)
+
+    def test_stop_resume_keeps_recorded_reservation_when_marker_is_missing(self):
+        self.begin(enabled=False)
+        marker, path = self.reserve(at=1001., notify=True)
+        frozen = self.preserve_pending()
+        with self.files_only():
+            reask.stop(CALLER)
+        path.unlink()  # Disappearance is not an exact RELEASE.
+        changed = dict(self.continuation, reservation_inquiries=True)
+        state = scheduler.start(self.live(), task_id='reservation-integration', now=1003.,
+                                authenticate_executor=True, continuing=True, continuation=changed,
+                                resume_stopped=True)
+        self.assert_preserved(frozen)
+        with self.files_only():
+            result = scheduler.sweep(now=1004.)
+        request = ready.read_json(reask.inbox_path(reask.load(CALLER)))
+        self.assertEqual(result['file_posts'], 1)
+        self.assertEqual(request['inquiry_kind'], 'RESERVATION_STATUS')
+        self.assertEqual(request['reservations'], state['paused_tasks'])
+        self.assert_preserved(frozen)
+
+    def test_stop_resume_requires_explicit_flag_and_original_executor(self):
+        self.begin(enabled=False)
+        self.reserve(at=1001., notify=True)
+        frozen = self.preserve_pending()
+        with self.files_only():
+            reask.stop(CALLER)
+        changed = dict(self.continuation, reservation_inquiries=True)
+        before = self.files()
+        result = scheduler.start(self.live(), task_id='reservation-integration', now=1003.,
+                                 authenticate_executor=True, continuing=True, continuation=changed)
+        self.assertEqual(result['state'], reask.STOPPED)
+        self.assertEqual(self.files(), before)
+        self.processes[fixtures.SHELL_PID]['executable'] = '/test/foreign-python'
+        with self.assertRaises(fixtures.REFUSED):
+            scheduler.start(self.live(), task_id='reservation-integration', now=1003.,
+                            authenticate_executor=True, continuing=True, continuation=changed,
+                            resume_stopped=True)
+        self.assertEqual(self.files(), before)
+        self.assert_preserved(frozen)
+
+    def test_resume_preview_cannot_publish_past_operator_stop(self):
+        self.begin()
+        marker, _ = self.reserve(at=1001., notify=True)
+        with self.files_only():
+            reask.stop(CALLER)
+        before = self.files()
+        state = reask.load(CALLER)
+        for call in (
+                lambda: lifecycle.apply_boundary(state, marker, 'RESERVED', 1003.,
+                                                 preview_resume=True),
+                lambda: lifecycle.observe_formal_tasks(state, 1003., preview_resume=True)):
+            with self.assertRaisesRegex(ValueError, 'unpublished registration preview'):
+                call()
+        self.assertEqual(self.files(), before)
+
+
     def test_authorization_change_stops_reserved_inquiries(self):
         self.reserve()
         self.begin()
