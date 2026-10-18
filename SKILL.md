@@ -9,7 +9,17 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.43.** An original single-Claude bridge probe that stopped at
+**Version: 0.4.44.** The configuration guardian closes its bounded read snapshot
+before parsing and planning. No-op profile checks never reserve the SQLite
+writer. Real changes use a short original-value CAS transaction; contention,
+concurrent edits and exhausted budgets are visible outcomes. The single job
+watches live hook files and CURRENT, and checks imported profiles every 60
+seconds without watching database/request-log writes. Restore a deliberately
+paused guardian only through its responsible coordinator after the complete
+release is installed and validated. See the
+[0.4.44 release contract](references/release-0.4.44.md).
+
+An original single-Claude bridge probe that stopped at
 `COMPOSE_OCCUPIED` before typing its token can continue once through
 `scripts/continue_bridge_probe.py`. Preview is static and read-only. Only the
 original supervisor may apply, with the unchanged reservation, session, token

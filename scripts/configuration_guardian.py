@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reconcile owned hooks after provider switches; never run a transport command.
 
-One launchd job follows a pinned CURRENT.json, watches configuration directories,
-and checks every 60 seconds. API/provider values are neither copied nor logged.
+One launchd job follows a pinned CURRENT.json, watches live hook files,
+and checks profiles every 60 seconds. API/provider values are neither copied nor logged.
 The existing installation lock serializes this job with the shared installer.
 """
 import argparse
@@ -25,6 +25,23 @@ import time
 LABEL = 'org.multi-agent-collaboration.configuration-guardian'
 MAX_CONFIG_BYTES = 8 * 1024 * 1024
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
+MAX_PROFILES = 1024
+MAX_PROFILE_SNAPSHOT_BYTES = 32 * 1024 * 1024
+PROFILE_BUDGET_SECONDS = 5.0
+WRITE_BUDGET_SECONDS = 1.0
+DATABASE_BUSY_SECONDS = 0.25
+
+
+class ProfileBudgetExceeded(RuntimeError):
+    pass
+
+
+class ProfileSnapshotLimit(RuntimeError):
+    pass
+
+
+class ProfileConflict(RuntimeError):
+    pass
 
 
 def digest(raw):
@@ -175,62 +192,205 @@ def reconcile_files(home, manager, apply):
     return results
 
 
+def check_profile_budget(deadline):
+    if time.monotonic() >= deadline:
+        raise ProfileBudgetExceeded('profile reconcile budget exhausted')
+
+
+def profile_snapshot(database, deadline):
+    """Copy bounded source bytes, then release the read lock before planning."""
+    db = sqlite3.connect(database.as_uri() + '?mode=ro', uri=True,
+                         timeout=DATABASE_BUSY_SECONDS)
+    expired = [False]
+
+    def progress():
+        expired[0] = time.monotonic() >= deadline
+        return int(expired[0])
+
+    db.set_progress_handler(progress, 1000)
+    try:
+        db.execute('BEGIN')
+        cursor = db.execute(
+            "SELECT id, CASE WHEN typeof(settings_config)='text' "
+            "AND length(CAST(settings_config AS BLOB))<=? THEN settings_config END "
+            "FROM providers WHERE app_type='claude' ORDER BY id LIMIT ?",
+            (MAX_CONFIG_BYTES, MAX_PROFILES + 1))
+        rows, total = [], 0
+        for key, raw in cursor:
+            check_profile_budget(deadline)
+            if not isinstance(raw, str):
+                raise ValueError('profile is not bounded JSON')
+            total += len(raw.encode())
+            if len(rows) >= MAX_PROFILES or total > MAX_PROFILE_SNAPSHOT_BYTES:
+                raise ProfileSnapshotLimit('profile snapshot limit exceeded')
+            rows.append((key, raw))
+        common = db.execute(
+            "SELECT CASE WHEN value IS NULL OR value='' THEN NULL "
+            "WHEN typeof(value)='text' AND length(CAST(value AS BLOB))<=? "
+            "THEN value ELSE 0 END FROM settings WHERE key='common_config_claude'",
+            (MAX_CONFIG_BYTES,)).fetchone()
+        if common and common[0] is not None:
+            if not isinstance(common[0], str):
+                raise ValueError('common config is not bounded JSON')
+            total += len(common[0].encode())
+            if total > MAX_PROFILE_SNAPSHOT_BYTES:
+                raise ProfileSnapshotLimit('profile snapshot limit exceeded')
+        check_profile_budget(deadline)
+        return rows, common
+    except sqlite3.OperationalError:
+        if expired[0]:
+            raise ProfileBudgetExceeded('profile snapshot budget exhausted') from None
+        raise
+    finally:
+        # Clear an expired progress callback before cleaning up the snapshot.
+        db.set_progress_handler(None, 0)
+        try:
+            db.rollback()
+        finally:
+            db.close()
+
+
+def profile_plan(rows, common, manager, home, deadline):
+    """Normalization and serialization run with no database connection open."""
+    plans, disabled = [], 0
+    for key, raw in rows:
+        check_profile_budget(deadline)
+        doc = json.loads(raw)
+        if not isinstance(doc, dict):
+            raise ValueError('profile must be an object')
+        new = normalized(doc, manager, home, True)
+        disabled += doc.get('disableAllHooks') is True
+        if doc != new:
+            plans.append((key, raw, json.dumps(new, ensure_ascii=False)))
+    common_next = None
+    if common and common[0]:
+        doc = json.loads(common[0])
+        if not isinstance(doc, dict):
+            raise ValueError('common config must be an object')
+        # Profiles own our hooks; the common snippet retains all foreign ones.
+        if 'hooks' in doc:
+            new = copy.deepcopy(doc)
+            new['hooks'] = foreign_hooks(doc, manager, home)
+            if new != doc:
+                common_next = json.dumps(new, ensure_ascii=False)
+    check_profile_budget(deadline)
+    return plans, common_next, disabled
+
+
+def apply_profile_plan(database, plans, common, common_next, deadline, timings):
+    """One short CAS transaction. Any conflict rolls back every planned change."""
+    db = sqlite3.connect(database.as_uri() + '?mode=rw', uri=True,
+                         timeout=DATABASE_BUSY_SECONDS)
+    write_started = None
+    expired = [False]
+    write_deadline = deadline
+
+    def progress():
+        expired[0] = time.monotonic() >= write_deadline
+        return int(expired[0])
+
+    try:
+        check_profile_budget(deadline)
+        lock_started = time.monotonic()
+        try:
+            db.execute('BEGIN IMMEDIATE')
+            write_started = time.monotonic()
+            timings['write_transaction_started'] = True
+        finally:
+            timings['lock_wait_seconds'] = time.monotonic() - lock_started
+        write_deadline = min(deadline, write_started + WRITE_BUDGET_SECONDS)
+        db.set_progress_handler(progress, 1000)
+        for key, raw, serialized in plans:
+            check_profile_budget(write_deadline)
+            count = db.execute(
+                "UPDATE providers SET settings_config=? WHERE id=? "
+                "AND app_type='claude' AND settings_config=?",
+                (serialized, key, raw)).rowcount
+            if count != 1:
+                raise ProfileConflict('profile compare-and-swap failed')
+        if common_next is not None:
+            check_profile_budget(write_deadline)
+            count = db.execute(
+                "UPDATE settings SET value=? WHERE key='common_config_claude' AND value=?",
+                (common_next, common[0])).rowcount
+            if count != 1:
+                raise ProfileConflict('common-hook compare-and-swap failed')
+        check_profile_budget(write_deadline)
+        db.commit()
+    except sqlite3.OperationalError:
+        if expired[0]:
+            raise ProfileBudgetExceeded('profile write budget exhausted') from None
+        raise
+    finally:
+        # A progress timeout must not interrupt rollback itself.
+        db.set_progress_handler(None, 0)
+        try:
+            if db.in_transaction:
+                db.rollback()
+        finally:
+            db.close()
+            if write_started is not None:
+                timings['transaction_seconds'] = time.monotonic() - write_started
+
+
+def database_busy(exc):
+    code = getattr(exc, 'sqlite_errorcode', None)
+    if code is not None:
+        return code & 255 in (5, 6)  # SQLITE_BUSY / SQLITE_LOCKED, including extensions.
+    # Python 3.10 has no sqlite_errorcode attribute. Do not log exception text.
+    return str(exc).startswith(('database is locked', 'database table is locked',
+                                'database schema is locked'))
+
+
 def reconcile_profiles(home, manager, apply):
     database = Path(home) / '.cc-switch/cc-switch.db'
     if not database.exists():
         return dict(status='DATABASE_ABSENT', profiles=0, change_needed=0, changed=0)
     if database.is_symlink() or not database.is_file():
         raise ValueError('cc-switch database must be a regular nonsymlink file')
-    # mode=rw never silently creates a replacement database. All profile writes
-    # and the optional common-snippet cleanup commit in one transaction.
-    db = sqlite3.connect(database.as_uri() + ('?mode=rw' if apply else '?mode=ro'), uri=True, timeout=2)
+    original = database.stat()
+    started = time.monotonic()
+    deadline = started + PROFILE_BUDGET_SECONDS
+    timings = dict(snapshot_seconds=0.0, planning_seconds=0.0,
+                   lock_wait_seconds=0.0, transaction_seconds=0.0,
+                   write_transaction_started=False)
+    result = dict(status='CHECKED', profiles=None, change_needed=None, changed=0,
+                  write_committed=False, hooks_disabled=0, common_hook_cleanup=False,
+                  provider_selection_unchanged=True, non_hook_fields_preserved=True,
+                  timings=timings)
     try:
-        db.execute('BEGIN IMMEDIATE' if apply else 'BEGIN')
-        rows = db.execute("SELECT id, settings_config FROM providers WHERE app_type='claude' ORDER BY id").fetchall()
-        plans, disabled = [], 0
-        for key, raw in rows:
-            if not isinstance(raw, str) or len(raw.encode()) > MAX_CONFIG_BYTES:
-                raise ValueError('profile is not bounded JSON')
-            doc = json.loads(raw)
-            if not isinstance(doc, dict):
-                raise ValueError('profile must be an object')
-            new = normalized(doc, manager, home, True)
-            disabled += doc.get('disableAllHooks') is True
-            if doc != new:
-                plans.append((key, raw, new))
-        common = db.execute("SELECT value FROM settings WHERE key='common_config_claude'").fetchone()
-        common_next = None
-        if common and common[0]:
-            doc = json.loads(common[0])
-            if not isinstance(doc, dict):
-                raise ValueError('common config must be an object')
-            # Profiles own our eleven hooks. Avoid duplicate registrations from
-            # a common snippet without toggling commonConfigEnabled or its env.
-            if 'hooks' in doc:
-                new = copy.deepcopy(doc)
-                new['hooks'] = foreign_hooks(doc, manager, home)
-                if new != doc:
-                    common_next = new
-        if apply:
-            for key, raw, new in plans:
-                count = db.execute("UPDATE providers SET settings_config=? WHERE id=? AND app_type='claude' AND settings_config=?",
-                                   (json.dumps(new, ensure_ascii=False), key, raw)).rowcount
-                if count != 1:
-                    raise RuntimeError('profile compare-and-swap failed')
-            if common_next is not None:
-                count = db.execute("UPDATE settings SET value=? WHERE key='common_config_claude' AND value=?",
-                                   (json.dumps(common_next, ensure_ascii=False), common[0])).rowcount
-                if count != 1:
-                    raise RuntimeError('common-hook compare-and-swap failed')
-            db.commit()
-        else:
-            db.rollback()
-        return dict(status='CHECKED', profiles=len(rows), change_needed=len(plans),
-                    changed=len(plans) if apply else 0, hooks_disabled=disabled,
-                    common_hook_cleanup=common_next is not None,
-                    provider_selection_unchanged=True, non_hook_fields_preserved=True)
-    finally:
-        db.close()
+        stage = time.monotonic()
+        try:
+            rows, common = profile_snapshot(database, deadline)
+        finally:
+            timings['snapshot_seconds'] = time.monotonic() - stage
+        result['profiles'] = len(rows)
+        stage = time.monotonic()
+        try:
+            plans, common_next, disabled = profile_plan(rows, common, manager, home, deadline)
+        finally:
+            timings['planning_seconds'] = time.monotonic() - stage
+        result.update(change_needed=len(plans), hooks_disabled=disabled,
+                      common_hook_cleanup=common_next is not None)
+        # No-op checks never open a writable connection or reserve the writer.
+        if apply and (plans or common_next is not None):
+            latest = database.stat()
+            if database.is_symlink() or (original.st_dev, original.st_ino) != (latest.st_dev, latest.st_ino):
+                raise ProfileConflict('database changed during planning')
+            apply_profile_plan(database, plans, common, common_next, deadline, timings)
+            result.update(changed=len(plans), write_committed=True)
+    except ProfileConflict:
+        result['status'] = 'CONCURRENT_EDIT'
+    except ProfileBudgetExceeded:
+        result['status'] = 'PROFILE_BUDGET_EXHAUSTED'
+    except ProfileSnapshotLimit:
+        result['status'] = 'PROFILE_SNAPSHOT_LIMIT'
+    except sqlite3.OperationalError as exc:
+        if not database_busy(exc):
+            raise
+        result['status'] = 'LOCK_BUSY'
+    timings['total_seconds'] = time.monotonic() - started
+    return result
 
 
 def reconcile(home, manifest_path, apply=False):
@@ -248,7 +408,9 @@ def reconcile(home, manifest_path, apply=False):
                       apply=apply, input_operations=0, runtime_reload_proven=False)
         result['profiles'] = reconcile_profiles(home, manager, apply)
         result['files'] = reconcile_files(home, manager, apply)
-        if any(x['hooks_disabled'] for x in result['files']) or result['profiles'].get('hooks_disabled'):
+        if result['profiles']['status'] not in ('CHECKED', 'DATABASE_ABSENT'):
+            result['status'] = result['profiles']['status']
+        elif any(x['hooks_disabled'] for x in result['files']) or result['profiles'].get('hooks_disabled'):
             result['status'] = 'HOOKS_DISABLED_EXTERNALLY'
         if apply:
             atomic_json(root / 'configuration-guardian-v1/STATUS.json', result)
@@ -257,10 +419,13 @@ def reconcile(home, manifest_path, apply=False):
 
 def launchd_spec(home, source, python, manifest):
     home = Path(home)
-    return dict(Label=LABEL, RunAtLoad=True, StartInterval=60, ThrottleInterval=10,
+    return dict(Label=LABEL, RunAtLoad=True, StartInterval=60, ThrottleInterval=60,
                 ProgramArguments=[str(python), '-B', str(Path(source) / 'scripts/configuration_guardian.py'),
                                   'reconcile', '--home', str(home), '--manifest', str(manifest), '--apply'],
-                WatchPaths=[str(home / '.claude'), str(home / '.codex'), str(home / '.cc-switch'), str(manifest)],
+                # The database also contains frequently written request logs.
+                # Discover profile imports on the interval, not every DB/WAL event.
+                WatchPaths=[str(home / '.claude/settings.json'),
+                            str(home / '.codex/hooks.json'), str(manifest)],
                 StandardOutPath='/dev/null', StandardErrorPath='/dev/null', ProcessType='Background')
 
 
@@ -319,7 +484,8 @@ def main(argv=None):
         if args.apply:
             atomic_json(state_root(args.home) / 'configuration-guardian-v1/STATUS.json', result)
     print(json.dumps(result, ensure_ascii=False))
-    return 2 if result['status'] in ('RECONCILE_FAILED', 'HOOKS_DISABLED_EXTERNALLY') else 0
+    return 0 if result['status'] in ('RECONCILED', 'INSTALLER_BUSY', 'JOB_PLANNED',
+                                     'JOB_REGISTERED') else 2
 
 
 if __name__ == '__main__':
