@@ -1,4 +1,11 @@
-Current source: **0.4.48**. Recognize the measured auto-compact percentage hint
+Current source: **0.4.49**. Explicit inquiry re-enrollment by the original executor
+can preview past its previous stop while preserving formal reservations. The
+existing registration transaction clears that stop only after commit. Continuing
+reservation inquiries require explicit authorization; installed versions do not
+upgrade old episodes. The complete 0.4.48 file protocol remains supported under
+its original pins. See the [0.4.49 release contract](references/release-0.4.49.md).
+
+Recognize the measured auto-compact percentage hint
 in a Claude elapsed footer without altering any composer bytes. Normal work and
 Goal remain compatible with prompt-ready delivery; actual compaction, unknown
 syntax and occupied drafts retain their checks. The reviewed 0.4.47 file protocol

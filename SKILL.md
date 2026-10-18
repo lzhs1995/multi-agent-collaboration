@@ -9,7 +9,15 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.48.** The measured auto-compact percentage hint in a Claude
+**Version: 0.4.49.** An authenticated original executor can explicitly stop an
+old inquiry episode and register a new one with `--resume-stopped`. Registration
+previews retain the old stop until the transaction commits and preserve recorded
+formal reservations. New reservation inquiries still require explicit continuing
+authorization; old controllers and pending input are not upgraded or replayed.
+The complete reviewed 0.4.48 file protocol retains its original authority. See the
+[0.4.49 release contract](references/release-0.4.49.md).
+
+The measured auto-compact percentage hint in a Claude
 elapsed footer no longer prevents sending during normal work or Goal. Complete
 composer boundaries and exact draft bytes remain required; actual compaction
 and unknown footer syntax remain distinct. Reviewed 0.4.47 file episodes retain

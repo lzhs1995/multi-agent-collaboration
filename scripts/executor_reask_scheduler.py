@@ -308,14 +308,14 @@ def _continuing(state):
     return (state.get('continuation') or {}).get('status') == 'ACTIVE'
 
 
-def _available(state, pins, now):
+def _available(state, pins, now, *, preview_resume=False):
     if not _pair_matches(state, pins) or state.get('state') != reask.WAITING:
         raise ValueError('live pair and waiting episode do not match')
     from executor_reask_lifecycle import (poll_authorization, observe_formal_tasks,
                                          reservation_inquiries_allowed)
     preview = copy.deepcopy(state)
     poll_authorization(preview, now, publish=False)
-    observe_formal_tasks(preview, now, publish=False)
+    observe_formal_tasks(preview, now, publish=False, preview_resume=preview_resume)
     if (preview.get('state') != reask.WAITING or preview.get('paused_tasks')
             and not reservation_inquiries_allowed(preview)):
         raise ValueError('inquiry authorization ended or a formal task owns the executor')
@@ -481,7 +481,11 @@ def start(live, *, now=None, authenticate_executor=False, **kwargs):
             if not isinstance(native_identity, dict):
                 raise ValueError('new foreground inquiry requires its original executor identity')
             state['executor_identity'] = native_identity
-        _available(state, pins, now)
+        # The old stop file stays intact until the new registration commits.
+        # Only an explicitly resumed, genuinely new episode may preview past it.
+        preview_resume = bool(kwargs.get('resume_stopped') and (
+            not previous or state.get('episode_id') != previous.get('episode_id')))
+        _available(state, pins, now, preview_resume=preview_resume)
         return _commit(state, pins, previous, raw, authorization='EXPLICIT_REASK_START',
                        original=reask.controller(), now=now,
                        resume_stopped=kwargs.get('resume_stopped', False))

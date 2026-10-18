@@ -199,6 +199,11 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
                  reply_detected_epoch=None, reply_consumed_epoch=None,
                  terminal_pending=copy.deepcopy(old.get('terminal_pending')) if old else None,
                  reply=None, own_prefixes=list(own_prefixes))
+    # Restarting an inquiry does not release a formal task. Keep the original
+    # pair's recorded reservations even if its marker is temporarily absent.
+    if old and all(old.get(key) == binding[key] for key in (
+            'caller_surface_uuid', 'supervisor', 'workspace_uuid')):
+        state['paused_tasks'] = copy.deepcopy(old.get('paused_tasks', []))
     return state
 
 

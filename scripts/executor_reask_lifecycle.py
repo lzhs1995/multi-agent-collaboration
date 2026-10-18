@@ -355,7 +355,8 @@ def _release_reservation(state, reservation, now, *, publish):
     return True
 
 
-def apply_boundary(state, marker, event, now, *, observed=False, publish=True):
+def apply_boundary(state, marker, event, now, *, observed=False, publish=True,
+                   preview_resume=False):
     """Formal reservation only; never grants a new owner or changes controller.
 
     publish=False performs the same checks on a caller-supplied deep copy,
@@ -363,6 +364,8 @@ def apply_boundary(state, marker, event, now, *, observed=False, publish=True):
     fresh harness events; disk observations must carry their original armed_at.
     """
     import executor_reask as reask
+    if preview_resume and publish:
+        raise ValueError('operator resume is only allowed in an unpublished registration preview')
     eligible = _boundary_eligible(state)
     terminal_release = (event == 'RELEASED'
                         and state.get('state') in (reask.ANSWERED, reask.CONSUMED, reask.STOPPED))
@@ -402,7 +405,7 @@ def apply_boundary(state, marker, event, now, *, observed=False, publish=True):
         # Exact RELEASE is bookkeeping, not continuing authorization. Do not
         # poll or rewrite an already-terminal episode's reason/timestamps.
         return _release_reservation(state, reservation, now, publish=publish)
-    if reask.stop_file(state['caller_surface_uuid']).exists():
+    if reask.stop_file(state['caller_surface_uuid']).exists() and not preview_resume:
         _boundary_stop(state, 'OPERATOR_STOP', now, publish=publish)
         if event == 'RELEASED':
             _release_reservation(state, reservation, now, publish=publish)
@@ -431,13 +434,15 @@ def apply_boundary(state, marker, event, now, *, observed=False, publish=True):
     return state != before
 
 
-def observe_formal_tasks(state, now, *, publish=True):
+def observe_formal_tasks(state, now, *, publish=True, preview_resume=False):
     """Bounded observation while the caller lock is held, including old harnesses.
 
     Absence or TTL expiry never releases a recorded reservation. Only a matching
     formal RELEASED event can do that. A legacy writer racing this read remains
     a disclosed limit; CURRENT writers use marker_locks.
     """
+    if preview_resume and publish:
+        raise ValueError('operator resume is only allowed in an unpublished registration preview')
     if not _boundary_eligible(state):
         return
     workspace = state.get('workspace_uuid')
@@ -460,7 +465,8 @@ def observe_formal_tasks(state, now, *, publish=True):
     for path in sorted(paths):
         marker = ready.read_json(path)
         if marker:
-            apply_boundary(state, marker, 'RESERVED', now, observed=True, publish=publish)
+            apply_boundary(state, marker, 'RESERVED', now, observed=True, publish=publish,
+                           preview_resume=preview_resume)
 
 
 def task_boundary_locked(marker, event, *, now=None):
