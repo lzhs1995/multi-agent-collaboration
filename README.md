@@ -1,8 +1,8 @@
-Current source: **0.4.47**. An explicit `reconcile-profile` command repairs owned
-hooks in the actual `--settings` file with a preview SHA, private backup and
-concurrent-edit checks, preserving a paused guardian. Original-controller
-refusals name both sources; the reviewed 0.4.46 file protocol keeps its original
-authority. See the [0.4.47 release contract](references/release-0.4.47.md) and
+Current source: **0.4.48**. Recognize the measured auto-compact percentage hint
+in a Claude elapsed footer without altering any composer bytes. Normal work and
+Goal remain compatible with prompt-ready delivery; actual compaction, unknown
+syntax and occupied drafts retain their checks. The reviewed 0.4.47 file protocol
+keeps its original authority. See the [0.4.48 release contract](references/release-0.4.48.md) and
 [evidence and handoffs](references/collaboration-evidence-and-handoffs.md).
 
 Ready prompts can be sent in either direction during

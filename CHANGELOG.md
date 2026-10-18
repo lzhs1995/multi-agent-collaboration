@@ -1,3 +1,23 @@
+## 0.4.48
+
+- Recognize the measured `0–100% until auto-compact · /model opus[1m]` hint
+  only in a valid elapsed footer outside complete Claude composer borders.
+  Preserve exact draft bytes, busy/Goal communication, and existing checks for
+  active compaction, reconnecting, incomplete borders and unknown suffixes.
+- Preserve the fully verified `0.4.47-46395e3b21e5` file protocol, including
+  its original 14-member controller and 14-controller issuer scope. Older
+  issuers gain no future authority and existing episodes are not migrated.
+- Distinguish task-package integrity checks from explicit task acceptance and
+  its evidenced timestamp. File review and exact RELEASE do not establish
+  callback delivery; unavailable endpoints remain separately unresolved.
+
+Local targeted footer/delivery tests passed 152 checks, and protocol tests
+passed 39 checks. Two historical frames reproduce the old parser failure and
+the corrected result with identical composer bytes; their later observation
+does not establish the original dispatch-time state or authorize replay.
+The inherited Claude review remains partial. See the
+[release contract](references/release-0.4.48.md) for evidence boundaries.
+
 ## 0.4.47
 
 - Add explicit `configuration_guardian.py reconcile-profile` preview/apply for
