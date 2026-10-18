@@ -592,7 +592,7 @@ def _cadence(previous, now):
     return result
 
 
-def _release_observation(state, previous, now):
+def _release_observation(state, previous, now, *, verification=None):
     """Observe the latest exact RELEASE; bounded history is not a full ledger.
 
     A new boundary carries an atomic file-post watermark. Without that proof,
@@ -642,7 +642,8 @@ def _release_observation(state, previous, now):
     else:
         from executor_reask_lifecycle import reservation_inquiries_allowed
         eligible = (state.get('state') == reask.WAITING
-                    and (not state.get('paused_tasks') or reservation_inquiries_allowed(state)))
+                    and (not state.get('paused_tasks') or
+                         reservation_inquiries_allowed(state, verification=verification)))
         elapsed = now - released
         result.update(status='AWAITING_FILE_POST' if eligible else 'RESUME_NOT_CURRENTLY_ELIGIBLE',
                       elapsed_since_release_seconds=elapsed,
@@ -710,14 +711,15 @@ def _sweep_one(path, now, execution, *, verification=None):
                     if state.get('paused_tasks'):
                         row['paused_tasks'] = copy.deepcopy(state['paused_tasks'])
                         from executor_reask_lifecycle import reservation_inquiries_allowed
-                        row['reservation_inquiries_authorized'] = reservation_inquiries_allowed(state)
+                        row['reservation_inquiries_authorized'] = reservation_inquiries_allowed(
+                            state, verification=verification)
                 else:
                     return dict(row, status='BINDING_OR_CONTROLLER_MISMATCH')
                 if ready.read_json(path) != record:
                     return dict(row, status='ENROLLMENT_CHANGED')
                 observation = _release_observation(
                     state, record.get('release_resume_observation'),
-                    time.time() if now is None else now)
+                    time.time() if now is None else now, verification=verification)
                 if observation is not None:
                     row['release_resume_observation'] = observation
                     record['release_resume_observation'] = observation

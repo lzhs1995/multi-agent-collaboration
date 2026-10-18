@@ -9,7 +9,16 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.39.** Tools and native hooks that descend from an embedded Codex
+**Version: 0.4.40.** Historical file reservation inquiries retain only their
+original, explicit enrollment authority after complete protocol verification.
+Tick, summary and scheduler share that decision and the current sweep's verified
+release cache. Never edit an old episode to add permission or migrate its
+controller. Embedded and managed tools/hooks may relay native identity only
+through supported shell/rtk intermediates; another model CLI or unknown wrapper
+cannot borrow the parent's identity. The leaf resolver interpreter remains
+allowed. See the [0.4.40 release contract](references/release-0.4.40.md).
+
+Tools and native hooks that descend from an embedded Codex
 TUI can authenticate without a managed daemon. Require the actual tool ancestry,
 matching current native foreground thread, kernel process identity, UUIDs, TTY
 and stable rereads. A child cannot borrow its parent's identity or inbox. The

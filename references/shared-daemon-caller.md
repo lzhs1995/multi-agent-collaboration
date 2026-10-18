@@ -82,6 +82,23 @@ leaves without requesting reload and observing a new fixture is distinct from
 proving adoption by existing threads. Per-slot generated hook commands need their
 own freshly computed identities; a copied trust hash is not sufficient.
 
+## Intermediate process boundary
+
+For both embedded and managed clients, every process between the resolver leaf
+and the selected Codex client/daemon must be a supported shell or rtk proxy:
+`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `csh`, `tcsh`, or `rtk`.
+Use the executable path read from the kernel, not its argv label. The Python
+interpreter running the resolver itself is the leaf and is allowed. Intermediate
+interpreters and unknown wrappers are refused because they may host another
+model CLI; copied or absent selectors do not confer authority.
+
+This bounded compatibility rule closes the inherited-identity path through
+another model and applies equally to tools and supported hook payloads. It
+does not replace process, foreground, UUID, TTY or drift validation, and is not
+arbitrary executable attestation. An unsupported wrapper leaves observer scope
+unresolved without blocking ordinary tools or Stop; explicit input and inbox
+consumption still require authenticated identity.
+
 ## Embedded native clients
 
 From 0.4.39, the shared resolver also handles tools and native hooks whose actual

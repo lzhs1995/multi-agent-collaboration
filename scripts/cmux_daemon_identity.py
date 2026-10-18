@@ -272,6 +272,20 @@ def _ancestry():
     return chain, daemon
 
 
+def _assert_proxy_ancestry(chain):
+    """Only shells and the supported proxy may relay a client's identity.
+
+    Inspect kernel executable names, not argv labels or inherited selectors.
+    The leaf interpreter running this resolver is not an intermediate process;
+    an interpreter hosting another CLI is. Unknown intermediates fail closed,
+    including version-named native clients and node/python model launchers.
+    """
+    proxies = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'rtk'}
+    for item in chain:
+        if Path(item.get('executable', '')).name not in proxies:
+            raise IdentityError('intermediate process is not a supported tool proxy')
+
+
 def _collect_embedded(env, chain, *, payload=None):
     """Authenticate the ancestor TUI without inventing a managed daemon.
 
@@ -299,6 +313,7 @@ def _collect_embedded(env, chain, *, payload=None):
     if current['pid'] != os.getpid() or current['ppid'] != chain[0]['pid']:
         raise IdentityError('embedded tool ancestry changed')
     tool_chain = [current] + chain[:index]
+    _assert_proxy_ancestry(tool_chain[1:])
     if (payload is None and current['env'].get('CODEX_THREAD_ID') != session
             or env.get('CODEX_THREAD_ID') not in (None, session)
             or any(item['env'].get('CODEX_THREAD_ID') not in (None, session)
@@ -401,6 +416,11 @@ def collect_hook(env, payload):
 
 
 def _collect_client(session, chain, daemon):
+    # A shell may exec the resolver directly; that leaf is already verified by
+    # collect(). Other model clients must never relay the daemon's selectors,
+    # for either ordinary tools or hooks carrying a copied session_id.
+    _assert_proxy_ancestry([p for p in chain
+                            if p['pid'] not in (daemon['pid'], os.getpid())])
     candidates = client_candidates()
     clients = []
     selections = []

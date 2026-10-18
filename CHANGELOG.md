@@ -1,4 +1,25 @@
-## 0.4.39
+## 0.4.40
+
+Preserve explicitly enrolled reservation inquiries for fully verified historical
+file episodes. Use the existing protocol capability check instead of equality
+with the current controller, sharing per-sweep verification in tick, summary,
+reservation and RELEASE observation. Original enrollment, authorization,
+STOP/expiry, consumption and exact RELEASE boundaries stay unchanged.
+
+Close review finding F98-1 in embedded and managed tools/hooks: reject
+intermediate model clients and unknown wrappers using kernel-read executable
+names, independently of inherited selectors or argv labels. Supported shell/rtk
+intermediates and the leaf resolver interpreter remain allowed. PID/birth,
+foreground, UUID/TTY and stable-reread checks remain mandatory.
+
+Reservation validation passed 217 related tests plus 2 expiry/cache tests in
+separate runs. Native identity and hook validation passed 432 related tests in
+39.553 seconds after four negative-control subcases reproduced the defect.
+These are per-run source results, not live hook, delivery or callback evidence.
+The unmerged 0.4.39 candidate is incorporated here and is not installed separately.
+See the [release contract](references/release-0.4.40.md).
+
+## 0.4.39 (unreleased candidate, incorporated into 0.4.40)
 
 Authenticate a tool or native hook descended from its original embedded Codex
 TUI when no managed daemon exists. Require matching foreground thread, actual

@@ -1,4 +1,13 @@
-Current source: **0.4.39**. An embedded Codex TUI can authenticate its own tools
+Current source: **0.4.40**. Verified historical episodes retain file reservation
+inquiries only when their original enrollment explicitly authorized them.
+The scheduler uses the existing complete-release protocol checks and the same
+sweep verification cache; it grants no new capability or controller migration.
+Embedded and managed Codex identity also reject an intervening model CLI or
+unknown process. Only supported shell/rtk intermediates relay identity; the
+leaf resolver interpreter is allowed. See the
+[0.4.40 release contract](references/release-0.4.40.md).
+
+An embedded Codex TUI can authenticate its own tools
 and native hooks through actual ancestry, matching native foreground selection,
 kernel process identity, UUIDs, TTY and stable rereads. Children cannot borrow a
 parent's identity. Original consumer proofs remain pinned; native `*_id` and

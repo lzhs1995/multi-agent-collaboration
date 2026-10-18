@@ -1,5 +1,9 @@
 # 0.4.39: authenticate the original embedded Codex caller
 
+This candidate was not released or installed separately. Its identity support
+is incorporated into [0.4.40](release-0.4.40.md), including the review correction
+for intermediate model clients. The evidence below describes the earlier delta.
+
 The shared caller resolver previously returned no native proof when the actual
 tool ancestors contained an embedded Codex TUI without a managed daemon. That
 left tools, native hooks and reply-consumer authentication without the proof

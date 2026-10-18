@@ -869,7 +869,7 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
         return state
     if state.get('paused_tasks'):
         from executor_reask_lifecycle import reservation_inquiries_allowed
-        if not reservation_inquiries_allowed(state):
+        if not reservation_inquiries_allowed(state, verification=verification):
             return state
         # All foreground and scheduler entrypoints use this same restriction.
         # No transport, pending reconciliation or new terminal intent is allowed.
@@ -963,12 +963,12 @@ def stop(caller, reason='OPERATOR'):
         return tick_locked(caller)
 
 
-def summary(state):
+def summary(state, *, verification=None):
     if not isinstance(state, dict) or 'caller_surface_uuid' not in state:
         return state
     last = state['asks'][-1] if state.get('asks') else None
     from executor_reask_lifecycle import reservation_inquiries_allowed
-    reservation_authority = reservation_inquiries_allowed(state)
+    reservation_authority = reservation_inquiries_allowed(state, verification=verification)
     result = dict(outcome=state.get('registration_observation') or state.get('outcome') or state.get('state'),
                 ask_count=state.get('ask_count', 0),
                 check_count=state.get('check_count', 0), attempt_count=state.get('attempt_count', 0),
