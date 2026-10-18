@@ -1,3 +1,24 @@
+## 0.4.39
+
+Authenticate a tool or native hook descended from its original embedded Codex
+TUI when no managed daemon exists. Require matching foreground thread, actual
+kernel ancestry, process identity, UUIDs and TTY, with stable rereads. Missing or
+invalid foreground evidence never falls back to resume arguments. Root and
+child authority remain separate, and the public proof records the embedded
+runtime explicitly without inventing a daemon.
+
+Accept the caller snapshot's native `*_id` fields for authenticated reply
+consumption, retaining historical `*_uuid` fields only with agreement across
+all supplied aliases. Preserve full original caller-proof equality; an embedded
+proof cannot migrate an episode captured under a managed daemon.
+
+The identity delta passed 189 related tests in 5.114 seconds, including 28 new
+embedded-caller cases. A live read-only caller and consumer identity probe also
+passed. These are source/identity results, not automatic-hook invocation,
+mailbox consumption or native callback evidence. The reviewed historical
+manifest allowlist still ends at 0.4.37; no 0.4.38 installation manifest has been
+approved. See the [release contract](references/release-0.4.39.md).
+
 ## 0.4.38
 
 - Share the formal-marker directory through `cmux_coordination_paths.py` so a

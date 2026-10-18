@@ -1,4 +1,12 @@
-Current source: **0.4.38**. File reservation checks read their shared directory
+Current source: **0.4.39**. An embedded Codex TUI can authenticate its own tools
+and native hooks through actual ancestry, matching native foreground selection,
+kernel process identity, UUIDs, TTY and stable rereads. Children cannot borrow a
+parent's identity. Original consumer proofs remain pinned; native `*_id` and
+historical `*_uuid` fields must agree when both are present. This does not create
+a native control socket or prove an existing client loaded the hooks. See the
+[0.4.39 release contract](references/release-0.4.39.md).
+
+File reservation checks read their shared directory
 without loading the terminal harness and bridge. Authorization, STOP, ownership,
 reservation and reply checks remain live. Complete release verification is reused
 within one sweep, with every verified member and parent checked before reuse.

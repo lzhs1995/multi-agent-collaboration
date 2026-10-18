@@ -1,8 +1,9 @@
-"""Resolve a shared Codex daemon caller from live process evidence, never focus.
+"""Resolve a native Codex caller from live process evidence, never focus.
 
 No environment mutation or terminal operations. The thread ID is only a selector:
 a unique same-user native foreground (or legacy resume) client, executable,
-birth, TTY and cmux UUID must agree. Ordinary clients retain the original identify/environment checks.
+birth, TTY and cmux UUID must agree. Embedded clients require their actual tool
+ancestry and a current native foreground record; selectors alone are not proof.
 """
 import ctypes
 import errno
@@ -271,6 +272,63 @@ def _ancestry():
     return chain, daemon
 
 
+def _collect_embedded(env, chain, *, payload=None):
+    """Authenticate the ancestor TUI without inventing a managed daemon.
+
+    No global process scan or legacy resume fallback is needed: this tool must
+    descend from the very client whose native foreground it selects. A child
+    thread cannot borrow its parent's foreground, UUIDs or inbox authority.
+    """
+    candidates = [(index, item) for index, item in enumerate(chain)
+                  if Path(item.get('executable', '')).name == 'codex']
+    if not candidates:
+        return None
+    index, client = candidates[0]
+    if client.get('argv', [])[1:2] == ['app-server']:
+        raise IdentityError('unmanaged app-server is not an embedded native client')
+    try:
+        session = str(uuid.UUID(payload['session_id'] if payload is not None
+                                else env['CODEX_THREAD_ID']))
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise IdentityError('embedded caller lacks a valid thread selector') from exc
+    if payload is not None and payload.get('hook_event_name') not in (
+            'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
+            'SessionStart', 'UserPromptSubmit'):
+        raise IdentityError('embedded hook event is missing or unsupported')
+    current = process(os.getpid())
+    if current['pid'] != os.getpid() or current['ppid'] != chain[0]['pid']:
+        raise IdentityError('embedded tool ancestry changed')
+    tool_chain = [current] + chain[:index]
+    if (payload is None and current['env'].get('CODEX_THREAD_ID') != session
+            or env.get('CODEX_THREAD_ID') not in (None, session)
+            or any(item['env'].get('CODEX_THREAD_ID') not in (None, session)
+                   for item in tool_chain)):
+        raise IdentityError('embedded thread selector differs from tool ancestry')
+    for key in ('CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID'):
+        wanted = client['env'].get(key)
+        if (not wanted or env.get(key) != wanted or current['env'].get(key) != wanted
+                or any(item['env'].get(key) not in (None, wanted) for item in tool_chain)):
+            raise IdentityError('embedded UUID environment differs from client ancestry')
+    try:
+        selected = foreground.read(client)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise IdentityError('embedded native foreground unavailable: ' + str(exc)) from exc
+    if selected is None or selected.get('thread_id') != session:
+        raise IdentityError('embedded caller requires its matching native foreground thread')
+    tty = subprocess.run(['/bin/ps', '-p', str(client['pid']), '-o', 'tty='],
+                         capture_output=True, text=True,
+                         timeout=budget.timeout(), check=True).stdout.strip()
+    budget.check()
+    if not tty or tty in ('?', '??', '-'):
+        raise IdentityError('embedded native client has no terminal')
+    if (process(os.getpid()) != current or _ancestry() != (chain, None)
+            or foreground.read(client) != selected):
+        raise IdentityError('embedded caller changed during authentication')
+    return dict(source='embedded-native-client-v1', session=session, daemon=None,
+                client=dict(client, tty=tty), chain=[current] + chain,
+                foreground=selected)
+
+
 def collect(env):
     """Bind a tool's kernel-observed selector to its live native client.
 
@@ -282,7 +340,7 @@ def collect(env):
         return None
     chain, daemon = _ancestry()
     if daemon is None:
-        return None
+        return _collect_embedded(env, chain)
     session = str(uuid.UUID(env['CODEX_THREAD_ID']))
     tool_threads = [p['env']['CODEX_THREAD_ID'] for p in chain[:-1]
                     if p['env'].get('CODEX_THREAD_ID')]
@@ -322,7 +380,7 @@ def collect_hook(env, payload):
         return None
     chain, daemon = _ancestry()
     if daemon is None:
-        return None
+        return _collect_embedded(env, chain, payload=payload)
     try:
         session = str(uuid.UUID(payload['session_id']))
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -449,10 +507,14 @@ def resolve(identity, tree, env, proof):
         if matches[0]['dock_scope'] == 'global':
             raise IdentityError('global dock is not a workspace member')
         return matches[0]
-    source, caller = by_env(daemon['env']), by_env(client['env'])
+    embedded = proof.get('source') == 'embedded-native-client-v1' and daemon is None
+    if daemon is None and not embedded:
+        raise IdentityError('native caller proof has no authenticated origin')
+    source, caller = by_env((client if embedded else daemon)['env']), by_env(client['env'])
     raw = identity.get('caller') or {}
     if any(raw.get(k) != source[k] for k in ('surface_ref', 'workspace_ref', 'pane_ref')):
-        raise IdentityError('identify differs from daemon origin')
+        raise IdentityError('identify differs from native client origin' if embedded
+                            else 'identify differs from daemon origin')
     # cmux can retain the name of a recycled PTY on an unrelated surface.
     # The unique live native process and its kernel-read UUID environment
     # select the caller; a global TTY-name search must not select or veto it.
@@ -471,8 +533,10 @@ def public_proof(proof):
     p = proof['client']
     public = dict(session=proof['session'], pid=p['pid'], birth=p['birth'], tty=p['tty'],
                   executable=p['executable'], surface_uuid=p['env']['CMUX_SURFACE_ID'],
-                  daemon_pid=proof['daemon']['pid'],
+                  daemon_pid=proof['daemon']['pid'] if proof['daemon'] is not None else None,
                   argv_sha256=hashlib.sha256(json.dumps(p['argv']).encode()).hexdigest())
+    if proof.get('source') == 'embedded-native-client-v1':
+        public['source'] = proof['source']
     # caller_snapshot has rechecked this selection against the live process.
     # Root-only hook discovery needs it after projection; do not expose the
     # full control-socket record, process environment or ancestor chain.
