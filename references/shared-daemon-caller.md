@@ -82,6 +82,52 @@ leaves without requesting reload and observing a new fixture is distinct from
 proving adoption by existing threads. Per-slot generated hook commands need their
 own freshly computed identities; a copied trust hash is not sufficient.
 
+## Intermediate process boundary
+
+For both embedded and managed clients, every process between the resolver leaf
+and the selected Codex client/daemon must be a supported shell or rtk proxy:
+`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `csh`, `tcsh`, or `rtk`.
+Use the executable path read from the kernel, not its argv label. The Python
+interpreter running the resolver itself is the leaf and is allowed. Intermediate
+interpreters and unknown wrappers are refused because they may host another
+model CLI; copied or absent selectors do not confer authority.
+
+This bounded compatibility rule closes the inherited-identity path through
+another model and applies equally to tools and supported hook payloads. It
+does not replace process, foreground, UUID, TTY or drift validation, and is not
+arbitrary executable attestation. An unsupported wrapper leaves observer scope
+unresolved without blocking ordinary tools or Stop; explicit input and inbox
+consumption still require authenticated identity.
+
+## Embedded native clients
+
+From 0.4.39, the shared resolver also handles tools and native hooks whose actual
+ancestors include an embedded Codex TUI without a managed daemon. Select that
+ancestor, not a global process scan or a resume argument. Its kernel identity,
+current foreground record, thread selector, surface/workspace UUIDs and TTY must
+agree with the tool and current cmux tree. Recheck the process chain and native
+selection around tree reads. Missing or invalid foreground evidence refuses
+authentication. An unmanaged `codex app-server` is not an embedded TUI.
+
+Native hooks may use the supported event payload's session ID when no selector
+is inherited; any supplied environment or intermediate selector must agree.
+The hook payload does not supply terminal identity. A child thread cannot borrow
+the root foreground or consume its inbox. Ordinary tools still require their
+own kernel-observed thread selector. Discovery failure leaves ordinary tools
+and Stop available, while explicit input retains its authentication checks.
+
+The public proof contains `source=embedded-native-client-v1`, `daemon_pid=null`
+and the authenticated foreground thread. Reply consumption accepts the real
+caller snapshot's `surface_id`, `workspace_id` and `pane_id`, or historical
+`*_uuid` aliases. All supplied aliases must match; a conflicting alias cannot
+override the native field. The complete original `caller_proof` must still match,
+so a new embedded proof never migrates a managed episode.
+
+This identity path creates no daemon, control socket, thread, message or receipt.
+In particular, a valid embedded caller does not make native Codex input available
+when its authenticated control socket is absent. Installation, actual automatic
+hook invocation and original native reception need separate evidence.
+
 ## Reused PIDs and optional foreground files
 
 The foreground filename contains the PID, while the authenticated process

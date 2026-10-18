@@ -39,12 +39,23 @@ def _same_uuid(left, right):
         return False
 
 
+def _caller_uuid(caller, name, expected):
+    # Native caller_snapshot uses *_id. Historical normalized fixtures and
+    # callers used *_uuid; conflicting aliases must never pick a winner.
+    values = [caller[key] for key in (name + '_id', name + '_uuid') if key in caller]
+    return bool(values) and all(_same_uuid(value, expected) for value in values)
+
+
 def _codex_proof(binding):
     from executor_reask_protocol import sha256_shape
     resolved, _tree, _env, proof = workspace.caller_snapshot()
     caller = resolved.get('caller', {})
+    managed = (isinstance(proof, dict) and proof.get('source') is None
+               and type(proof.get('daemon_pid')) is int and proof['daemon_pid'] > 1)
+    embedded = (isinstance(proof, dict) and proof.get('source') == 'embedded-native-client-v1'
+                and proof.get('daemon_pid') is None)
     if (not isinstance(proof, dict)
-            or type(proof.get('daemon_pid')) is not int or proof['daemon_pid'] <= 1
+            or not (managed or embedded)
             or type(proof.get('pid')) is not int or proof['pid'] <= 1
             or not sha256_shape(proof.get('argv_sha256'))
             or not isinstance(proof.get('foreground'), dict)
@@ -55,12 +66,13 @@ def _codex_proof(binding):
             or proof.get('executable') != binding['process']['executable']
             or proof.get('tty') != binding['tty']
             or not _same_uuid(proof.get('surface_uuid'), binding['caller_surface_uuid'])
-            or not _same_uuid(caller.get('surface_uuid'), binding['caller_surface_uuid'])
-            or not _same_uuid(caller.get('workspace_uuid'), binding['workspace_uuid'])
-            or not _same_uuid(caller.get('pane_uuid'), binding['pane_uuid'])
+            or not _caller_uuid(caller, 'surface', binding['caller_surface_uuid'])
+            or not _caller_uuid(caller, 'workspace', binding['workspace_uuid'])
+            or not _caller_uuid(caller, 'pane', binding['pane_uuid'])
             or caller.get('surface_type') != 'terminal'):
         raise ValueError('consume requires the original authenticated Codex foreground thread')
-    # Preserve daemon/client/argv pins as well as the actual foreground thread.
+    # Preserve the original runtime kind and client/argv pins. A new embedded
+    # proof does not migrate an episode captured under a managed daemon.
     if 'caller_proof' in binding and proof != binding['caller_proof']:
         raise ValueError('original Codex consumer process proof changed')
     return proof

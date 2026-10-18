@@ -1,4 +1,21 @@
-Current source: **0.4.38**. File reservation checks read their shared directory
+Current source: **0.4.40**. Verified historical episodes retain file reservation
+inquiries only when their original enrollment explicitly authorized them.
+The scheduler uses the existing complete-release protocol checks and the same
+sweep verification cache; it grants no new capability or controller migration.
+Embedded and managed Codex identity also reject an intervening model CLI or
+unknown process. Only supported shell/rtk intermediates relay identity; the
+leaf resolver interpreter is allowed. See the
+[0.4.40 release contract](references/release-0.4.40.md).
+
+An embedded Codex TUI can authenticate its own tools
+and native hooks through actual ancestry, matching native foreground selection,
+kernel process identity, UUIDs, TTY and stable rereads. Children cannot borrow a
+parent's identity. Original consumer proofs remain pinned; native `*_id` and
+historical `*_uuid` fields must agree when both are present. This does not create
+a native control socket or prove an existing client loaded the hooks. See the
+[0.4.39 release contract](references/release-0.4.39.md).
+
+File reservation checks read their shared directory
 without loading the terminal harness and bridge. Authorization, STOP, ownership,
 reservation and reply checks remain live. Complete release verification is reused
 within one sweep, with every verified member and parent checked before reuse.

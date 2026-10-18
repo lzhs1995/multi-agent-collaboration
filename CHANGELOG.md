@@ -1,3 +1,45 @@
+## 0.4.40
+
+Preserve explicitly enrolled reservation inquiries for fully verified historical
+file episodes. Use the existing protocol capability check instead of equality
+with the current controller, sharing per-sweep verification in tick, summary,
+reservation and RELEASE observation. Original enrollment, authorization,
+STOP/expiry, consumption and exact RELEASE boundaries stay unchanged.
+
+Close review finding F98-1 in embedded and managed tools/hooks: reject
+intermediate model clients and unknown wrappers using kernel-read executable
+names, independently of inherited selectors or argv labels. Supported shell/rtk
+intermediates and the leaf resolver interpreter remain allowed. PID/birth,
+foreground, UUID/TTY and stable-reread checks remain mandatory.
+
+Reservation validation passed 217 related tests plus 2 expiry/cache tests in
+separate runs. Native identity and hook validation passed 432 related tests in
+39.553 seconds after four negative-control subcases reproduced the defect.
+These are per-run source results, not live hook, delivery or callback evidence.
+The unmerged 0.4.39 candidate is incorporated here and is not installed separately.
+See the [release contract](references/release-0.4.40.md).
+
+## 0.4.39 (unreleased candidate, incorporated into 0.4.40)
+
+Authenticate a tool or native hook descended from its original embedded Codex
+TUI when no managed daemon exists. Require matching foreground thread, actual
+kernel ancestry, process identity, UUIDs and TTY, with stable rereads. Missing or
+invalid foreground evidence never falls back to resume arguments. Root and
+child authority remain separate, and the public proof records the embedded
+runtime explicitly without inventing a daemon.
+
+Accept the caller snapshot's native `*_id` fields for authenticated reply
+consumption, retaining historical `*_uuid` fields only with agreement across
+all supplied aliases. Preserve full original caller-proof equality; an embedded
+proof cannot migrate an episode captured under a managed daemon.
+
+The identity delta passed 189 related tests in 5.114 seconds, including 28 new
+embedded-caller cases. A live read-only caller and consumer identity probe also
+passed. These are source/identity results, not automatic-hook invocation,
+mailbox consumption or native callback evidence. The reviewed historical
+manifest allowlist still ends at 0.4.37; no 0.4.38 installation manifest has been
+approved. See the [release contract](references/release-0.4.39.md).
+
 ## 0.4.38
 
 - Share the formal-marker directory through `cmux_coordination_paths.py` so a

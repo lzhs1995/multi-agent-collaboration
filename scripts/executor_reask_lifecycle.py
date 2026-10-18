@@ -79,18 +79,19 @@ def binding(value):
     return {key: copy.deepcopy(value[key]) for key in keys}
 
 
-def reservation_inquiries_allowed(state):
-    """Current explicit authority permits file status requests, never release.
+def reservation_inquiries_allowed(state, *, verification=None):
+    """Verified explicit authority permits file status requests, never release.
 
     The caller must separately validate the authorization file and enrollment.
-    Historical controllers cannot gain a new capability from a state edit.
+    Preserve reviewed historical capabilities under the original controller;
+    compatibility cannot grant a capability absent from its enrollment.
     """
-    import executor_reask as reask
+    from executor_reask_protocol import supports_state
     value = state.get('continuation')
     return (isinstance(value, dict) and value.get('enabled') is True
             and value.get('status') == 'ACTIVE'
             and value.get('reservation_inquiries') is True
-            and value.get('controller') == reask.controller())
+            and supports_state(state, verification=verification))
 
 
 def valid_wait_contract(body, state):

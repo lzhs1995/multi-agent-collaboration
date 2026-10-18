@@ -9,7 +9,26 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.38.** File reservation checks use the shared directory module
+**Version: 0.4.40.** Historical file reservation inquiries retain only their
+original, explicit enrollment authority after complete protocol verification.
+Tick, summary and scheduler share that decision and the current sweep's verified
+release cache. Never edit an old episode to add permission or migrate its
+controller. Embedded and managed tools/hooks may relay native identity only
+through supported shell/rtk intermediates; another model CLI or unknown wrapper
+cannot borrow the parent's identity. The leaf resolver interpreter remains
+allowed. See the [0.4.40 release contract](references/release-0.4.40.md).
+
+Tools and native hooks that descend from an embedded Codex
+TUI can authenticate without a managed daemon. Require the actual tool ancestry,
+matching current native foreground thread, kernel process identity, UUIDs, TTY
+and stable rereads. A child cannot borrow its parent's identity or inbox. The
+public proof identifies `embedded-native-client-v1` with `daemon_pid=null`;
+it does not migrate an existing managed episode. Consumption accepts native
+`*_id` UUID fields and historical `*_uuid` fields only when every supplied alias
+agrees. Native control-socket availability remains a separate input requirement.
+See the [0.4.39 release contract](references/release-0.4.39.md).
+
+The 0.4.38 file reservation checks use the shared directory module
 without loading the terminal harness or bridge. Binding, authorization, STOP,
 ownership, reservation and reply checks remain live. Release verification is
 reused only within one sweep, rechecking every verified member and parent on
@@ -18,11 +37,12 @@ capability. See the [0.4.38 release contract](references/release-0.4.38.md).
 Source benchmarks do not prove live request detection, body reading or callback
 receipt.
 
-For late handshake ACK recovery, the original supervisor may
+The earlier 0.4.36 late handshake ACK recovery lets the original supervisor
 authenticate an embedded Codex TUI through its original controller's process,
 foreground, UUID/workspace/TTY and stable rereads. Missing daemon proof alone
-never grants authority; another thread cannot apply. This is limited to the ACK
-reconciliation entrypoint, not general embedded hook authentication. A Claude Tip
+never grants authority; another thread cannot apply. That recovery remains
+limited to the original ACK entrypoint; ordinary tools and hooks now use the
+shared 0.4.39 resolver described above. A Claude Tip
 hint above the complete composer no longer hides an active spinner. Reviewed
 0.4.35 file episodes keep their original pins and explicitly enrolled reservation
 inquiries; historical issuers cannot enroll a future controller. See the
