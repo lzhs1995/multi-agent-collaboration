@@ -29,6 +29,7 @@ MAX_RELEASE_FILES = 2048
 # Raw immutable manifests reviewed with LEGACY; never learn trust from a record
 # or from a manifest's self-reported version/tree hash.
 LEGACY_MANIFESTS = {
+    '0.4.36-8ab59dbb5a5a': 'c23ae263336ceb525886c4b6d7797d09cc4bc12706e744f471db29efbebe89f9',
     '0.4.35-e62f35828c7a': '0084ec08de7195a4ba2b8d5bc22e6495b56da387113d9c1308e380c5d9abf53b',
     '0.4.28-ae66245771d0': '31579cfab68b908561a6b6833079c5942bc27e05fe097f6f3249b3cef81cac6e',
     '0.4.30-ff75100795a9': '80f925fb74964f2cc0d72d7464f418e23ab637d504f78c79e4dd47fb26fe815f',
@@ -40,6 +41,22 @@ LEGACY_MANIFESTS = {
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
 LEGACY = {
+    "0.4.36-8ab59dbb5a5a": {
+        "VERSION": "3fe5a208c7783976c775da2adb21f9c69db4ae5fbc773a06955c0fa7ac675cef",
+        "scripts/cmux_bridge.py": "7a2458ef02627587ce8ebeadd5609ceac7517b79bcab9ce108cf71ca87a62de6",
+        "scripts/cmux_daemon_identity.py": "886ef37091b1d6279c351c5ae2a62d2e3bf1980bb4c2524da406927918dd06eb",
+        "scripts/cmux_foreground_thread.py": "892cd5f401703e8b7f833cc1dd3a2aba2886fc1859b56b7bed681f5fd92b39b3",
+        "scripts/cmux_native_delivery.py": "6a8a936f36a54bacfabd491b1b84f33c8703da1fe2d7400d2e3e345106c49a7d",
+        "scripts/cmux_workspace_guard.py": "93894510540c9b6eaa0518e57b09652c7dd08727edbdad57f04e1e4379d211c2",
+        "scripts/executor_ready.py": "1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79",
+        "scripts/executor_reask.py": "8498b4e2963508e2ecff978165917ee218bcfb067238b46e862296c3641b5ba2",
+        "scripts/executor_reask_identity.py": "2e68a94bd1c0acba6a5f292568cb8f039bc25932cecb2fc89e809b6f093df7b1",
+        "scripts/executor_reask_lifecycle.py": "f7d3dc7b1713bd4dc8d6db8aca0990b3c8bdb186fd24d6ed5902d146a5c08426",
+        "scripts/executor_reask_protocol.py": "50256893f881b5c361ea03d12f4a54b89ae8ceb1859f8c939b5022dfcf9a3c4f",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reply_advisory.py": "e13c052c8c75cf54682a74666e3cbda70ce797974436b57a585f39b2093b452a",
+        "scripts/executor_reask_scheduler.py": "d0600c52aabd38c11bff8a50a9e2b07dc720cb82c004ddfca602151e563fb071"
+    },
     "0.4.35-e62f35828c7a": {
         "VERSION": "b51c07322891392fdf1955c07b13172c07a6e10529a0ce6dea46559d6247c9ac",
         "scripts/cmux_bridge.py": "8a34327d4031d3f55fc6d7f71f5ec5f8a023f64fafef2eaf1d5c2c78cd52015a",
@@ -115,6 +132,14 @@ LEGACY = {
 # A historical issuer can only have enrolled controllers supported when it ran;
 # it cannot claim to have enrolled a future CURRENT or a subsequently added release.
 LEGACY_FILE_PROTOCOL = {
+    '0.4.36-8ab59dbb5a5a': {
+        'descriptor': {'id': 'executor-reask-file-v1',
+                       'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+        'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+                        '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+                        '0.4.33-09de16ceb823', '0.4.34-d333557fb498',
+                        '0.4.35-e62f35828c7a', '0.4.36-8ab59dbb5a5a'),
+    },
     '0.4.35-e62f35828c7a': {
         'descriptor': {'id': 'executor-reask-file-v1',
                        'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
@@ -146,6 +171,24 @@ LEGACY_FILE_PROTOCOL = {
 }
 # Historical abilities are explicit and never inherit future FILES changes.
 LEGACY_CAPABILITIES = {
+    '0.4.36-8ab59dbb5a5a': {
+        'controller_files': (
+            "VERSION",
+            "scripts/cmux_bridge.py",
+            "scripts/cmux_daemon_identity.py",
+            "scripts/cmux_foreground_thread.py",
+            "scripts/cmux_native_delivery.py",
+            "scripts/cmux_workspace_guard.py",
+            "scripts/executor_ready.py",
+            "scripts/executor_reask.py",
+            "scripts/executor_reask_identity.py",
+            "scripts/executor_reask_lifecycle.py",
+            "scripts/executor_reask_protocol.py",
+            "scripts/executor_reply.py",
+            "scripts/executor_reply_advisory.py",
+        ),
+        'reservation_inquiries': True,
+    },
     '0.4.35-e62f35828c7a': {
         'controller_files': (
             "VERSION",
@@ -287,7 +330,73 @@ def scheduler_shape(value):
         return False
 
 
-def _read_regular(path, limit, *, readonly=True, executable=None):
+_STAT_FIELDS = ('st_dev', 'st_ino', 'st_size', 'st_mode', 'st_mtime_ns', 'st_ctime_ns')
+
+
+def _stamp(info):
+    return tuple(getattr(info, key) for key in _STAT_FIELDS)
+
+
+class _ReleaseSnapshot:
+    def __init__(self, root):
+        self.root = root
+        self.files = {}
+
+    def record(self, path, info):
+        stamp = _stamp(info)
+        if self.files.setdefault(path, stamp) != stamp:
+            raise ValueError('release changed during verification')
+        for parent in path.parents:
+            if parent == self.root.parent or parent in self.files:
+                break
+            info = parent.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError('release parent is not a directory')
+            self.files[parent] = _stamp(info)
+
+    def unchanged(self):
+        try:
+            return all(_stamp(path.stat(follow_symlinks=False)) == stamp
+                       for path, stamp in self.files.items())
+        except OSError:
+            return False
+
+
+class ReleaseVerification:
+    """One sweep's verified bytes, reused only while every member is unchanged.
+
+    Never persist this object or reuse it across sweeps. Binding, authorization,
+    enrollment and stop checks remain live; this stores release files only.
+    """
+    def __init__(self):
+        self._releases = {}
+        self.full_verifications = 0
+        self.reuses = 0
+        self.invalidations = 0
+
+    def check(self, source):
+        entry = self._releases.get(source)
+        if entry is not None:
+            result, snapshot = entry
+            if snapshot.unchanged():
+                self.reuses += 1
+                return result
+            del self._releases[source]
+            self.invalidations += 1
+        snapshot = _ReleaseSnapshot(source.parent)
+        self.full_verifications += 1
+        result = _load_trusted_release(source, snapshot)
+        if not snapshot.unchanged():
+            raise ValueError('release changed during verification')
+        self._releases[source] = result, snapshot
+        return result
+
+    def summary(self):
+        return dict(full_verifications=self.full_verifications, reuses=self.reuses,
+                    invalidations=self.invalidations, scope='ONE_SWEEP')
+
+
+def _read_regular(path, limit, *, readonly=True, executable=None, observation=None):
     """Bounded descriptor read; reject aliases, special files and changing pins."""
     if not canonical_path(str(path)):
         raise ValueError('noncanonical release file')
@@ -301,11 +410,12 @@ def _read_regular(path, limit, *, readonly=True, executable=None):
         raw = handle.read(limit + 1)
         after = os.fstat(handle.fileno())
         named = path.stat(follow_symlinks=False)
-        fields = ('st_dev', 'st_ino', 'st_size', 'st_mode', 'st_mtime_ns', 'st_ctime_ns')
         if (len(raw) != before.st_size or len(raw) > limit
                 or any(getattr(before, k) != getattr(after, k)
-                       or getattr(after, k) != getattr(named, k) for k in fields)):
+                       or getattr(after, k) != getattr(named, k) for k in _STAT_FIELDS)):
             raise ValueError('release file changed during verification')
+        if observation is not None:
+            observation.record(path, after)
         return raw
 
 
@@ -318,19 +428,19 @@ def _unique_object(pairs):
     return result
 
 
-def _read_object(path, *, readonly=True):
-    raw = _read_regular(path, MAX_MANIFEST_BYTES, readonly=readonly)
+def _read_object(path, *, readonly=True, observation=None):
+    raw = _read_regular(path, MAX_MANIFEST_BYTES, readonly=readonly, observation=observation)
     value = json.loads(raw, object_pairs_hook=_unique_object)
     if not isinstance(value, dict):
         raise ValueError('release metadata must be an object')
     return raw, value
 
 
-def _verify_release(source, expected):
+def _verify_release(source, expected, observation=None):
     if not sha256_shape(expected):
         raise ValueError('missing trusted manifest digest')
     manifest = source.parent / 'MANIFEST.json'
-    raw, value = _read_object(manifest)
+    raw, value = _read_object(manifest, observation=observation)
     if hashlib.sha256(raw).hexdigest() != expected:
         raise ValueError('untrusted release manifest')
     files = value.get('files')
@@ -350,31 +460,40 @@ def _verify_release(source, expected):
         total += pin['bytes']
         if total > MAX_RELEASE_BYTES:
             raise ValueError('release verification budget exceeded')
-        content = _read_regular(source / member, pin['bytes'], executable=pin['executable'])
+        content = _read_regular(source / member, pin['bytes'], executable=pin['executable'],
+                                observation=observation)
         if len(content) != pin['bytes'] or hashlib.sha256(content).hexdigest() != pin['sha256']:
             raise ValueError('release member changed')
-    if _read_regular(manifest, MAX_MANIFEST_BYTES) != raw:
+    if _read_regular(manifest, MAX_MANIFEST_BYTES, observation=observation) != raw:
         raise ValueError('manifest changed during verification')
     return files
 
 
 def _trusted_release(source, checked):
-    """Only per-call reuse; no cached approval survives a later file mutation."""
+    """Per-call reuse, or a sweep snapshot checked for mutation on every use."""
     if not canonical_path(str(source)):
         raise ValueError('noncanonical release source')
+    if isinstance(checked, ReleaseVerification):
+        return checked.check(source)
     if source in checked:
         return checked[source]
+    result = _load_trusted_release(source)
+    checked[source] = result
+    return result
+
+
+def _load_trusted_release(source, observation=None):
     if source == Path(__file__).resolve().parents[1]:
         # The scheduler owns CURRENT's full approved_release gate under its
         # locks. Check the actual local controller/provenance, also in writable
         # test checkouts; this fast path is not an independent release approval.
         files, total = {}, 0
         for name in (*FILES, SCHEDULER):
-            raw = _read_regular(source / name, MAX_RELEASE_BYTES - total, readonly=False)
+            raw = _read_regular(source / name, MAX_RELEASE_BYTES - total, readonly=False,
+                                observation=observation)
             total += len(raw)
             files[name] = dict(sha256=hashlib.sha256(raw).hexdigest())
         result = dict(kind='current', files=files, python=str(Path(sys.executable).resolve()))
-        checked[source] = result
         return result
     base = Path.home() / '.local/share/multi-agent-collaboration/releases'
     if source.name != 'source' or source.parent.parent != base:
@@ -382,11 +501,10 @@ def _trusted_release(source, checked):
     name = source.parent.name
     if name not in LEGACY:
         raise ValueError('unknown historical release is unsupported')
-    files = _verify_release(source, LEGACY_MANIFESTS.get(name))
+    files = _verify_release(source, LEGACY_MANIFESTS.get(name), observation)
     if {key: files[key]['sha256'] for key in (*historical_files(name), SCHEDULER)} != LEGACY[name]:
         raise ValueError('unreviewed controller/scheduler combination')
     result = dict(kind='legacy', name=name, files=files)
-    checked[source] = result
     return result
 
 
@@ -417,18 +535,18 @@ def _supported_state(state, record, checked):
     return _descriptor_producer(release) and state.get('file_protocol') == descriptor()
 
 
-def supports_state(state, record=None):
+def supports_state(state, record=None, *, verification=None):
     """Compatibility only; caller gates CURRENT approval, binding, stop/expiry."""
     try:
-        return bool(_supported_state(state, record, {}))
+        return bool(_supported_state(state, record, verification if verification is not None else {}))
     except (TypeError, KeyError, ValueError, OSError, RecursionError):
         return False
 
 
-def supports_record(record, state, current_scheduler):
+def supports_record(record, state, current_scheduler, *, verification=None):
     """Verify producer pins, not foreground authentication or enrollment CAS."""
     try:
-        checked = {}
+        checked = verification if verification is not None else {}
         if not _supported_state(state, record, checked):
             return False
         controller, issuer = record['controller'], record.get('scheduler')

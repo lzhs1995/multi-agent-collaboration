@@ -3,6 +3,7 @@ import copy
 from contextlib import ExitStack
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -124,31 +125,33 @@ class ProtocolTests(unittest.TestCase):
                         self.assert_rejected(state, record)
 
     def test_reservation_inquiry_capability_requires_a_boolean(self):
-        for name in (None, '0.4.35-e62f35828c7a'):
+        for name in (None, *protocol.LEGACY_CAPABILITIES):
             for value in (None, 1, 'true', [], {}):
                 with self.subTest(release=name, value=value):
                     state, record = self.episode(name, current=name is None)
                     state['continuation']['reservation_inquiries'] = value
                     self.assert_rejected(state, record)
 
-    def test_0435_controller_cannot_drop_identity_authority_pins(self):
-        state, record = self.episode('0.4.35-e62f35828c7a')
-        self.assert_supported(state, record)
-        for value in (state['controller'], state['continuation']['controller'], record['controller']):
-            value['files'] = {key: value['files'][key] for key in protocol.LEGACY_FILES}
-        self.assert_rejected(state, record)
-
-    def test_0435_checks_each_extended_identity_member(self):
-        name = '0.4.35-e62f35828c7a'
-        source, pins, _raw = self.releases[name]
-        state, record = self.episode(name)
-        for member in set(protocol.historical_files(name)) - set(protocol.LEGACY_FILES):
-            with self.subTest(member=member):
-                raw = (source / member).read_bytes()
-                self.write_pin(source / member, b'X' + raw[1:])
-                self.assert_rejected(state, record)
-                self.write_pin(source / member, raw)
+    def test_extended_controller_cannot_drop_identity_authority_pins(self):
+        for name in protocol.LEGACY_CAPABILITIES:
+            with self.subTest(release=name):
+                state, record = self.episode(name)
                 self.assert_supported(state, record)
+                for value in (state['controller'], state['continuation']['controller'], record['controller']):
+                    value['files'] = {key: value['files'][key] for key in protocol.LEGACY_FILES}
+                self.assert_rejected(state, record)
+
+    def test_each_extended_identity_member_is_checked(self):
+        for name in protocol.LEGACY_CAPABILITIES:
+            source, pins, _raw = self.releases[name]
+            state, record = self.episode(name)
+            for member in set(protocol.historical_files(name)) - set(protocol.LEGACY_FILES):
+                with self.subTest(release=name, member=member):
+                    raw = (source / member).read_bytes()
+                    self.write_pin(source / member, b'X' + raw[1:])
+                    self.assert_rejected(state, record)
+                    self.write_pin(source / member, raw)
+                    self.assert_supported(state, record)
 
     def test_reviewed_v2_originals_and_missing_top_level_controller(self):
         for name in REVIEWED_V2:
@@ -216,13 +219,17 @@ class ProtocolTests(unittest.TestCase):
         release33 = '0.4.33-09de16ceb823'
         release34 = '0.4.34-d333557fb498'
         release35 = '0.4.35-e62f35828c7a'
+        release36 = '0.4.36-8ab59dbb5a5a'
         for origin, scheduler, supported in (
                 (release32, release33, True), (release33, release32, False),
                 (release32, release34, True), (release34, release32, False),
                 (release33, release34, True), (release34, release33, False),
                 (release34, release35, True), (release35, release34, False),
                 (release32, release35, True), (release35, release32, False),
-                (release33, release35, True), (release35, release33, False)):
+                (release33, release35, True), (release35, release33, False),
+                (release35, release36, True), (release36, release35, False),
+                (release34, release36, True), (release36, release34, False),
+                (release32, release36, True), (release36, release32, False)):
             with self.subTest(controller=origin, issuer=scheduler):
                 state, record = self.episode(origin)
                 original = copy.deepcopy((state, record['controller']))
@@ -305,6 +312,82 @@ class ProtocolTests(unittest.TestCase):
                 self.assert_rejected(state, record)
                 self.write_pin(path, raw, pin['executable'])
         self.assert_supported(state, record)
+
+    def test_sweep_verification_reuses_bytes_but_next_sweep_reads_them_again(self):
+        state, record = self.episode()
+        verification = protocol.ReleaseVerification()
+        with patch.object(protocol, '_read_regular', wraps=protocol._read_regular) as reads:
+            self.assertTrue(protocol.supports_record(
+                record, state, self.current_scheduler, verification=verification))
+            first_reads = reads.call_count
+            for _ in range(8):
+                self.assertTrue(protocol.supports_state(state, record, verification=verification))
+                self.assertTrue(protocol.supports_record(
+                    record, state, self.current_scheduler, verification=verification))
+            self.assertEqual(reads.call_count, first_reads)
+            self.assertEqual(verification.full_verifications, 1)
+            self.assertTrue(protocol.supports_state(
+                state, record, verification=protocol.ReleaseVerification()))
+            self.assertGreater(reads.call_count, first_reads)
+
+    def test_sweep_reuse_detects_each_member_change_even_with_restored_mtime(self):
+        source, pins, _raw = self.releases[REVIEWED[0]]
+        state, record = self.episode()
+        verification = protocol.ReleaseVerification()
+        for member, pin in pins.items():
+            with self.subTest(member=member):
+                self.assertTrue(protocol.supports_state(state, record, verification=verification))
+                path = source / member
+                before, raw = path.stat(), path.read_bytes()
+                self.write_pin(path, b'X' + raw[1:], pin['executable'])
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                self.assertFalse(protocol.supports_record(
+                    record, state, self.current_scheduler, verification=verification))
+                self.write_pin(path, raw, pin['executable'])
+        self.assertEqual(verification.invalidations, len(pins))
+
+    def test_sweep_reuse_rejects_same_inode_through_a_symlinked_parent(self):
+        source, _pins, _raw = self.releases[REVIEWED[0]]
+        state, record = self.episode()
+        verification = protocol.ReleaseVerification()
+        self.assertTrue(protocol.supports_state(state, record, verification=verification))
+        scripts, moved = source / 'scripts', source / 'moved-scripts'
+        scripts.rename(moved)
+        scripts.symlink_to(moved, target_is_directory=True)
+        self.assertFalse(protocol.supports_state(state, record, verification=verification))
+        self.assertEqual(verification.invalidations, 1)
+
+    def test_sweep_reuse_rechecks_manifest_and_permissions(self):
+        source, _pins, raw = self.releases[REVIEWED[0]]
+        state, record = self.episode()
+        verification = protocol.ReleaseVerification()
+        self.assertTrue(protocol.supports_state(state, record, verification=verification))
+        member = source / 'README.md'
+        member.chmod(0o644)
+        self.assertFalse(protocol.supports_state(state, record, verification=verification))
+        member.chmod(0o444)
+        self.assertTrue(protocol.supports_state(state, record, verification=verification))
+        self.write_pin(source.parent / 'MANIFEST.json', raw + b'\n')
+        self.assertFalse(protocol.supports_state(state, record, verification=verification))
+
+    def test_sweep_snapshot_rejects_a_member_changed_after_its_first_read(self):
+        source, _pins, _raw = self.releases[REVIEWED[0]]
+        state, record = self.episode()
+        manifest = source.parent / 'MANIFEST.json'
+        read = protocol._read_regular
+        manifest_reads = 0
+        def change_after_read(path, *args, **kwargs):
+            nonlocal manifest_reads
+            raw = read(path, *args, **kwargs)
+            if path == manifest:
+                manifest_reads += 1
+                if manifest_reads == 2:
+                    member = source / 'README.md'
+                    self.write_pin(member, b'X' + member.read_bytes()[1:])
+            return raw
+        with patch.object(protocol, '_read_regular', side_effect=change_after_read):
+            self.assertFalse(protocol.supports_state(
+                state, record, verification=protocol.ReleaseVerification()))
 
     def test_missing_writable_symlinked_or_special_members_are_refused(self):
         source, pins, raw = self.releases[REVIEWED[0]]

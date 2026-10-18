@@ -821,7 +821,8 @@ def observe_boundaries_locked(state, now):
     return state
 
 
-def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_record=None):
+def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_record=None,
+                verification=None):
     realtime = now is None
     now = time.time() if realtime else now
     tick_start = time.monotonic()
@@ -846,13 +847,13 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
     if (state.get('registration') or
             (state.get('continuation') or {}).get('reservation_inquiries') is True):
         from executor_reask_scheduler import registration_observation
-        observation = registration_observation(state)
+        observation = registration_observation(state, verification=verification)
         if observation != 'REGISTERED':
             return dict(state, registration_observation=observation, input_operations=0)
     from executor_reask_protocol import state_controller, supports_state
     original = state_controller(state, file_record)
     if file_only:
-        if not supports_state(state, file_record):
+        if not supports_state(state, file_record, verification=verification):
             return dict(outcome='UNSUPPORTED_FILE_PROTOCOL', input_operations=0)
         preserve_legacy_snapshot(state, file_record)
     elif original != controller():

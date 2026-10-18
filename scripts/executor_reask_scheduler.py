@@ -246,7 +246,7 @@ def _select(record, state, path):
     return None
 
 
-def matches(record, state, path):
+def matches(record, state, path, *, verification=None):
     try:
         if not isinstance(record, dict) or record.get('schema') == TRANSACTION_SCHEMA:
             return False
@@ -270,7 +270,7 @@ def matches(record, state, path):
                 and path == enrollment_path(expected['caller_surface_uuid'])
                 and all(canonical_uuid(pins[key]) == pins[key] for key in LIVE_KEYS)
                 and _pair_matches(latest, pins) and _registration_matches(record, latest, path)
-                and protocol.supports_record(record, latest, provenance()))
+                and protocol.supports_record(record, latest, provenance(), verification=verification))
     except (KeyError, ValueError, TypeError, AttributeError, OSError):
         return False
 
@@ -280,7 +280,7 @@ def registered(state):
     return matches(ready.read_json(path), state, path)
 
 
-def registration_observation(state):
+def registration_observation(state, *, verification=None):
     """A committed token and completed registration are distinct observations."""
     path = enrollment_path(state['caller_surface_uuid'])
     record = ready.read_json(path) or {}
@@ -292,7 +292,8 @@ def registration_observation(state):
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
         return 'REGISTRATION_UNCOMMITTED'
-    return 'REGISTERED' if matches(record, state, path) else 'REGISTRATION_UNCOMMITTED'
+    return ('REGISTERED' if matches(record, state, path, verification=verification)
+            else 'REGISTRATION_UNCOMMITTED')
 
 
 def _bound_record(record, state, path):
@@ -650,7 +651,7 @@ def _release_observation(state, previous, now):
     return result
 
 
-def _sweep_one(path, now, execution):
+def _sweep_one(path, now, execution, *, verification=None):
     row = dict(enrollment=path.name, status='INVALID_ENROLLMENT', file_posts=0)
     lock_scope = 'REGISTRY_BUSY'
     try:
@@ -697,9 +698,10 @@ def _sweep_one(path, now, execution):
                         return row
                 elif record.get('status') == 'FINISHED':
                     return dict(row, status='FINISHED', episode_id=state.get('episode_id'))
-                elif matches(record, state, path):
+                elif matches(record, state, path, verification=verification):
                     previous_posts = state.get('file_posts', 0)
-                    state = reask.tick_locked(caller, now, never_send, file_only=True, file_record=record)
+                    state = reask.tick_locked(caller, now, never_send, file_only=True,
+                                              file_record=record, verification=verification)
                     if state.get('outcome') or state.get('registration_observation'):
                         return dict(row, status=reask.summary(state)['outcome'])
                     row.update(status=state['state'], episode_id=state['episode_id'],
@@ -748,6 +750,7 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
             interpreter_start_observed=False, pid=os.getpid())
     phase_started = started
     cursor_loaded = False
+    verification = protocol.ReleaseVerification()
 
     def phase(name):
         nonlocal phase_started
@@ -802,7 +805,7 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
                     result['pending_enrollment'] = path.name
                     phase('EPISODE')
                     row_started = time.monotonic()
-                    row = _sweep_one(path, now, execution)
+                    row = _sweep_one(path, now, execution, verification=verification)
                     row['duration_seconds'] = max(0, time.monotonic() - row_started)
                     result['file_posts'] += row['file_posts']
                     result['episodes'].append(row)
@@ -814,6 +817,7 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
             result.update(status='SCHEDULER_FAILED', error_type=type(exc).__name__)
         phase(result['phase'])
         result['duration_seconds'] = max(0, time.monotonic() - started)
+        result['release_verification'] = verification.summary()
         # A tick may have committed files before the budget interrupted its
         # return. Partial counters must never be presented as exact zero work.
         result['file_posts_complete'] = result['status'] == 'SWEPT'

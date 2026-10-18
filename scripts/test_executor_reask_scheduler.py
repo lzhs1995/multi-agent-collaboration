@@ -76,6 +76,37 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(state['asks'][-1]['outcome'], 'FILE_ONLY_SCHEDULED')
         self.transport.assert_not_called()
 
+    def test_eight_enrollments_share_verification_only_within_each_sweep(self):
+        for index in range(8):
+            self.enroll(str(uuid.UUID(int=index + 1)))
+        for now in (1001., 1061.):
+            result = scheduler.sweep(now=now)
+            self.assertEqual(result['status'], 'SWEPT', result)
+            self.assertEqual(result['file_posts'], 8)
+            self.assertEqual(len(result['episodes']), 8)
+            counts = result['release_verification']
+            self.assertEqual(counts['full_verifications'], 1)
+            self.assertGreaterEqual(counts['reuses'], 15)
+        self.transport.assert_not_called()
+
+    def test_cached_release_does_not_hide_a_stop_between_enrollments(self):
+        callers = [str(uuid.UUID(int=index + 1)) for index in range(2)]
+        for caller in callers:
+            self.enroll(caller)
+        sweep_one = scheduler._sweep_one
+        def stop_other(path, *args, **kwargs):
+            result = sweep_one(path, *args, **kwargs)
+            for caller in callers:
+                if caller != result.get('caller_surface_uuid'):
+                    ready.write_json(reask.stop_file(caller), dict(reason='USER_STOP'))
+            return result
+        with patch.object(scheduler, '_sweep_one', side_effect=stop_other):
+            result = scheduler.sweep(now=1001.)
+        self.assertEqual(result['file_posts'], 1)
+        self.assertEqual(result['episodes'][1]['status'], reask.STOPPED)
+        self.assertEqual(result['release_verification']['full_verifications'], 1)
+        self.transport.assert_not_called()
+
     def test_exact_reply_finishes_registration_wrong_task_does_not(self):
         self.enroll()
         scheduler.sweep(now=1001.)

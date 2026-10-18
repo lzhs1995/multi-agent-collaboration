@@ -9,7 +9,14 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.36.** For late handshake ACK recovery, the original supervisor may
+**Version: 0.4.37.** The file scheduler reuses verified release bytes only within
+one sweep. Every reuse rechecks all verified members and parents for changes;
+binding, authorization, STOP, reservation and reply checks remain live. Reviewed
+0.4.36 file episodes keep their original controller and capability. See the
+[0.4.37 release contract](references/release-0.4.37.md). Source benchmarks do not
+prove live request detection, body reading or callback receipt.
+
+For late handshake ACK recovery, the original supervisor may
 authenticate an embedded Codex TUI through its original controller's process,
 foreground, UUID/workspace/TTY and stable rereads. Missing daemon proof alone
 never grants authority; another thread cannot apply. This is limited to the ACK
