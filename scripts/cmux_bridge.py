@@ -831,11 +831,14 @@ def _claude_bordered_compose(screen):
             r"\[(?:Opus|Sonnet|Claude)\s+[^\]\n]+\])", fields[0], re.I)):
         return None
     elapsed = rf"⏱\ufe0f?\s+{_CLAUDE_DURATION}"
-    # Measured 2026-10-09: only the inline time field carries this exact
-    # optional hint. Its count is an integer or k with at most one decimal;
-    # unknown suffixes and matching text inside the borders remain untouched.
-    inline_elapsed = (elapsed + r"(?: +new task\? /clear to save "
-                      r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens)?")
+    # Measured 2026-10-09/19: the inline elapsed field may carry the clear
+    # hint or the auto-compact percentage with its exact model suggestion.
+    # Require one complete known suffix and ASCII padding outside the borders;
+    # never strip matching draft text or accept arbitrary trailing chrome.
+    inline_elapsed = (
+        elapsed + r"(?: +(?:new task\? /clear to save "
+        r"(?:[0-9]+(?:\.[0-9])?k|[0-9]+) tokens|"
+        r"(?:100|[1-9]?[0-9])% until auto-compact · /model opus\[1m\]))?")
     cwd_field = r"[\w./~+\-]+(?:\s+git:\([^()\n]+\))?"
     # Measured on Claude48 at 55 columns: the git branch ends in an ellipsis
     # before its closing parenthesis. Accept only at the physical row end,

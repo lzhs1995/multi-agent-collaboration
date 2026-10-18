@@ -63,6 +63,20 @@ callback, business acceptance and exact RELEASE separate. A file's existence or
 queue banner cannot stand in for native delivery. Files are an explicitly
 recorded alternate channel; supported new native messages remain available.
 
+Verifying a task pack's SHA proves integrity, not task acceptance. An executor's
+reported acceptance time is a self-report until the corresponding native record
+and complete acceptance statement are checked. If no acceptance statement was
+sent, record that fact; never substitute the pin-verification or report-writing
+time. Keep native receipt, body reading and an explicit `TASK_ACCEPTED` statement
+separate even when they occur close together.
+
+Calculate a deadline from the task's specified starting event only when that
+event and its timestamp are evidenced. An unknown start stays unknown; it does
+not justify a fabricated deadline or stop independent authorized work. When a
+callback endpoint is unavailable, the supervisor may review the actual scoped
+files and issue an authorized exact RELEASE, preserving the callback failure.
+File review and resource release do not establish callback delivery.
+
 For maintenance inboxes, persist a cursor and a path/content-hash ledger, use a
 suitable overlap window and enumerate all unprocessed items. A latest-five list
 is navigation, not proof of complete coverage. Process fairly and advance the

@@ -9,10 +9,12 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.47.** Explicit profile repair preserves user configuration and a
-paused guardian; controller refusals name the original and invoked sources.
-Reviewed 0.4.46 file episodes retain their original authority. See the
-[0.4.47 release contract](references/release-0.4.47.md) and
+**Version: 0.4.48.** The measured auto-compact percentage hint in a Claude
+elapsed footer no longer prevents sending during normal work or Goal. Complete
+composer boundaries and exact draft bytes remain required; actual compaction
+and unknown footer syntax remain distinct. Reviewed 0.4.47 file episodes retain
+their original authority. See the
+[0.4.48 release contract](references/release-0.4.48.md) and
 [evidence and handoffs](references/collaboration-evidence-and-handoffs.md).
 
 Send a ready prompt in either direction through the supported
