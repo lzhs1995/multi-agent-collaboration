@@ -58,6 +58,7 @@ import uuid as _uuid
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from cmux_coordination_paths import ACTIVE_DIR as _ACTIVE_DIR
 
 # Import bridge from same directory
 _dir = Path(__file__).parent
@@ -315,7 +316,6 @@ def _info(msg):
 # scans a turn's final message for collaboration/consensus assertions and blocks
 # turn-end unless PASS evidence exists. Disarm clears it (zero-friction default).
 
-_ACTIVE_DIR = Path("/tmp/multi-agent-collaboration/_active")
 _ARM_TTL_SECONDS = 6 * 60 * 60  # 6h safety expiry so a stale marker can't wedge sessions
 # Contract version for external read-only consumers (CCC Supervisor TUI reads
 # these markers to render its 协作 column).  Bump on breaking shape changes;

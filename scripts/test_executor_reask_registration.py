@@ -43,6 +43,7 @@ class RegistrationTests(unittest.TestCase):
         self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
         # The harness also has an import-time absolute root independent of HOME.
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', self.active))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', self.active))
         current = dict(source=str(Path(reask.__file__).resolve().parents[1]),
                        python=str(Path(scheduler.sys.executable).resolve()))
         self.stack.enter_context(patch.object(scheduler, 'approved_release', return_value=current))

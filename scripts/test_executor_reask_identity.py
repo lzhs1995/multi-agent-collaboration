@@ -46,6 +46,7 @@ class ExecutorIdentityIntegrationTests(unittest.TestCase):
         self.home = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve()
         self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
         self.stack.enter_context(patch.object(mac_harness, '_ACTIVE_DIR', self.home / 'markers'))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', self.home / 'markers'))
         self.stack.enter_context(patch.object(foreground, '_seen', set()))
         self.stack.enter_context(patch.object(scheduler, 'approved_release', return_value=dict(
             source=str(Path(reask.__file__).resolve().parents[1]),

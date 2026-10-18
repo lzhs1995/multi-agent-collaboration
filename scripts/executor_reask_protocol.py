@@ -21,7 +21,8 @@ FILES = LEGACY_FILES + ('scripts/executor_reask_identity.py',
                        'scripts/cmux_native_delivery.py',
                        'scripts/cmux_workspace_guard.py',
                        'scripts/cmux_daemon_identity.py',
-                       'scripts/cmux_foreground_thread.py')
+                       'scripts/cmux_foreground_thread.py',
+                       'scripts/cmux_coordination_paths.py')
 SCHEDULER = 'scripts/executor_reask_scheduler.py'
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
@@ -29,6 +30,7 @@ MAX_RELEASE_FILES = 2048
 # Raw immutable manifests reviewed with LEGACY; never learn trust from a record
 # or from a manifest's self-reported version/tree hash.
 LEGACY_MANIFESTS = {
+    '0.4.37-c7258c383218': 'c474f812aee100ec2f4af079a6f73661fc79994157f6e325d75861600ed242bb',
     '0.4.36-8ab59dbb5a5a': 'c23ae263336ceb525886c4b6d7797d09cc4bc12706e744f471db29efbebe89f9',
     '0.4.35-e62f35828c7a': '0084ec08de7195a4ba2b8d5bc22e6495b56da387113d9c1308e380c5d9abf53b',
     '0.4.28-ae66245771d0': '31579cfab68b908561a6b6833079c5942bc27e05fe097f6f3249b3cef81cac6e',
@@ -41,6 +43,22 @@ LEGACY_MANIFESTS = {
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
 LEGACY = {
+    "0.4.37-c7258c383218": {
+        "VERSION": "9f1347ce1ed3cc5c0f8c037c540b6eb6da327d4a5d97255e95f57789e2e7e82b",
+        "scripts/cmux_bridge.py": "7a2458ef02627587ce8ebeadd5609ceac7517b79bcab9ce108cf71ca87a62de6",
+        "scripts/cmux_daemon_identity.py": "886ef37091b1d6279c351c5ae2a62d2e3bf1980bb4c2524da406927918dd06eb",
+        "scripts/cmux_foreground_thread.py": "892cd5f401703e8b7f833cc1dd3a2aba2886fc1859b56b7bed681f5fd92b39b3",
+        "scripts/cmux_native_delivery.py": "6a8a936f36a54bacfabd491b1b84f33c8703da1fe2d7400d2e3e345106c49a7d",
+        "scripts/cmux_workspace_guard.py": "93894510540c9b6eaa0518e57b09652c7dd08727edbdad57f04e1e4379d211c2",
+        "scripts/executor_ready.py": "1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79",
+        "scripts/executor_reask.py": "e70984d564876efd48b3244a44449aa5fb27a04fcb6238a74b41251e6583e168",
+        "scripts/executor_reask_identity.py": "2e68a94bd1c0acba6a5f292568cb8f039bc25932cecb2fc89e809b6f093df7b1",
+        "scripts/executor_reask_lifecycle.py": "f7d3dc7b1713bd4dc8d6db8aca0990b3c8bdb186fd24d6ed5902d146a5c08426",
+        "scripts/executor_reask_protocol.py": "5f22eca34c24cad4cfc87195411752eb9c06bb8fa514eab8cface319352775ce",
+        "scripts/executor_reply.py": "160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312",
+        "scripts/executor_reply_advisory.py": "e13c052c8c75cf54682a74666e3cbda70ce797974436b57a585f39b2093b452a",
+        "scripts/executor_reask_scheduler.py": "e60771ea2092df69cb979fabbeb8009d085b7e2cc45d5c0c54cd2758a04cda8b"
+    },
     "0.4.36-8ab59dbb5a5a": {
         "VERSION": "3fe5a208c7783976c775da2adb21f9c69db4ae5fbc773a06955c0fa7ac675cef",
         "scripts/cmux_bridge.py": "7a2458ef02627587ce8ebeadd5609ceac7517b79bcab9ce108cf71ca87a62de6",
@@ -132,6 +150,15 @@ LEGACY = {
 # A historical issuer can only have enrolled controllers supported when it ran;
 # it cannot claim to have enrolled a future CURRENT or a subsequently added release.
 LEGACY_FILE_PROTOCOL = {
+    '0.4.37-c7258c383218': {
+        'descriptor': {'id': 'executor-reask-file-v1',
+                       'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+        'controllers': ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9',
+                        '0.4.31-79ae83e9d5da', '0.4.32-c7338a400bf4',
+                        '0.4.33-09de16ceb823', '0.4.34-d333557fb498',
+                        '0.4.35-e62f35828c7a', '0.4.36-8ab59dbb5a5a',
+                        '0.4.37-c7258c383218'),
+    },
     '0.4.36-8ab59dbb5a5a': {
         'descriptor': {'id': 'executor-reask-file-v1',
                        'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
@@ -171,6 +198,24 @@ LEGACY_FILE_PROTOCOL = {
 }
 # Historical abilities are explicit and never inherit future FILES changes.
 LEGACY_CAPABILITIES = {
+    '0.4.37-c7258c383218': {
+        'controller_files': (
+            "VERSION",
+            "scripts/cmux_bridge.py",
+            "scripts/cmux_daemon_identity.py",
+            "scripts/cmux_foreground_thread.py",
+            "scripts/cmux_native_delivery.py",
+            "scripts/cmux_workspace_guard.py",
+            "scripts/executor_ready.py",
+            "scripts/executor_reask.py",
+            "scripts/executor_reask_identity.py",
+            "scripts/executor_reask_lifecycle.py",
+            "scripts/executor_reask_protocol.py",
+            "scripts/executor_reply.py",
+            "scripts/executor_reply_advisory.py",
+        ),
+        'reservation_inquiries': True,
+    },
     '0.4.36-8ab59dbb5a5a': {
         'controller_files': (
             "VERSION",
@@ -269,7 +314,10 @@ def controller_shape(value):
         return (isinstance(value, dict) and set(value) == {'source', 'python', 'files'}
                 and canonical_path(value['source']) and canonical_path(value['python'])
                 and isinstance(value['files'], dict)
-                and set(value['files']) in (set(FILES), set(LEGACY_FILES))
+                and set(value['files']) in (
+                    set(FILES), set(LEGACY_FILES),
+                    *(set(capability['controller_files'])
+                      for capability in LEGACY_CAPABILITIES.values()))
                 and all(sha256_shape(v) for v in value['files'].values()))
     except (TypeError, KeyError, ValueError, OSError):
         return False

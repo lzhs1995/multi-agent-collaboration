@@ -39,6 +39,7 @@ class FormalBoundaryTests(unittest.TestCase):
         self.consume = lifecycle.consume
         self.stack.enter_context(patch.object(ready, 'state_root', return_value=self.home / 'state'))
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', self.active))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', self.active))
         for module, name in ((protocol, 'supports_state'), (protocol, 'supports_record'),
                              (reask, 'default_send'), (reask, 'idle_binding'),
                              (ready, 'Tail'), (lifecycle, 'consume')):

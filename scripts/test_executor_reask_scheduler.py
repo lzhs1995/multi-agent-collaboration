@@ -15,6 +15,7 @@ import uuid
 
 import executor_ready as ready
 import executor_reask as reask
+import executor_reask_lifecycle as lifecycle
 import executor_reask_scheduler as scheduler
 import executor_reply_advisory as reply_advisory
 
@@ -37,6 +38,7 @@ class SchedulerTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.home = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve()
         self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', self.home / 'active'))
         self.current = dict(source=str(Path(reask.__file__).resolve().parents[1]),
                             python=str(Path(scheduler.sys.executable).resolve()))
         self.approved = self.stack.enter_context(patch.object(
@@ -249,6 +251,7 @@ class SchedulerTests(unittest.TestCase):
         import mac_harness as harness
         active = self.home / 'formal-task-markers'
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', active))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', active))
         auth = self.home / 'continuing-authorization.txt'
         auth.write_text('Continue inquiries for the overall task after formal release.')
         self.transport.side_effect = None

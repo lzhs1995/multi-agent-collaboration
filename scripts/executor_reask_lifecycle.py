@@ -12,6 +12,7 @@ import time
 
 import executor_ready as ready
 from cmux_evidence_io import read_bytes
+from cmux_coordination_paths import ACTIVE_DIR
 
 WAIT_STATUSES = {'WAITING_DEPENDENCY', 'SOLO', 'BLOCKED'}
 MAX_FORMAL_MARKERS = 256
@@ -423,14 +424,12 @@ def observe_formal_tasks(state, now, *, publish=True):
     formal RELEASED event can do that. A legacy writer racing this read remains
     a disclosed limit; CURRENT writers use marker_locks.
     """
-    import os
-    import mac_harness as harness
     if not _boundary_eligible(state):
         return
     workspace = state.get('workspace_uuid')
     if not isinstance(workspace, str) or not workspace or Path(workspace).name != workspace:
         return
-    directory = harness._ACTIVE_DIR / workspace
+    directory = ACTIVE_DIR / workspace
     paths = []
     try:
         with os.scandir(directory) as entries:
@@ -441,7 +440,7 @@ def observe_formal_tasks(state, now, *, publish=True):
                     paths.append(Path(entry.path))
     except FileNotFoundError:
         pass
-    legacy = harness._ACTIVE_DIR / (workspace + '.json')
+    legacy = ACTIVE_DIR / (workspace + '.json')
     if legacy.is_file():
         paths.append(legacy)
     for path in sorted(paths):

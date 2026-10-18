@@ -38,6 +38,7 @@ class MarkerLockTests(unittest.TestCase):
         self.evidence.write_bytes(b'original task evidence\n')
         self.stack.enter_context(redirect_stdout(io.StringIO()))
         self.stack.enter_context(patch.object(harness, '_ACTIVE_DIR', self.active))
+        self.stack.enter_context(patch.object(lifecycle, 'ACTIVE_DIR', self.active))
         self.stack.enter_context(patch.object(harness, '_workspace_key', return_value=WORKSPACE))
         self.stack.enter_context(patch.object(ready, 'state_root', return_value=self.home / 'state'))
         self.stack.enter_context(patch('subprocess.run', side_effect=AssertionError('no transport')))

@@ -132,6 +132,43 @@ class ProtocolTests(unittest.TestCase):
                     state['continuation']['reservation_inquiries'] = value
                     self.assert_rejected(state, record)
 
+    def test_coordination_path_pin_is_required_only_by_new_controller(self):
+        member = 'scripts/cmux_coordination_paths.py'
+        current, record = self.episode(current=True)
+        self.assert_supported(current, record)
+        for value in (current['controller'], current['continuation']['controller'], record['controller']):
+            value['files'].pop(member)
+        self.assert_rejected(current, record)
+        for name in protocol.LEGACY_CAPABILITIES:
+            with self.subTest(release=name):
+                state, record = self.episode(name)
+                original = copy.deepcopy((state, record))
+                self.assertNotIn(member, record['controller']['files'])
+                self.assert_supported(state, record)
+                self.assertEqual((state, record), original)
+                for value in (state['controller'], state['continuation']['controller'], record['controller']):
+                    value['files'][member] = self.current[1][member]['sha256']
+                self.assert_rejected(state, record)
+
+    def test_reviewed_0437_issuer_cannot_grant_reverse_or_future_authority(self):
+        release37 = '0.4.37-c7258c383218'
+        for older in REVIEWED_V3:
+            if older == release37:
+                continue
+            for origin, scheduler, expected in ((older, release37, True),
+                                                 (release37, older, False)):
+                with self.subTest(controller=origin, issuer=scheduler):
+                    state, record = self.episode(origin)
+                    original = copy.deepcopy(state)
+                    record.update(scheduler=issuer(*self.releases[scheduler][:2]),
+                                  authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                    self.assertEqual(protocol.supports_record(record, state, self.current_scheduler), expected)
+                    self.assertEqual(state, original)
+        state, record = self.episode(current=True)
+        record.update(scheduler=issuer(*self.releases[release37][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
     def test_extended_controller_cannot_drop_identity_authority_pins(self):
         for name in protocol.LEGACY_CAPABILITIES:
             with self.subTest(release=name):
