@@ -1,3 +1,16 @@
+## 0.4.41
+
+Correct the documented disk policy: retain at least 10GB (10,000,000,000 bytes),
+with the complete installation and rollback budget counted separately. Below
+20GB (20,000,000,000 bytes), start proactive space management and verified backup;
+20GB is a management trigger, not an installation floor. The previous wording
+incorrectly attributed a 20GB hard floor to the user.
+
+Runtime, hooks and protocol code are unchanged from 0.4.40. Reuse its completed
+source tests and Claude review; validate this documentation delta and the private
+installer's corrected capacity boundary separately. Existing task controllers,
+fixed skill paths and native-receipt evidence retain their original ownership.
+
 ## 0.4.40
 
 Preserve explicitly enrolled reservation inquiries for fully verified historical

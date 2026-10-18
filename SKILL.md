@@ -9,7 +9,10 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.40.** Historical file reservation inquiries retain only their
+**Version: 0.4.41.** Documentation correction: retain at least 10GB after the
+installation and rollback budget; below 20GB, begin proactive space management.
+The 20GB trigger is not an installation floor. Runtime behavior is unchanged
+from 0.4.40. Historical file reservation inquiries retain only their
 original, explicit enrollment authority after complete protocol verification.
 Tick, summary and scheduler share that decision and the current sweep's verified
 release cache. Never edit an old episode to add permission or migrate its
@@ -608,5 +611,5 @@ nonce and send journal. It sends no input and does not settle or rewrite the
 original receipt. Exact notice reception, complete referenced body reading,
 the executor's ACK and business acceptance are separate claims.
 
-同pane原生Codex的显式线程授权、继任迟到ACK核收与20GB主动空间管理，见
+同pane原生Codex的显式线程授权、继任迟到ACK核收，以及10GB保留底线与低于20GB主动管理触发线，见
 [协作效率与收尾](references/efficiency-and-closeout.md)。普通终端侧窗格门禁保持。

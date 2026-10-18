@@ -1,4 +1,7 @@
-Current source: **0.4.40**. Verified historical episodes retain file reservation
+Current source: **0.4.41**. This documentation patch corrects the capacity rule:
+retain at least 10GB after installation and rollback costs; below 20GB, start
+proactive space management. Runtime behavior is unchanged from 0.4.40.
+Verified historical episodes retain file reservation
 inquiries only when their original enrollment explicitly authorized them.
 The scheduler uses the existing complete-release protocol checks and the same
 sweep verification cache; it grants no new capability or controller migration.
