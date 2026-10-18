@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import tempfile
 import time
 import unittest
@@ -596,13 +597,54 @@ class FiniteReadyTests(unittest.TestCase):
         self.assertEqual(self.bridge.submitted, [])
 
     def test_wall_clock_budget_interrupts_a_blocked_bridge_call(self):
-        with patch.object(self.bridge, 'pin_workspace', side_effect=lambda *a, **kw: time.sleep(2)):
+        blocked_elapsed = []
+
+        def blocked(*args, **kwargs):
+            delay, repeat = signal.getitimer(signal.ITIMER_REAL)
+            self.assertGreater(delay, 0)
+            self.assertLessEqual(delay, 5)
+            self.assertEqual(repeat, 0)
+            # Check the real installed timer/handler, but shorten the timer only
+            # after reaching the bridge. CI setup I/O is not the blocked call.
+            signal.setitimer(signal.ITIMER_REAL, 0.03)
             start = time.monotonic()
-            result = self.ask(max_seconds=0.03)
-        self.assertLess(time.monotonic() - start, 0.5)
+            try:
+                time.sleep(2)
+            finally:
+                blocked_elapsed.append(time.monotonic() - start)
+
+        with patch.object(self.bridge, 'pin_workspace', side_effect=blocked) as pin:
+            result = self.ask(max_seconds=5)
+        pin.assert_called_once()
+        self.assertEqual(len(blocked_elapsed), 1)
+        self.assertLess(blocked_elapsed[0], 0.5)
         self.assertEqual(result['state'], ready.TIMED_OUT)
         self.assertEqual(result['exit_reason'], 'WALL_CLOCK_BUDGET_EXHAUSTED')
         self.assertEqual(result['ask_count'], 1)
+        self.assertEqual(self.bridge.submitted, [])
+
+    def test_setup_exhaustion_times_out_before_entering_the_bridge(self):
+        monotonic_now = [100.0]
+        write = ready.write_json
+        writes = []
+
+        def slow_initial_record(path, record):
+            write(path, record)
+            writes.append(path)
+            if len(writes) == 1:
+                monotonic_now[0] += 0.06
+
+        # Isolate elapsed-budget accounting; the preceding test checks the
+        # actual signal interruption independently of fixture setup latency.
+        with patch.object(ready.time, 'monotonic', side_effect=lambda: monotonic_now[0]), \
+                patch.object(ready, 'write_json', side_effect=slow_initial_record), \
+                patch.object(ready, 'runtime_limit', side_effect=contextlib.nullcontext), \
+                patch.object(self.bridge, 'pin_workspace') as pin:
+            result = self.ask(max_seconds=0.03)
+        pin.assert_not_called()
+        self.assertEqual(result['state'], ready.TIMED_OUT)
+        self.assertEqual(result['exit_reason'], 'WAIT_BUDGET_EXHAUSTED')
+        self.assertEqual(result['ask_count'], 0)
         self.assertEqual(self.bridge.submitted, [])
 
     def test_elapsed_budget_accumulates_across_restarts_and_wall_clock_rollback(self):
