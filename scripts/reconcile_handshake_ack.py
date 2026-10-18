@@ -308,7 +308,78 @@ def validate_panel(harness, native, receipt, gate, binding):
     return rows, selected[0]
 
 
-def require_supervisor(harness, gate):
+def embedded_supervisor(harness, gate, snapshot, expected_thread):
+    """Authenticate an embedded original TUI using its controller's readers.
+
+    Older collect() implementations only cover managed daemons. A missing
+    proof is not permission to trust environment selectors: require the actual
+    tool ancestry, native foreground, UUID/TTY and stable rereads instead.
+    No module replacement, environment override or receiver input is involved.
+    """
+    import cmux_daemon_identity as identity
+    import cmux_native_delivery as native
+    import cmux_workspace_guard as guard
+
+    current = identity.process(os.getpid())
+    chain, daemon = identity._ancestry()
+    candidates = [(index, item) for index, item in enumerate(chain)
+                  if Path(item.get('executable', '')).name == 'codex']
+    if daemon is not None or not candidates:
+        raise ValueError('ACK_EMBEDDED_SUPERVISOR_ANCESTRY_REQUIRED')
+    index, client = candidates[0]
+    if (client.get('argv', [])[1:2] == ['app-server']
+            or current.get('ppid') != chain[0]['pid']):
+        raise ValueError('ACK_EMBEDDED_SUPERVISOR_ANCESTRY_REQUIRED')
+    tool_chain = [current] + chain[:index]
+    if (current['env'].get('CODEX_THREAD_ID') != expected_thread
+            or any(item['env'].get('CODEX_THREAD_ID') not in (None, expected_thread)
+                   for item in tool_chain)):
+        raise ValueError('ACK_EMBEDDED_SUPERVISOR_TOOL_THREAD_CHANGED')
+    for key, wanted in (('CMUX_SURFACE_ID', gate['supervisor_surface_uuid']),
+                        ('CMUX_WORKSPACE_ID', gate['workspace_uuid'])):
+        if (client['env'].get(key) != wanted or current['env'].get(key) != wanted
+                or snapshot[2].get(key) != wanted
+                or any(item['env'].get(key) not in (None, wanted) for item in tool_chain)):
+            raise ValueError('ACK_EMBEDDED_SUPERVISOR_UUID_CHANGED')
+    selected = identity.foreground.read(client)
+    if selected is None or selected.get('thread_id') != expected_thread:
+        raise ValueError('ACK_EMBEDDED_SUPERVISOR_NATIVE_FOREGROUND_REQUIRED')
+
+    def scoped(live):
+        if live[3] is not None:
+            raise ValueError('ACK_EMBEDDED_SUPERVISOR_MODE_CHANGED')
+        executors = harness._gate_executors(gate)
+        if not executors:
+            raise ValueError('ACK_ORIGINAL_EXECUTOR_REQUIRED')
+        return guard.resolve_snapshot(live[0], live[1], executors[0]['surface_uuid'],
+            env=live[2], expected=dict(workspace_uuid=gate['workspace_uuid'],
+                caller_surface_uuid=gate['supervisor_surface_uuid']))
+
+    scope = scoped(snapshot)
+    row = native._tree_row(harness.cmux, gate['supervisor_surface_uuid'])
+    tty = identity.subprocess.run(['/bin/ps', '-p', str(client['pid']), '-o', 'tty='],
+        capture_output=True, text=True, timeout=identity.budget.timeout(), check=True).stdout.strip()
+    identity.budget.check()
+    if (tty in ('', '?', '??', '-') or row['tty'] != tty
+            or row['workspace_uuid'] != scope['workspace_uuid']
+            or row['target_pane_uuid'] != scope['caller_pane_uuid']):
+        raise ValueError('ACK_EMBEDDED_SUPERVISOR_TTY_CHANGED')
+    # Recheck cmux before the final kernel/foreground reads. The original
+    # harness also performs its own workspace gate before every writer call.
+    if (scoped(guard.caller_snapshot()) != scope
+            or native._tree_row(harness.cmux, gate['supervisor_surface_uuid']) != row
+            or identity.process(os.getpid()) != current
+            or identity._ancestry() != (chain, daemon)
+            or identity.foreground.read(client) != selected):
+        raise ValueError('ACK_EMBEDDED_SUPERVISOR_CHANGED_DURING_CHECK')
+    caller = dict(surface_id=scope['caller_surface_uuid'], workspace_id=scope['workspace_uuid'])
+    proof = dict(source='embedded-original-supervisor-v1',
+        client=native._public_process(client), tool=native._public_process(current),
+        foreground=selected, tty=tty, scope=scope)
+    return caller, proof
+
+
+def require_supervisor(harness, gate, *, proof_out=None):
     import cmux_workspace_guard as guard
     participants = [p for p in gate.get('native_participants', [])
                     if p.get('role') == 'supervisor']
@@ -316,14 +387,20 @@ def require_supervisor(harness, gate):
             or participants[0].get('surface_uuid') != gate.get('supervisor_surface_uuid')
             or not participants[0].get('native_session_id')):
         raise ValueError('ACK_ORIGINAL_SUPERVISOR_THREAD_REQUIRED')
-    identity, _, _, proof = guard.caller_snapshot()
+    snapshot = guard.caller_snapshot()
+    identity, _, _, proof = snapshot
     caller = identity.get('caller', {})
+    if proof is None:
+        caller, proof = embedded_supervisor(harness, gate, snapshot,
+                                           participants[0]['native_session_id'])
     thread = (proof or {}).get('foreground', {}).get('thread_id')
     if (caller.get('surface_id') != gate['supervisor_surface_uuid']
             or caller.get('workspace_id') != gate['workspace_uuid']
             or thread != participants[0]['native_session_id']):
         raise ValueError('ACK_ORIGINAL_SUPERVISOR_THREAD_CHANGED')
     harness._recheck_workspace_gate(gate)
+    if proof_out is not None:
+        proof_out.update(proof)
     return thread
 
 
@@ -555,7 +632,8 @@ def reconcile(args, modules=None):
                 gate = json.loads(originals[root / 'identity-gate.json'][0])
                 native.require_bound(bridge, target, binding, text, read_only=not args.apply)
                 if args.apply:
-                    result['supervisor_thread'] = require_supervisor(harness, gate)
+                    result['supervisor_thread'] = require_supervisor(harness, gate,
+                        proof_out=result.setdefault('supervisor_identity', {}))
                 request = dict(controller=str(args.controller), receipt=str(receipt_path),
                     receipt_sha256=args.receipt_sha256, attempt=str(attempt_path),
                     attempt_sha256=args.attempt_sha256, text_file=str(text_path),
@@ -635,6 +713,7 @@ def reconcile(args, modules=None):
                     # Save intent first so even an interrupted copy has a bound operation.
                     archive_write('INTENT.json', json_bytes(dict(schema=result['schema'],
                         status='PREPARING', request=request, ack=ack,
+                        supervisor_identity=result.get('supervisor_identity'),
                         original_harness_exit='ATTESTED_BY_ORIGINAL_SUPERVISOR',
                         original_files={str(path): pin_summary(pin) for path, pin in originals.items()},
                         original_markers={str(path): pin_summary(pin) for path, pin in markers.items()})))

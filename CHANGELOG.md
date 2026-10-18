@@ -1,3 +1,27 @@
+## 0.4.36
+
+- Keep an active Claude spinner visible to the busy-state classifier when one
+  or more complete Tip hint rows follow it above the composer. Draft bytes and
+  unknown/busy/queued-state refusals remain unchanged.
+- Authenticate an embedded original Codex supervisor for late ACK reconciliation
+  when the original controller has no managed-daemon proof. Require the actual
+  tool ancestry, exact native foreground thread, cmux UUID/workspace/TTY and
+  unchanged rereads. Keep the original controller, locks, executor gate, native
+  ACK and archive checks; a maintenance thread cannot apply for another owner.
+  General embedded hook identity and native control-socket availability are
+  unchanged by this narrowly scoped recovery path.
+- Preserve reviewed 0.4.35 file episodes after a shared upgrade. Verify the whole
+  immutable release, its explicit 13 controller members and scheduler, and retain
+  only its existing boolean reservation-inquiry capability. Older issuers cannot
+  enroll future controllers; no episode or pending attempt is migrated.
+
+Focused validation: 9 Tip/spinner cases, 40 original-controller ACK cases,
+14 embedded-identity cases and 26 file-protocol cases pass. A real read-only
+original-controller probe authenticated the maintenance owner and refused it as
+the B0024 business supervisor without changing the original evidence. Final CI,
+installation, original-supervisor apply and live callback reception are separate
+evidence; see [the release contract](references/release-0.4.36.md).
+
 ## 0.4.35
 
 - Observe new native receipts for 30 seconds by default; validate finite

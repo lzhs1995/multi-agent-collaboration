@@ -9,7 +9,17 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.35.** New input observes the original native receipt for 30 seconds
+**Version: 0.4.36.** For late handshake ACK recovery, the original supervisor may
+authenticate an embedded Codex TUI through its original controller's process,
+foreground, UUID/workspace/TTY and stable rereads. Missing daemon proof alone
+never grants authority; another thread cannot apply. This is limited to the ACK
+reconciliation entrypoint, not general embedded hook authentication. A Claude Tip
+hint above the complete composer no longer hides an active spinner. Reviewed
+0.4.35 file episodes keep their original pins and explicitly enrolled reservation
+inquiries; historical issuers cannot enroll a future controller. See the
+[0.4.36 release contract](references/release-0.4.36.md).
+
+New input observes the original native receipt for 30 seconds
 by default; `--wait-seconds` accepts only finite values in [0, 60]. Read-only
 `--reconcile-only` defaults to one observation, preserves the original controller
 and RPC diagnostics, and never resends. A turn abort does not prove message loss.
@@ -286,8 +296,8 @@ separate launchd file scheduler was introduced in 0.4.27. Explicit authenticated
 merely installing the job does not enroll anyone. Each 60-second sweep updates
 files only, with a 256-enrollment cap and a 10-second budget.
 
-Version 0.4.35 lets approved CURRENT interpret reviewed 0.4.28/30/31 v2 producers
-and the reviewed 0.4.32/33/34 v3 producers/v2 issuers for cross-release file scheduling.
+Version 0.4.36 lets approved CURRENT interpret reviewed 0.4.28/30/31 v2 producers
+and the reviewed 0.4.32/33/34/35 v3 producers/v2 issuers for cross-release file scheduling.
 Each historical issuer retains only the controller range supported when issued:
 0.4.34 may retain 0.4.32/33, while neither older issuer can claim 0.4.34 or future
 CURRENT. 0.4.33's existing support for 0.4.32 remains unchanged.

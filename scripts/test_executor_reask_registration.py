@@ -404,7 +404,9 @@ class RegistrationTests(unittest.TestCase):
     def legacy_episode(self):
         # Independent tiny trust roots; validation still reads every real member.
         # Deliberately non-executable historical code must never be imported.
-        name = next(iter(protocol.LEGACY))
+        # This fixture models the six-member, pre-file-protocol controller.
+        # Adding a newer trusted release must not silently change that model.
+        name = '0.4.30-ff75100795a9'
         source = self.home / '.local/share/multi-agent-collaboration/releases' / name / 'source'
         pins = {}
         for member in (*protocol.LEGACY_FILES, protocol.SCHEDULER,

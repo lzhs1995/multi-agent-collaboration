@@ -38,6 +38,18 @@ Default preview is bounded and read-only. Both live observation and apply must
 pass the original controller's caller rules; a maintenance coordinator is not a
 substitute for the original supervisor.
 
+Version 0.4.36 also authenticates an embedded original Codex TUI when that
+controller's `caller_snapshot()` returns no managed-daemon proof. The coordinator
+uses the original controller's kernel process/ancestry, foreground and cmux
+readers. It requires the actual tool thread, original supervisor UUID and
+workspace, native foreground thread, matching TTY and stable repeated reads;
+another supervisor or an intervening different thread is refused. Environment
+selectors alone, resume arguments and a maintenance coordinator do not grant
+ownership. The original workspace gate is still checked before writes, and the
+authenticated proof is recorded in the result and archive intent. This support
+is confined to ACK reconciliation; it does not change general hook identity,
+recover an exited executor process or supply a native input control socket.
+
 Apply requires preview `READY_ZERO_INPUT_ACK_RECONCILIATION`, the same pinned
 inputs and `--apply --original-harness-exited`. The original supervisor must
 verify that its terminal harness has actually exited. The new directory lock

@@ -12,7 +12,8 @@ from unittest.mock import patch
 import executor_reask_protocol as protocol
 
 
-REVIEWED = tuple(protocol.LEGACY)
+# Keep the oldest v2 fixture as the default even when newer pins are added.
+REVIEWED = tuple(sorted(protocol.LEGACY))
 REVIEWED_V2 = tuple(name for name in REVIEWED if name not in protocol.LEGACY_FILE_PROTOCOL)
 REVIEWED_V3 = tuple(protocol.LEGACY_FILE_PROTOCOL)
 PYTHON = str(Path(sys.executable).resolve())
@@ -24,7 +25,7 @@ def digest(raw):
 
 
 def identity(source, pins):
-    members = protocol.LEGACY_FILES if source.parent.name in REVIEWED else protocol.FILES
+    members = protocol.historical_files(source.parent.name) if source.parent.name in REVIEWED else protocol.FILES
     return dict(source=str(source), python=PYTHON,
                 files={key: pins[key]['sha256'] for key in members})
 
@@ -43,7 +44,7 @@ class ProtocolTests(unittest.TestCase):
         self.stack.enter_context(patch.object(Path, 'home', return_value=self.home))
         self.base = self.home / '.local/share/multi-agent-collaboration/releases'
         self.releases = {name: self.make_release(name) for name in REVIEWED}
-        legacy = {name: {key: pins[key]['sha256'] for key in (*protocol.LEGACY_FILES, protocol.SCHEDULER)}
+        legacy = {name: {key: pins[key]['sha256'] for key in (*protocol.historical_files(name), protocol.SCHEDULER)}
                   for name, (_source, pins, _raw) in self.releases.items()}
         manifests = {name: digest(raw) for name, (_source, _pins, raw) in self.releases.items()}
         self.stack.enter_context(patch.dict(protocol.LEGACY, legacy, clear=True))
@@ -65,7 +66,7 @@ class ProtocolTests(unittest.TestCase):
 
     def make_release(self, name, *, current=False, source=None):
         source = source or self.base / name / 'source'
-        members = protocol.FILES if current else protocol.LEGACY_FILES
+        members = protocol.FILES if current else protocol.historical_files(name)
         names = (*members, protocol.SCHEDULER, 'scripts/configuration_guardian.py',
                  'scripts/manage_install.py', 'README.md', 'bin/helper')
         pins = {}
@@ -107,7 +108,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIs(protocol.supports_state(state, record), False)
         self.assertIs(protocol.supports_record(record, state, self.current_scheduler), False)
 
-    def test_reservation_inquiry_capability_is_current_controller_only(self):
+    def test_reservation_inquiry_capability_keeps_reviewed_historical_authority(self):
         current, record = self.episode(current=True)
         current['continuation']['reservation_inquiries'] = True
         self.assert_supported(current, record)
@@ -117,14 +118,37 @@ class ProtocolTests(unittest.TestCase):
                     state, record = self.episode(name)
                     self.assert_supported(state, record)
                     state['continuation']['reservation_inquiries'] = value
-                    self.assert_rejected(state, record)
+                    if protocol.LEGACY_CAPABILITIES.get(name, {}).get('reservation_inquiries'):
+                        self.assert_supported(state, record)
+                    else:
+                        self.assert_rejected(state, record)
 
     def test_reservation_inquiry_capability_requires_a_boolean(self):
-        for value in (None, 1, 'true', [], {}):
-            with self.subTest(value=value):
-                state, record = self.episode(current=True)
-                state['continuation']['reservation_inquiries'] = value
+        for name in (None, '0.4.35-e62f35828c7a'):
+            for value in (None, 1, 'true', [], {}):
+                with self.subTest(release=name, value=value):
+                    state, record = self.episode(name, current=name is None)
+                    state['continuation']['reservation_inquiries'] = value
+                    self.assert_rejected(state, record)
+
+    def test_0435_controller_cannot_drop_identity_authority_pins(self):
+        state, record = self.episode('0.4.35-e62f35828c7a')
+        self.assert_supported(state, record)
+        for value in (state['controller'], state['continuation']['controller'], record['controller']):
+            value['files'] = {key: value['files'][key] for key in protocol.LEGACY_FILES}
+        self.assert_rejected(state, record)
+
+    def test_0435_checks_each_extended_identity_member(self):
+        name = '0.4.35-e62f35828c7a'
+        source, pins, _raw = self.releases[name]
+        state, record = self.episode(name)
+        for member in set(protocol.historical_files(name)) - set(protocol.LEGACY_FILES):
+            with self.subTest(member=member):
+                raw = (source / member).read_bytes()
+                self.write_pin(source / member, b'X' + raw[1:])
                 self.assert_rejected(state, record)
+                self.write_pin(source / member, raw)
+                self.assert_supported(state, record)
 
     def test_reviewed_v2_originals_and_missing_top_level_controller(self):
         for name in REVIEWED_V2:
@@ -191,10 +215,14 @@ class ProtocolTests(unittest.TestCase):
         release32 = '0.4.32-c7338a400bf4'
         release33 = '0.4.33-09de16ceb823'
         release34 = '0.4.34-d333557fb498'
+        release35 = '0.4.35-e62f35828c7a'
         for origin, scheduler, supported in (
                 (release32, release33, True), (release33, release32, False),
                 (release32, release34, True), (release34, release32, False),
-                (release33, release34, True), (release34, release33, False)):
+                (release33, release34, True), (release34, release33, False),
+                (release34, release35, True), (release35, release34, False),
+                (release32, release35, True), (release35, release32, False),
+                (release33, release35, True), (release35, release33, False)):
             with self.subTest(controller=origin, issuer=scheduler):
                 state, record = self.episode(origin)
                 original = copy.deepcopy((state, record['controller']))
