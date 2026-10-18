@@ -5,7 +5,8 @@ skills and global CLAUDE.md link here; they do not implement another sender or
 copy hook code. Pin one complete immutable release for each new task. An
 in-flight task keeps its original controller, task pack, journal and receipts.
 
-This reference describes **0.4.35** behavior. See the
+This reference includes **0.4.42** consumption behavior on the 0.4.35 lifecycle.
+See the [consumption contract](release-0.4.42.md),
 [release boundaries](release-0.4.35.md) and [CHANGELOG](../CHANGELOG.md)
 for validation status. Installation, actual scheduler
 execution, automatic hooks and original-client adoption require separate live
@@ -108,6 +109,16 @@ executor. The legacy AUTHENTICATED_NEW_DISPATCH exit requires a newer idle bindi
 matching caller, workspace and supervisor; current advisory hooks do not write
 that binding. Do not promise this exit merely because a new task pack exists.
 Ordinary completion never replays an accepted callback.
+
+When `consume` cannot acquire the nonblocking episode lock, 0.4.42 returns
+`outcome=EPISODE_BUSY` and `consume_result.status=EPISODE_BUSY` with exit code 2.
+`consumed=false` and `input_operations=0`; `episode_state` and
+`reservation_paused` are null because the command did not read locked state.
+The caller may retry the exact same arguments after `retry_after_seconds=1`.
+This hint neither consumes the reply nor promises the lock will be available;
+there is no automatic retry. Once acquired, the lock still covers original
+executor authentication, full reply SHA verification, consumption and rearm.
+Other I/O errors retain their actual failure rather than reporting contention.
 
 Each inquiry gets a new issued marker, preserving the same task/episode binding.
 The original unconfirmed terminal attempt remains durable even after the bounded

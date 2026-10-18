@@ -65,6 +65,10 @@ def save(state):
     ready.write_json(state_path(state['caller_surface_uuid']), state)
 
 
+class EpisodeBusy(BlockingIOError):
+    """Only failure to acquire the episode lock, never an error in its body."""
+
+
 @contextmanager
 def episode_lock(caller):
     """Serialize explicit episode operations without waiting on another holder."""
@@ -72,7 +76,10 @@ def episode_lock(caller):
     fd = os.open(root() / (ready.digest(caller) + '.lock'),
                  os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+') as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise EpisodeBusy('executor inquiry episode is busy') from exc
         yield
 
 

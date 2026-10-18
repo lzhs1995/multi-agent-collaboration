@@ -1,3 +1,28 @@
+## 0.4.42
+
+Return structured `EPISODE_BUSY` with exit code 2 when `consume` cannot acquire
+the episode lock. Report `consumed=false`, unknown episode/reservation state,
+zero input operations and a one-second same-argument retry hint. Do not read,
+authenticate or mutate the episode outside the lock, or retry automatically.
+Only lock-acquisition failure gets this outcome; an I/O error inside the locked
+operation remains an error.
+
+The consumption, lifecycle and registration suites passed 78 tests in 16.358
+seconds, including real flock contention, unchanged episode bytes, exact
+consumption/rearm after lock release and the locked-I/O negative control. These
+source tests do not establish scheduler latency, client hook loading or native
+callback delivery. See the [release contract](references/release-0.4.42.md).
+
+Recognize the fully verified installed `0.4.41-28b36490b149` release as a
+historical file producer and issuer after CURRENT advances. Pin its complete
+manifest, original controller members and only the controllers it could already
+enroll. Compatibility does not migrate episodes, grant future authority or
+change the original consumer.
+
+The protocol and complete-release verification suites passed 39 tests in
+21.760 seconds. They cover the original 0.4.41 coordination-path pin and
+reject reverse or future issuer authority.
+
 ## 0.4.41
 
 Correct the documented disk policy: retain at least 10GB (10,000,000,000 bytes),
