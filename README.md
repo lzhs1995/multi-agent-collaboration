@@ -1,4 +1,11 @@
-Current source: **0.4.45**. A failed original continuation can clear its own
+Current source: **0.4.46**. Ready prompts can be sent in either direction during
+active work and native `/goal` turns. Fresh preflight skips the optional
+input-and-clear probe, so communication requires neither an idle turn nor a Goal
+pause. Real drafts, original-attempt deduplication and native receipt checks remain.
+See [busy communication](references/busy-bidirectional-communication.md) and the
+[0.4.46 release contract](references/release-0.4.46.md).
+
+A failed original continuation can clear its own
 unsubmitted probe through `scripts/recover_bridge_probe_clear.py` when it sent
 the token but issued zero clear keys. Preview is static; apply belongs to the
 original supervisor, pins the archive and uses the complete original controller.

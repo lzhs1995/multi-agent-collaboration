@@ -35,14 +35,21 @@ python3 <installed-release>/scripts/mac_harness.py preflight \
   --executor-surface <verified-surface> --executor claude
 ```
 
-Preflight includes setup, helper parity, identity, visible naming, bridge-test,
+Preflight includes setup, helper parity, identity, visible naming,
 handshake and validation. Do not stack separate setup/bridge/handshake calls
 around it or refresh a healthy current-task handshake for routine status checks.
 
-Bridge-test is non-submitting, **not zero-input**: it types a short owned token,
+Send ready prompts in either direction while either agent works, including
+native `/goal` turns. Neither an idle receiver nor pausing Goal is a communication
+prerequisite. Use the supported native/terminal entrypoint and let the receiver
+coordinate execution. Shared write ownership remains explicit.
+
+The optional `bridge-test` diagnostic is **not zero-input**: it types a short owned token,
 clears only that token or its known prefix, and requires `clear_confirmed`.
-An occupied/unknown composer or busy executor remains protected. Probe absence
-alone does not prove an empty composer.
+It retains its stricter cleanup conditions and is not part of fresh preflight.
+A failed original probe is preserved under its original controller; omitting a
+new diagnostic cannot waive old evidence. See
+[busy communication](busy-bidirectional-communication.md).
 
 The first challenge gives the absolute pending handshake receipt and required
 skill paths. The executor reads them and returns the exact task/provider/nonce
@@ -185,7 +192,8 @@ counts do not establish the failure interval.
 Before an already-authorized SOLO takeover of shared work, preserve the
 checkpoint, freeze executor writes, stop its sentinel and verify a safe single
 writer boundary. An error log alone does not prove those steps. Keep original
-sessions and recover collaboration at a safe boundary. Attribute repeated
+sessions and resume communication promptly; coordinate shared writes at their
+actual handoff boundary. Attribute repeated
 continuation inputs to their actual owner using evidence; do not assume the
 advisory hook sent them or change another runner.
 

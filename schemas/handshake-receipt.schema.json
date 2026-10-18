@@ -8,13 +8,11 @@
     "supervisor",
     "executor",
     "executor_ack",
-    "report_path",
-    "callback_line",
     "updated_at"
   ],
   "properties": {
     "task_id": {"type": "string", "minLength": 1},
-    "status": {"type": "string", "enum": ["PASS", "HELLO_SENT", "FAIL"]},
+    "status": {"type": "string", "enum": ["PASS", "HELLO_SENT", "AWAITING_EXECUTOR_ACK", "FAIL"]},
     "supervisor": {"type": "string"},
     "executor": {"type": "string"},
     "executor_ack": {"type": "boolean"},
@@ -34,28 +32,20 @@
     },
 
     "submission_state": {
-      "type": "string",
-      "enum": [
-        "SUPERVISOR_DID_NOT_SUBMIT",
-        "SUBMISSION_ABORTED_BUSY",
-        "COMPOSE_OCCUPIED",
-        "DELIVERY_UNVERIFIED_BY_DETECTOR",
-        "DELIVERY_QUEUED_AT_RECEIVER",
-        "DELIVERED_CONFIRMED"
-      ],
-      "description": "Replaces one undifferentiated DISPATCH_UNCONFIRMED. The correct recovery differs per state: fix the supervisor, wait for an idle boundary, widen the detector, or simply wait. Only SUPERVISOR_DID_NOT_SUBMIT may justify a resend."
+      "type": ["string", "null"],
+      "description": "Original sender diagnostic, including native receipt or queue state; null before dispatch. Busy work does not prohibit communication. No diagnostic alone authorizes replay; reconcile the original attempt."
     },
 
     "detector_side": {
-      "type": "string",
-      "enum": ["supervisor", "executor", "unknown"],
+      "type": ["string", "null"],
+      "enum": ["supervisor", "executor", "unknown", null],
       "description": "Which side observed the condition. A supervisor-side abort must never be reported as executor silence."
     },
 
     "budget_source": {
       "type": "string",
-      "enum": ["phase_default", "explicit_timeout_override", "explicit_phase_flag"],
-      "description": "Which budget actually governed the poll. `explicit_timeout_override` is the value that caused the 182s false FAIL on 2026-08-30: a generic --timeout wins over the phase default at mac_harness.py:844-846."
+      "enum": ["phase_handshake_default", "generic_timeout_override", "phase_default", "explicit_timeout_override", "explicit_phase_flag"],
+      "description": "Which budget governed the original poll. The first two values are emitted by the current harness; older values remain readable. A generic --timeout overrides the phase default."
     },
 
     "budget_seconds": {
@@ -86,18 +76,26 @@
       "description": "Repository revision the executor was asked to work against."
     },
 
-    "workspace_ref": {"type": "string"},
+    "workspace_ref": {"type": ["string", "null"]},
     "executor_surface_snapshot": {"type": "string"},
 
     "clear_confirmed": {
       "type": "boolean",
-      "description": "Bridge-test proved its own token left the compose buffer before handshake pasted anything. Prevents the measured 1ms self-collision."
+      "description": "Legacy bridge diagnostic field; not proof that a fresh handshake ran a probe."
     },
+    "bridge_probe_policy": {"const": "optional-probe-v1"},
+    "bridge_probe_status": {"enum": ["NOT_RUN", "CLEARED", "CLEAR_RECOVERED"]},
+    "bridge_clear_confirmed": {
+      "type": ["boolean", "null"],
+      "description": "Null when no optional probe ran. True only for a cleared original probe or its verified original recovery; never inferred from handshake success."
+    },
+    "bridge_clear_recovery": {"type": ["object", "null"]},
+    "executors": {"type": "array", "minItems": 1, "items": {"$ref": "#"}},
 
-    "dispatch_started_at": {"type": "string"},
+    "dispatch_started_at": {"type": ["string", "null"]},
     "dispatch_submitted_at": {
       "type": ["string", "null"],
-      "description": "Null means nothing was ever pasted. This single field separates a supervisor-side abort from a delivered-but-unconfirmed message."
+      "description": "Null before dispatch or when the sender returned an error or uncertain result. It does not establish zero input; inspect the original journal and native evidence."
     },
     "ack_observed_at": {"type": ["string", "null"]},
     "parser_confirmed_at": {"type": ["string", "null"]},
@@ -123,5 +121,18 @@
         "stale": {"type": "boolean"}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["bridge_probe_policy"]},
+      "then": {
+        "required": ["bridge_probe_status", "bridge_clear_confirmed", "bridge_clear_recovery"],
+        "oneOf": [
+          {"properties": {"bridge_probe_status": {"const": "NOT_RUN"}, "bridge_clear_confirmed": {"type": "null"}, "bridge_clear_recovery": {"type": "null"}}},
+          {"properties": {"bridge_probe_status": {"const": "CLEARED"}, "bridge_clear_confirmed": {"const": true}, "bridge_clear_recovery": {"type": "null"}}},
+          {"properties": {"bridge_probe_status": {"const": "CLEAR_RECOVERED"}, "bridge_clear_confirmed": {"const": true}, "bridge_clear_recovery": {"type": "object"}}}
+        ]
+      }
+    }
+  ]
 }

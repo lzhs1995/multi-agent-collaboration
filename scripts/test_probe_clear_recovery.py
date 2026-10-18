@@ -363,5 +363,273 @@ class ProbeClearTests(unittest.TestCase):
         self.assertEqual(json.loads(self.marker_path.read_bytes()), self.marker)
 
 
+class CursorProbeClearTests(unittest.TestCase):
+    """An editor model independent of the cleanup's expected-prefix logic.
+
+    All terminal I/O is replaced. A real trailing space and a painted cursor
+    cell start with identical text AND cursor coordinates in the key regression.
+    Only the editor's response to Home/End can distinguish them.
+    """
+    patch = ProbeClearTests.patch
+    save = ProbeClearTests.save
+    send = ProbeClearTests.send
+    key = ProbeClearTests.key
+    files = ProbeClearTests.files
+    read_screen = ProbeClearTests.read_screen
+    run_clear = ProbeClearTests.run_clear
+    refuse = ProbeClearTests.refuse
+
+    def setUp(self):
+        ProbeClearTests.setUp(self)
+        self.args.verify_cursor_navigation = True
+        self.editor_text = self.token
+        self.editor_position = len(self.token)
+        self.columns = 24
+        self.grid_change = lambda value: None
+        self.after_key = lambda key: None
+        self.delayed_keys = set()
+        self.ignored_keys = set()
+        self.pending_key = None
+        self.delay_frames = 0
+        self.screen.side_effect = self.editor_screen
+        self.fixture.key.side_effect = self.editor_key
+        original_run = self.fixture.run.side_effect
+        self.grid_read = unittest.mock.Mock(side_effect=self.grid_rpc)
+        self.fixture.run.reset_mock()
+        self.fixture.run.side_effect = lambda *a, **k: (
+            self.grid_read(*a, **k) if a[:2] == ('rpc', 'terminal.replay')
+            else original_run(*a, **k))
+
+    def editor_body(self):
+        # A block cursor at EOL occupies a painted blank cell. It is not part
+        # of editor_text and never changes the editor's navigation/deletion.
+        return self.editor_text + (' ' if self.editor_position == len(self.editor_text) else '')
+
+    def editor_screen(self, *args, **kwargs):
+        if self.pending_key is not None:
+            if self.delay_frames:
+                self.delay_frames -= 1
+            else:
+                self.move_editor(self.pending_key)
+                self.pending_key = None
+        return '\n'.join(('─' * self.columns, '❯ ' + self.editor_body(),
+                          '─' * self.columns, '[claude-opus-5]'))
+
+    def move_editor(self, key):
+        if key == 'home':
+            self.editor_position = 0
+        elif key == 'end':
+            self.editor_position = len(self.editor_text)
+        else:
+            self.assertEqual(key, 'backspace')
+            self.assertGreater(self.editor_position, 0)
+            at = self.editor_position
+            self.editor_text = self.editor_text[:at - 1] + self.editor_text[at:]
+            self.editor_position -= 1
+
+    def editor_key(self, surface, key):
+        self.assertEqual(surface, 'target')
+        self.assertIn(key, ('home', 'end', 'backspace'))
+        intents = sorted((self.root / clear.ARCHIVE).glob('*-KEY-INTENT.json'))
+        self.assertEqual(json.loads(intents[-1].read_bytes())['key'], key)
+        if key in self.delayed_keys:
+            self.pending_key, self.delay_frames = key, 2
+        elif key not in self.ignored_keys:
+            self.move_editor(key)
+        self.after_key(key)
+
+    def grid_rpc(self, *args, **kwargs):
+        self.assertEqual(args[:2], ('rpc', 'terminal.replay'))
+        self.assertEqual(len(args), 3)
+        self.assertEqual(json.loads(args[2]), dict(workspace_id='workspace', surface_id='target'))
+        # Do not advance the editor here: this is the same painted state that
+        # the preceding text observation saw, with its actual cursor cells.
+        lines = ['─' * self.columns, '❯ ' + self.editor_body(),
+                 '─' * self.columns, '[claude-opus-5]']
+        col = self.editor_position + 2
+        spans = []
+        for row, line in enumerate(lines):
+            segments = [(0, line, 0)] if row != 1 else [
+                (0, line[:col], 0), (col, line[col:col + 1], 1), (col + 1, line[col + 1:], 0)]
+            for column, text, style in segments:
+                if text:
+                    spans.append(dict(row=row, column=column, cell_width=len(text),
+                                      text=text, style_id=style))
+        value = dict(workspace_id='workspace', surface_id='target',
+            columns=self.columns, rows=4, render_grid=dict(
+                surface_id='target', format='cmux.render-grid.v1', full=True,
+                active_screen='primary', anchor='viewport', columns=self.columns, rows=4,
+                styles=[dict(id=0, invisible=False, inverse=False),
+                        dict(id=1, invisible=False, inverse=True)], row_spans=spans,
+                cursor=dict(column=col, row=1, style='block', visible=False, blinking=True)))
+        self.grid_change(value)
+        return json.dumps(value)
+
+    def keys(self):
+        return [call.args[1] for call in self.fixture.key.call_args_list]
+
+    def incomplete(self, expected_keys, error):
+        value = self.run_clear()
+        self.assertEqual(value['status'], 'PROBE_CLEAR_INCOMPLETE_NO_REPLAY', value)
+        self.assertIn(error, value['error'])
+        self.assertEqual(self.keys(), expected_keys)
+        self.assertFalse(value['clear_confirmed'])
+        self.assertEqual(value['bridge_writes'], 0)
+        self.fixture.key.reset_mock()
+        self.refuse('SLOT_EXISTS_NO_REPLAY')
+        return value
+
+    def test_painted_cell_requires_home_and_end_before_deletion(self):
+        value = self.run_clear()
+        self.assertEqual(value['status'], 'PROBE_CLEARED_ONLY', value)
+        self.assertEqual(self.keys(), ['home', 'end'] + ['backspace'] * len(self.token))
+        self.assertEqual(self.editor_text, '')
+        self.assertEqual(value['input_operations'], len(self.token) + 2)
+        self.assertEqual(value['cursor_navigation'], 'HOME_THEN_END_ACKNOWLEDGED')
+        self.assertEqual(value['bridge_writes'], 0)
+        for path, pin in self.original_files.items():
+            self.assertEqual(evidence.snapshot(Path(path)), pin)
+        slot = self.root / clear.ARCHIVE
+        for sample in slot.glob('*-after-*.json'):
+            saved = json.loads(sample.read_bytes())
+            self.assertIn('grid_reply', saved)
+            self.assertEqual(saved['body'], saved['cursor_proof']['body'])
+        self.assertEqual(json.loads((slot / 'RESULT.json').read_bytes()), value)
+
+    def test_opt_in_required_and_rejected_screen_preserved(self):
+        self.args.verify_cursor_navigation = False
+        value = self.refuse('COMPOSER_CHANGED_PRESERVE')
+        self.assertEqual(value['last_observation']['body'], self.token + ' ')
+        self.assertIn('screen', value['last_observation'])
+        self.grid_read.assert_not_called()
+
+    def test_real_tail_space_identical_initial_picture_never_deleted(self):
+        original = self.grid_rpc('rpc', 'terminal.replay', json.dumps(
+            dict(workspace_id='workspace', surface_id='target')))
+        self.editor_text += ' '
+        # Cursor before the real space: indistinguishable from the painted
+        # cell before navigation, including inverse style and coordinates.
+        self.assertEqual(original, self.grid_rpc('rpc', 'terminal.replay', json.dumps(
+            dict(workspace_id='workspace', surface_id='target'))))
+        self.incomplete(['home', 'end'], 'CURSOR_OR_CONTENT_CHANGED_PRESERVE')
+        self.assertEqual(self.editor_text, self.token + ' ')
+
+    def test_real_tail_with_cursor_at_actual_end_rejected_before_key(self):
+        self.editor_text += ' '
+        self.editor_position += 1
+        self.refuse('COMPOSER_CHANGED_PRESERVE')
+
+    def test_nbsp_prefix_changed_token_and_foreign_draft_preserved(self):
+        for text in (self.token + '\u00a0', ' ' + self.token, self.token + 'x',
+                     self.token[:-1], 'user draft', self.token + '  '):
+            with self.subTest(text=text):
+                self.editor_text, self.editor_position = text, len(text)
+                self.refuse(('COMPOSER_CHANGED_PRESERVE', 'COMPOSER_BUSY_OR_UNKNOWN'))
+
+    def test_wrong_initial_cursor_cannot_authorize_navigation(self):
+        self.grid_change = lambda value: value['render_grid']['cursor'].update(column=3)
+        self.refuse('CURSOR_UNPROVEN')
+
+    def test_unhandled_home_exhausts_original_slot_without_delete(self):
+        self.ignored_keys.add('home')
+        self.incomplete(['home'], 'COMPOSER_NOT_STABLE')
+        self.assertEqual(self.editor_text, self.token)
+
+    def test_unhandled_end_exhausts_original_slot_without_delete(self):
+        self.ignored_keys.add('end')
+        self.incomplete(['home', 'end'], 'COMPOSER_NOT_STABLE')
+        self.assertEqual(self.editor_text, self.token)
+
+    def test_delayed_navigation_and_deletion_are_observed_never_repeated(self):
+        self.delayed_keys.update(('home', 'end', 'backspace'))
+        value = self.run_clear()
+        self.assertEqual(value['status'], 'PROBE_CLEARED_ONLY', value)
+        self.assertEqual(self.keys(), ['home', 'end'] + ['backspace'] * len(self.token))
+
+    def test_user_edit_after_home_stops_before_end(self):
+        self.after_key = lambda key: setattr(self, 'editor_text', 'edited by user')
+        self.incomplete(['home'], 'CURSOR_OR_CONTENT_CHANGED_PRESERVE')
+        self.assertEqual(self.editor_text, 'edited by user')
+
+    def test_space_added_after_verified_end_is_preserved(self):
+        def edit(key):
+            if key == 'end':
+                self.editor_text += ' '
+                self.editor_position += 1
+        self.after_key = edit
+        self.incomplete(['home', 'end'], 'CURSOR_OR_CONTENT_CHANGED_PRESERVE')
+        self.assertEqual(self.editor_text, self.token + ' ')
+
+    def test_key_exception_retains_intent_and_disallows_another_attempt(self):
+        self.fixture.key.side_effect = RuntimeError('key result unknown')
+        value = self.incomplete(['home'], 'key result unknown')
+        self.assertIsNone(value['input_operations'])
+        self.assertEqual(value['key_intents'], 1)
+
+    def test_interrupt_retains_original_slot(self):
+        self.fixture.key.side_effect = KeyboardInterrupt('crash')
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_clear()
+        self.assertTrue((self.root / clear.ARCHIVE / '00-KEY-INTENT.json').exists())
+        self.fixture.key.reset_mock()
+        self.refuse('SLOT_EXISTS_NO_REPLAY')
+
+    def test_queue_after_navigation_stops_before_another_key(self):
+        self.after_key = lambda key: self.fixture.append_queued(self.token)
+        self.incomplete(['home'], 'NATIVE_RECEIVED_QUEUED_OR_UNKNOWN')
+
+    def test_receiver_identity_changed_during_grid_read_is_zero_key(self):
+        self.grid_change = lambda value: self.fixture.identity.update(target_pane_uuid='other-pane')
+        self.refuse('TARGET_IDENTITY_CHANGED')
+
+    def test_busy_screen_prevents_even_grid_read(self):
+        self.screen.side_effect = lambda *a, **k: '✻ Thinking…\n' + self.editor_screen()
+        self.refuse('COMPOSER_BUSY_OR_UNKNOWN')
+        self.grid_read.assert_not_called()
+
+    def test_missing_partial_foreign_or_alternate_grid_never_authorizes_key(self):
+        cases = [
+            ('missing-grid', lambda v: v.pop('render_grid')),
+            ('workspace', lambda v: v.update(workspace_id='other-workspace')),
+            ('surface', lambda v: v.update(surface_id='other-surface')),
+            ('grid-surface', lambda v: v['render_grid'].update(surface_id='other-surface')),
+            ('partial', lambda v: v['render_grid'].update(full=False)),
+            ('alternate', lambda v: v['render_grid'].update(active_screen='alternate')),
+            ('scrollback', lambda v: v['render_grid'].update(anchor='scrollback')),
+            ('dimensions', lambda v: v.update(columns=25)),
+            ('duplicate-style', lambda v: v['render_grid']['styles'].append(
+                dict(v['render_grid']['styles'][0]))),
+            ('invisible', lambda v: v['render_grid']['styles'][1].update(invisible=True)),
+            ('no-cursor-cell', lambda v: v['render_grid']['styles'][1].update(inverse=False)),
+            ('wrong-cursor-row', lambda v: v['render_grid']['cursor'].update(row=2)),
+            ('overlapping', lambda v: v['render_grid']['row_spans'].append(
+                dict(v['render_grid']['row_spans'][1]))),
+            ('span-gap', lambda v: v['render_grid']['row_spans'][1].update(column=1)),
+            ('wide-probe', lambda v: v['render_grid']['row_spans'][1].update(cell_width=12)),
+            ('different-screen', lambda v: v['render_grid']['row_spans'][1].update(text='❯ X')),
+        ]
+        for name, change in cases:
+            with self.subTest(case=name):
+                self.grid_change = change
+                self.refuse(('GRID_', 'render_grid'))
+
+    def test_grid_read_failure_is_zero_key(self):
+        self.grid_read.side_effect = RuntimeError('replay unavailable')
+        value = self.refuse('replay unavailable')
+        self.assertEqual(value['last_observation']['grid_error'], 'replay unavailable')
+
+    def test_geometry_change_after_home_preserves_text(self):
+        self.after_key = lambda key: setattr(self, 'columns', 25)
+        self.incomplete(['home'], 'GRID_GEOMETRY_CHANGED')
+        self.assertEqual(self.editor_text, self.token)
+
+    def test_released_reservation_remains_released(self):
+        self.marker_path.unlink()
+        value = self.run_clear()
+        self.assertEqual(value['status'], 'PROBE_CLEARED_ONLY', value)
+        self.assertFalse(self.marker_path.exists())
+        self.assertEqual((self.root / 'bridge-test-evidence.json').read_bytes(), self.original_bridge)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1226,7 +1226,7 @@ class BridgeOwnershipPreReadTests(OfflineWorkspaceFixture):
 
 
 class HandshakePreconditionTests(OfflineWorkspaceFixture):
-    """handshake must refuse to paste behind an unverified compose buffer."""
+    """Fresh handshakes need no idle probe; existing probe failures stay bound."""
 
     def _run(self, root):
         with (
@@ -1247,6 +1247,57 @@ class HandshakePreconditionTests(OfflineWorkspaceFixture):
             r = json.loads((root / "handshake-receipt.json").read_text())
             self.assertEqual(r["status"], "PASS")
             self.assertTrue(r["bridge_clear_confirmed"])
+            self.assertEqual(r["bridge_probe_status"], "CLEARED")
+
+    def test_fresh_handshake_without_probe_records_no_clear_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate(root)
+            with mock.patch.object(HARNESS.cmux, "read_screen",
+                                   side_effect=AssertionError("handshake must not wait for an idle screen")):
+                self._run(root)
+            r = json.loads((root / "handshake-receipt.json").read_text())
+            self.assertEqual(r["status"], "PASS")
+            self.assertEqual(r["bridge_probe_policy"], "optional-probe-v1")
+            self.assertEqual(r["bridge_probe_status"], "NOT_RUN")
+            self.assertIsNone(r["bridge_clear_confirmed"])
+            self.assertIsNone(r["bridge_clear_recovery"])
+            self.assertFalse((root / "bridge-test-evidence.json").exists())
+
+    def test_preflight_does_not_invoke_idle_probe(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            root = Path(tmp)
+            steps = []
+            for name in ("cmd_setup_check", "cmd_helper_parity", "cmd_identity_gate",
+                         "cmd_name_surfaces", "cmd_handshake", "cmd_validate"):
+                stack.enter_context(mock.patch.object(HARNESS, name,
+                    side_effect=lambda _, step=name: steps.append(step)))
+            probe = stack.enter_context(mock.patch.object(HARNESS, "cmd_bridge_test",
+                side_effect=AssertionError("fresh preflight must not paste an idle-only probe")))
+            HARNESS.cmd_preflight(args(root))
+            self.assertEqual(steps, ["cmd_setup_check", "cmd_helper_parity", "cmd_identity_gate",
+                                    "cmd_name_surfaces", "cmd_handshake", "cmd_validate"])
+            probe.assert_not_called()
+
+    def test_existing_invalid_probe_is_not_treated_as_not_run(self):
+        variants = [
+            {"task_id": "other-task", "executor": "surface:2", "clear_confirmed": True},
+            {"task_id": "r3-test", "executors": []},
+            {"task_id": "r3-test", "executors": "surface:2"},
+            {"task_id": "r3-test", "executors": [None]},
+            {"task_id": "r3-test", "executors": [
+                {"executor": "surface:2", "clear_confirmed": True},
+                {"executor": "surface:2", "clear_confirmed": True}]},
+        ]
+        for evidence in variants:
+            with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                gate(root)
+                (root / "bridge-test-evidence.json").write_text(json.dumps(evidence))
+                with mock.patch.object(HARNESS.cmux, "submit_text") as submit:
+                    with self.assertRaises(SystemExit):
+                        HARNESS.cmd_handshake(args(root))
+                    submit.assert_not_called()
 
     def test_unconfirmed_clear_aborts_before_pasting(self):
         """POISON: clear_confirmed=false must stop the paste entirely."""

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from contextvars import ContextVar
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -212,32 +213,63 @@ def require_successor_pair(artifact, *, expected_caller=None, expected_target=No
     }
 
 
-def _verified_helper_command(command):
-    """只放行单条、完整同版固定路由；不接受 shell 或环境覆盖。"""
+def helper_command_diagnostic(command, *, guard_entrypoint=None):
+    """Verify the same route, preserving the actual hook's rejection reason.
+
+    No command payload is retained and this never executes the helper. These
+    paths describe this invocation, not what another running client loaded.
+    """
+    root = Path(__file__).resolve().parents[1]
+    result = dict(verified=False, reason='HELPER_DIRECT_COMMAND_REQUIRED',
+                  guard_controller=str(root),
+                  guard_entrypoint=str(Path(guard_entrypoint or __file__).resolve()),
+                  guard_module=str(Path(__file__).resolve()),
+                  guard_python=sys.executable,
+                  guard_python_resolved=str(Path(sys.executable).resolve()))
     if any(char in command for char in ('`', '$', '\n', '\r')):
-        return False
+        result['reason'] = 'HELPER_SHELL_EXPANSION_OR_MULTILINE_REFUSED'
+        return result
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()<>')
         lexer.whitespace_split = True
         tokens = list(lexer)
+    except ValueError:
+        result['reason'] = 'HELPER_COMMAND_PARSE_ERROR'
+        result['error_type'] = 'ValueError'
+        return result
+    try:
         if any(token and all(char in ';&|()<>' for char in token) for token in tokens):
-            return False
+            result['reason'] = 'HELPER_COMPOUND_OR_REDIRECT_REFUSED'
+            return result
         if tokens[:1] == ['rtk']:
             tokens = tokens[1:]
             if tokens[:1] == ['proxy']:
                 tokens = tokens[1:]
         if (len(tokens) < 2 or Path(tokens[0]).name != 'cmux-agent'
                 or tokens[1] not in ('ask', 'send', 'broadcast', 'reconcile')):
-            return False
+            return result
         selected = shutil.which(tokens[0]) if tokens[0] == 'cmux-agent' else tokens[0]
+        result['helper_path'] = selected
         if not selected or not Path(selected).is_absolute() or not os.access(selected, os.X_OK):
-            return False
+            result['reason'] = 'HELPER_ABSOLUTE_EXECUTABLE_REQUIRED'
+            return result
         from cmux_evidence_io import read_bytes
         from render_cmux_agent import verify_route
-        route = verify_route(read_bytes(selected), Path(__file__).resolve().parents[1])
-        return Path(route['python']).resolve() == Path(sys.executable).resolve()
-    except (OSError, ValueError, TypeError, KeyError):
-        return False
+        raw = read_bytes(selected)
+        result['helper_sha256'] = hashlib.sha256(raw).hexdigest()
+        route = verify_route(raw, root)
+        result.update(route)
+        result['route_python_resolved'] = str(Path(route['python']).resolve())
+        result['verified'] = result['route_python_resolved'] == result['guard_python_resolved']
+        result['reason'] = 'HELPER_VERIFIED' if result['verified'] else 'HELPER_PYTHON_MISMATCH'
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        result['reason'] = str(exc)[:240] if str(exc).startswith('HELPER_') else 'HELPER_ROUTE_UNREADABLE'
+        result['error_type'] = type(exc).__name__
+    return result
+
+
+def _verified_helper_command(command):
+    return helper_command_diagnostic(command)['verified']
 
 
 def _command_head(words):
@@ -261,7 +293,7 @@ def _command_head(words):
     return words
 
 
-def validate_command(command, *, _allow_helper=True):
+def validate_command(command, *, _allow_helper=True, _guard_entrypoint=None):
     """Block raw outbound paths; reads remain available across workspaces.
 
     Input is sent only through cmux_bridge, whose runtime rechecks every send and
@@ -269,7 +301,9 @@ def validate_command(command, *, _allow_helper=True):
     --help, recovery authorization, or shell environment exemption.
     """
     command = str(command).replace("\\\n", "")
-    if _allow_helper and _verified_helper_command(command):
+    helper = (helper_command_diagnostic(command, guard_entrypoint=_guard_entrypoint)
+              if _allow_helper else None)
+    if helper and helper['verified']:
         return True, "verified same-release helper; bridge rechecks every input"
     if "<<" in command:
         # Reuse the panel guard's bounded AST classification of literal Python
@@ -320,9 +354,13 @@ def validate_command(command, *, _allow_helper=True):
                     break
         if name in ("sh", "bash", "zsh") and len(arguments) >= 2:
             if arguments[0] in ("-c", "-lc", "-ic"):
-                ok, _ = validate_command(arguments[1], _allow_helper=False)
+                ok, _ = validate_command(arguments[1], _allow_helper=False,
+                                         _guard_entrypoint=_guard_entrypoint)
                 blocked = blocked or not ok
     if blocked:
+        if helper and any(Path(token).name == 'cmux-agent' for token in tokens):
+            return False, 'WORKSPACE_SCOPE_DENIED: HELPER_ROUTE_REJECTED ' + json.dumps(
+                helper, ensure_ascii=False, sort_keys=True)
         return False, ("WORKSPACE_SCOPE_DENIED: raw terminal input bypasses UUID binding; "
                        "use the installed cmux_bridge transport. No cross-workspace handshake, "
                        "legacy target fallback, broadcast, or force override.")
@@ -364,7 +402,7 @@ def main():
         if not isinstance(payload, dict):
             deny("invalid hook payload")
         command = extract_command(payload)
-        ok, message = validate_command(command)
+        ok, message = validate_command(command, _guard_entrypoint=__file__)
         if not ok:
             deny(message.removeprefix("WORKSPACE_SCOPE_DENIED: "))
         print("{}")

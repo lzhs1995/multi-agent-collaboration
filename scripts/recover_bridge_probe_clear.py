@@ -17,6 +17,7 @@ import sys
 import time
 
 import continue_bridge_probe as continuation
+import probe_cursor_observation as cursor_observation
 
 recovery = continuation.recovery
 ARCHIVE = 'bridge-probe-clear-recovery'
@@ -267,6 +268,7 @@ def recover_clear(args, modules=None):
                 absence.token = token
                 slot_pins = {}
                 slot_stat = None
+                cursor_geometry = None
 
                 def check(published=None):
                     check_root()
@@ -294,17 +296,56 @@ def recover_clear(args, modules=None):
                         body=frame['body'] if frame is not None else None,
                         expected_prefix=expected, complete_frame=frame is not None, busy=busy,
                         structure=rows[frame['start'] - 1:frame['end'] + 1] if frame else None)
+                    # Even a zero-key preflight rejection preserves its full
+                    # failed frame in the returned diagnostic.
+                    result['last_observation'] = value
                     check()
                     return value
 
-                def stable(expected, record=None, previous=None):
+                def stable(expected, record=None, previous=None, *, cursor_mode=False,
+                           position=None, previous_position=None, permit_padding=False):
+                    nonlocal cursor_geometry
                     last = None
                     for index in range(8):
                         value = observe(expected)
+                        using_cursor = cursor_mode or (permit_padding and value['body'] == expected + ' ')
+                        if using_cursor and value['complete_frame'] and value['busy'] is False:
+                            try:
+                                value['grid_reply'] = cursor_observation.read(bridge, binding)
+                                value['cursor_proof'] = cursor_observation.inspect(
+                                    bridge, value['grid_reply'], binding, value['body'])
+                                check()
+                            except ERRORS as exc:
+                                value['grid_error'] = str(exc)
+                                if record is not None:
+                                    record(index, value)
+                                raise
                         if record is not None:
                             record(index, value)
                         if not value['complete_frame'] or value['busy'] is not False:
                             raise ValueError('PROBE_CLEAR_COMPOSER_BUSY_OR_UNKNOWN')
+                        if using_cursor:
+                            proof = value['cursor_proof']
+                            if cursor_geometry is None:
+                                cursor_geometry = proof['geometry']
+                            elif proof['geometry'] != cursor_geometry:
+                                raise ValueError('PROBE_CLEAR_GRID_GEOMETRY_CHANGED')
+                            wanted = len(expected) if position is None else position
+                            exact_body = value['body'] in (expected, expected + ' ')
+                            if not exact_body or proof['position'] != wanted:
+                                old_body = previous if previous is not None else expected
+                                if (previous_position is not None
+                                        and proof['position'] == previous_position
+                                        and value['body'] in (old_body, old_body + ' ')):
+                                    last = None
+                                    time.sleep(0.1)
+                                    continue
+                                raise ValueError('PROBE_CLEAR_CURSOR_OR_CONTENT_CHANGED_PRESERVE')
+                            if last is not None and proof == last.get('cursor_proof'):
+                                return value
+                            last = value
+                            time.sleep(0.1)
+                            continue
                         if value['body'] != expected:
                             # After a key, only its exact previous screen may
                             # remain briefly. Never issue another key to retry.
@@ -320,7 +361,8 @@ def recover_clear(args, modules=None):
                     raise ValueError('PROBE_CLEAR_COMPOSER_NOT_STABLE')
 
                 check()
-                first = stable(token)
+                first = stable(token, permit_padding=getattr(args, 'verify_cursor_navigation', False))
+                cursor_mode = 'cursor_proof' in first
                 check()
                 os.mkdir(ARCHIVE, 0o700, dir_fd=root_fd)
                 result['archive_created'] = True
@@ -344,15 +386,22 @@ def recover_clear(args, modules=None):
                             original_paste_fence=fence,
                             original_harness_exit='ATTESTED_BY_ORIGINAL_SUPERVISOR',
                             publish_bridge_evidence=args.publish_bridge_evidence,
+                            cursor_navigation=cursor_mode,
                             reservation_present=live_marker is not None,
                             supervisor_identity=result['supervisor_identity'], first_observation=first))
                         expected = token
-                        for step, key in enumerate(['end'] + ['backspace'] * len(token)):
+                        cursor_position = len(token)
+                        keys = (['home', 'end'] if cursor_mode else ['end']) + ['backspace'] * len(token)
+                        for step, key in enumerate(keys):
                             prefix = f'{step:02d}'
-                            stable(expected, lambda i, v: write(f'{prefix}-before-{i}.json', v))
-                            next_prefix = expected if key == 'end' else expected[:-1]
+                            stable(expected, lambda i, v: write(f'{prefix}-before-{i}.json', v),
+                                   cursor_mode=cursor_mode, position=cursor_position)
+                            next_prefix = expected if key in ('home', 'end') else expected[:-1]
+                            next_position = 0 if key == 'home' else len(next_prefix)
                             write(f'{prefix}-KEY-INTENT.json', dict(at_epoch=time.time(), key=key,
-                                expected_prefix=expected, next_prefix=next_prefix))
+                                expected_prefix=expected, next_prefix=next_prefix,
+                                cursor_position=cursor_position if cursor_mode else None,
+                                next_cursor_position=next_position if cursor_mode else None))
                             result['key_intents'] += 1
                             check()
                             # Exactly one original-controller key. An exception
@@ -363,8 +412,13 @@ def recover_clear(args, modules=None):
                             write(f'{prefix}-KEY-RESULT.json', dict(at_epoch=time.time(),
                                 key=key, returned=True, native_reception='NOT_CLAIMED'))
                             stable(next_prefix, lambda i, v: write(f'{prefix}-after-{i}.json', v),
-                                   previous=expected if key == 'backspace' else None)
+                                   previous=expected if key == 'backspace' else None,
+                                   cursor_mode=cursor_mode, position=next_position,
+                                   previous_position=cursor_position if cursor_mode else None)
+                            if cursor_mode and key == 'end':
+                                result['cursor_navigation'] = 'HOME_THEN_END_ACKNOWLEDGED'
                             expected = next_prefix
+                            cursor_position = next_position
                         check()
                         result.update(clear_confirmed=True, status='PROBE_CLEARED_ONLY',
                             clear_verified_at=harness._now())
@@ -419,6 +473,8 @@ def main(argv=None):
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--original-harness-exited', action='store_true')
     parser.add_argument('--publish-bridge-evidence', action='store_true')
+    parser.add_argument('--verify-cursor-navigation', action='store_true',
+                        help='one Home/End acknowledgement for the original ASCII probe cursor cell')
     parser.add_argument('--lines', type=recovery.observation.bounded_integer(1, 2000), default=200)
     result = recover_clear(parser.parse_args(argv))
     print(json.dumps(result, ensure_ascii=False, indent=2))

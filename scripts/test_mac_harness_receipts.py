@@ -117,14 +117,7 @@ class ReceiptOrderingTests(unittest.TestCase):
                 "executor_surface_uuid": "uuid-2",
                 "executor_provider": "claude",
             }))
-            # handshake now requires proof that bridge-test cleared its own token
-            # from the compose buffer. A fixture without it is not a "clean" setup
-            # -- it is the exact state that produced this task's 1 ms self-collision.
-            (root / "bridge-test-evidence.json").write_text(json.dumps({
-                "task_id": "receipt-test",
-                "executor": "surface:2",
-                "clear_confirmed": True,
-            }))
+            # Fresh handshakes no longer touch the composer with a probe.
 
             def assert_receipt_before_send(_executor, prompt, marker=None):
                 receipt = json.loads((root / "handshake-receipt.json").read_text())
@@ -135,6 +128,9 @@ class ReceiptOrderingTests(unittest.TestCase):
                 self.assertEqual(receipt["executors"][0]["status"], "HELLO_SENT")
                 self.assertFalse(receipt["prompt_contains_literal_ack"])
                 item = receipt['executors'][0]
+                self.assertEqual(item['bridge_probe_status'], 'NOT_RUN')
+                self.assertIsNone(item['bridge_clear_confirmed'])
+                self.assertIsNone(item['bridge_clear_recovery'])
                 body, pin = reference.read_body(item['dispatch_body_reference'])
                 self.assertEqual(reference.validate_wire_body(prompt), pin)
                 self.assertEqual(item['dispatch_payload_sha256'], reference.digest(prompt))
@@ -161,6 +157,7 @@ class ReceiptOrderingTests(unittest.TestCase):
             self.assertIsNotNone(receipt["dispatch_submitted_at"])
             self.assertIsNotNone(receipt["ack_observed_at"])
             self.assertIsNotNone(receipt["parser_confirmed_at"])
+            self.assertFalse((root / "bridge-test-evidence.json").exists())
 
     def test_handshake_uncertain_dispatch_polls_same_nonce_without_resend(self):
         for state in (BRIDGE.DELIVERY_UNVERIFIED_BY_DETECTOR,

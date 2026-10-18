@@ -9,7 +9,16 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.45.** An original continuation that typed its own bridge probe but
+**Version: 0.4.46.** Send a ready prompt in either direction through the supported
+guarded entrypoint, including while the receiver works or its native `/goal`
+continues. Do not wait for an idle turn or pause `/goal` to communicate.
+Fresh preflight performs identity, handshake and validation without the optional
+input-and-clear probe. Receivers coordinate their work; communication does not
+transfer shared write ownership. See
+[busy bidirectional communication](references/busy-bidirectional-communication.md)
+and the [0.4.46 release contract](references/release-0.4.46.md).
+
+An original continuation that typed its own bridge probe but
 failed before any clear key can use `scripts/recover_bridge_probe_clear.py`.
 The default statically verifies the original archive and prints its SHA without
 live inspection. Apply requires that SHA, an exited original harness and the
@@ -98,8 +107,9 @@ work and verified callback settlement separately. Read the complete referenced
 body before using its original consume/ACK entrypoint; exposure is not acceptance.
 Fresh exact reservations are reused; expired markers require original-owner
 settlement. Explicit `--continuing --reservation-inquiries` enrollment permits
-60-second file status inquiries during reservations, while terminal input stays
-paused. Exact RELEASE remains separate; reviewed 0.4.34 file producers retain
+60-second file status inquiries during reservations, while that runner's
+automatic terminal inquiries stay paused. Agents may still send ready messages
+through the supported entrypoint. Exact RELEASE remains separate; reviewed 0.4.34 file producers retain
 their historical authority only.
 The reask scheduler uses Standard launchd scheduling and bounded, fair discovery;
 the configuration guardian remains Background. Measured Claude Monitor/Goal and
@@ -184,7 +194,8 @@ response proves acknowledgement. Neither alone accepts the work. See
 
 The user chooses zero, one or two executors. When the original Claude cannot
 continue after bounded retries, continue authorized work as Codex SOLO and preserve
-its context. Resume collaboration at a safe boundary when it responds.
+its context. Contact it as soon as it responds; coordinate any shared write
+handoff separately.
 
 0.4.29 also holds the existing pane/target delivery mutex throughout a non-submitting
 handshake probe. Automatic terminal writers must use the same lock and recheck the
@@ -221,6 +232,8 @@ to communicate. Raw terminal writes remain outside the supported sender.
 
 Claude terminal input preserves occupied or unknown drafts. New Codex native
 input does not inspect or modify the composer and can steer its active turn.
+Busy work alone blocks neither direction. Send ready messages promptly through
+the supported entrypoint; do not pause native Goal or require an idle turn.
 The conversation and unrelated authorized work continue. Identity, send, native
 receipt, executor ACK, callback and acceptance are separate observations.
 
@@ -232,8 +245,9 @@ receipt, executor ACK, callback and acceptance are separate observations.
    This entrypoint overrides historical personal defaults in those references.
 2. Run `scripts/mac_harness.py preflight` with an explicit task id, absolute
    artifact root, and the existing executor surface. This covers setup, identity,
-   visible naming, non-submitting bridge proof, handshake and validation. Do not
-   refresh a healthy handshake mid-command or stack another task behind work.
+   visible naming, handshake and validation. It does not run `bridge-test`.
+   Reuse a healthy current-task handshake for status messages. Send an authorized
+   independent task promptly; the agents coordinate its execution and write scope.
 3. For formal plan consensus, record at least three non-blocking review rounds
    and require `consensus-check` PASS. Each round needs its own real artifact and
    hash. Earlier objections must be explicitly resolved, not hidden by a later
@@ -294,8 +308,9 @@ prepare the next authorized pack → fresh live preflight → guarded dispatch.
 The explicitly authorized 60-second reask is a fallback; file timers cannot wake
 an idle model. ANSWERED means a reply was detected, not consumed: await the
 original executor's exact consumption without repeating dispatch or replacing
-the business episode. Formal reservations retain terminal pauses until exact
-RELEASE; only explicitly enrolled file status inquiries can continue during them.
+the business episode. Formal reservations pause that runner's automatic terminal
+inquiries until exact RELEASE; explicitly enrolled file inquiries can continue.
+This cadence rule does not pause Goal or prohibit either agent's ready messages.
 Measure accepted unique coverage, verified issue closures and actual stage
 latency p50/p95 with sample counts; ask_count is diagnostic, not a performance
 target. See [dispatch cadence and metrics](references/configuration-and-reasks.md#dispatch-cadence-and-metrics)
@@ -303,7 +318,8 @@ for timestamp boundaries and the limits of detected-to-consumed observations.
 
 ### Fast handshake and verified delivery in both directions
 
-- Bridge cleanup must observe an empty compose, not merely the absence of the
+- An explicitly requested diagnostic bridge cleanup must observe an empty compose,
+  not merely the absence of the
   full probe. Short per-executor tokens reduce guarded key count; unknown input
   is reread, never blindly deleted. ACK waits remain `AWAITING_EXECUTOR_ACK`,
   not terminal failures. See the executable postconditions in
@@ -514,8 +530,9 @@ Read [caller identity and bounded callback closeout](references/shared-daemon-ca
 The unique live native client's UUID selects the caller; unrelated recycled TTY
 rows cannot veto it. The selected UUID row must still match its actual TTY and
 workspace. Report caller-resolution failures as such, never as Claude identity
-failures. Keep the bridge test bounded to the test token and verify compose is
-clear; keep prompt/callback Enter checks and original-attempt recovery intact.
+failures. An explicitly requested bridge-test diagnostic stays bounded to its
+test token and verifies compose is clear; it is not part of fresh preflight.
+Keep prompt/callback submission checks and original-attempt recovery intact.
 
 For an ordinary-terminal Hook stopped by a root login permission denial, use the
 [narrow login boundary](references/root-login-permission-boundary.md). Preserve
@@ -616,8 +633,9 @@ original controller may perform `consume --reply-sha256` and rearm the same
 authorization. CURRENT file compatibility grants no consumption authority.
 The [formal reservation boundary](references/configuration-and-reasks.md#formal-reservation-boundary)
 also protects ordinary WAITING episodes, including unsupported 0.4.27 producers.
-A valid same-supervisor reservation pauses terminal input and, by default, file
-requests until exact RELEASE. In 0.4.35, new `start --continuing
+A valid same-supervisor reservation pauses the reask runner's automatic terminal
+inquiries and, by default, its file requests until exact RELEASE. It does not
+prohibit either agent's ready messages or require an idle turn. In 0.4.35, new `start --continuing
 --reservation-inquiries` enrollment additionally pins the overall task,
 authorization file and authenticated original executor. It permits file-only
 `RESERVATION_STATUS` inquiries every 60 seconds, including the exact reservations
@@ -627,7 +645,8 @@ An already-bound reply can still become ANSWERED during a reservation. The
 original executor reads the full body and consumes its exact SHA through the
 original controller; only that act rearms authorized continuing inquiries.
 Current-controller ordinary consumption also requires this native identity and
-SHA check. Consumption never clears a reservation or authorizes terminal input.
+SHA check. Consumption never clears a reservation or authorizes that runner's
+next automatic terminal inquiry. Independent ready messages use the supported sender.
 `run` still returns `FORMAL_RESERVATION_WAIT`; existing-episode status separates
 `reservation_paused`, `reservation_inquiries_authorized`, `inquiries_paused` and
 `paused_tasks`. `NO_EPISODE` still lacks reservation owner/age/pack metadata.
