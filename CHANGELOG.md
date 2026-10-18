@@ -1,3 +1,24 @@
+## 0.4.37
+
+- Reuse complete release verification within a single file-scheduler sweep.
+  Before each reuse, stat every verified member and its parent directories using
+  device, inode, size, mode, mtime_ns and ctime_ns. Any change invalidates the entry
+  and requires complete verification; each new sweep starts with no cached trust.
+- Keep CURRENT approval, live binding, enrollment, STOP/revocation, reservation
+  and reply checks. Preserve the 256-enrollment cap, 10-second budget and fair
+  cursor. Sweep results expose full-verification, reuse and invalidation counts.
+- Preserve the fully verified 0.4.36 file producer and issuer with its explicit
+  13-member controller and reservation-inquiry capability. Old issuers gain no
+  future authority; old controllers and pending attempts remain unchanged.
+
+The scheduler delta passed 141 related tests before release metadata and 0.4.36
+compatibility were added. One sequential read-only sample per mode on eight live
+enrollments took 8.108 seconds without sweep reuse and 3.324 seconds with reuse;
+decisions matched and enrollment files were unchanged. This measures validation
+work only, not complete sweeps or live detection latency. Final CI, installation,
+automatic hooks and original native receipts are separate evidence. See the
+[release contract](references/release-0.4.37.md).
+
 ## 0.4.36
 
 - Keep an active Claude spinner visible to the busy-state classifier when one
