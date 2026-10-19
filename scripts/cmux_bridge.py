@@ -1198,6 +1198,29 @@ def _claude_reference_padding_candidate(content, text, border_cells):
     """
     if border_cells in (105, 118):
         return _claude_task_pack_padding_candidate(content, text, border_cells)
+    if border_cells == 180:
+        # Claude 2.1.303 renders four complete ASCII reference rows, with
+        # twelve/thirteen BODY-row cells. Observed 4/3-digit BYTES forms and
+        # long maintenance markers retain the complete original wire text.
+        from cmux_prompt_reference import SINGLE_LINE_FORMAT, wire_reference
+        try:
+            ref = wire_reference(text)
+        except ValueError:
+            return None
+        if (not ref or ref['format'] != SINGLE_LINE_FORMAT
+                or not text.isascii() or len(content) != 4):
+            return None
+        token = 'BODY=' + json.dumps(ref['path'], ensure_ascii=False)
+        header, separator, tail = text.partition(' ' + token + ' ')
+        notice = ('Native receipt proves this notice only; body reading and '
+                  'acceptance are separate.')
+        third, boundary, remainder = tail.partition(' ' + notice)
+        if (not separator or not boundary or remainder
+                or len(token) != 144 or len(third) not in (172, 173)
+                or not third.startswith(f"SHA256={ref['sha256']} BYTES={ref['bytes']} ")
+                or content != [header, token + ' ' * {172: 13, 173: 12}[len(third)], third, notice]):
+            return None
+        return [header, token, third, notice]
     if border_cells != 183 or len(content) < 3:
         return None
     from cmux_prompt_reference import SINGLE_LINE_FORMAT, wire_reference
