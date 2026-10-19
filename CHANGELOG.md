@@ -1,4 +1,6 @@
-## Unreleased
+## 0.4.52
+
+- Preserve the fully verified 0.4.51 file protocol and its original 18-controller issuer scope. Client upgrades require per-process automatic-hook verification; a new process does not inherit old consumer identity.
 
 - Recognize native Claude executables under the current user's
   `.local/share/claude/versions/<version>` directory using the actual executable,
