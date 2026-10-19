@@ -1239,6 +1239,22 @@ def _claude_reference_padding_candidate(content, text, border_cells):
     return [content[0], token, *content[2:]]
 
 
+def _claude_status_padding_candidate(content, text, border_cells):
+    """Measured Claude 2.1.303 STATUS geometry, with full outer text matching.
+
+    The 134-cell editor hard-wraps at 130, then pads a 93-cell continuation
+    by 18 cells before a 128-cell row. Preserve every other character and
+    all raw rows for stability. This is display equivalence only.
+    """
+    if (border_cells != 134 or len(content) != 4 or not text.isascii()
+            or not re.match(r'^STATUS: [A-Za-z0-9_.:-]+ ', text)
+            or len(content[0]) != 130 or len(content[1]) != 111
+            or len(content[2]) != 128 or not content[1].endswith(' ' * 18)
+            or content[1][-19].isspace()):
+        return None
+    return [content[0], content[1][:-18], *content[2:]]
+
+
 def _require_exact_composer_without_cursor_cell(screen, surface, text):
     """Require the expected visible draft, allowing known bordered hard wrapping.
 
@@ -1341,6 +1357,9 @@ def _require_exact_composer_without_cursor_cell(screen, surface, text):
                        for row in content for c in row):
                 layouts = [content]
                 candidate = _claude_reference_padding_candidate(content, text, len(rows[start-1]))
+                if candidate is not None:
+                    layouts.append(candidate)
+                candidate = _claude_status_padding_candidate(content, text, len(rows[start-1]))
                 if candidate is not None:
                     layouts.append(candidate)
                 for layout, width in ((layout, width) for layout in layouts

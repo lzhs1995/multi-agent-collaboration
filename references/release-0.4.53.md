@@ -22,3 +22,7 @@ not need another stop/start simply because the display matcher changed.
 
 Continue per-process upgrade verification from the 0.4.52 contract. Installation
 alone does not prove automatic hooks, body reading or mailbox consumption.
+
+The additional 134-column STATUS fixture has a 130-cell first row, a
+93-cell continuation plus 18 padding cells, then a 128-cell row. Only this
+measured geometry is admitted, with the entire original text still matched.

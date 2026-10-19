@@ -1,5 +1,7 @@
 ## 0.4.53
 
+- Include the measured 134-column STATUS continuation layout (93 content cells plus 18 padding cells), retaining full original text and raw-row stability.
+
 - Recognize the observed 180-column Claude 2.1.303 reference rows: a 172-character third row with 13 BODY padding cells, or 173 characters with 12 cells. Complete original contents and raw stability remain required.
 - Keep canonical unpadded drafts valid and reject altered markers, paths, hashes, lengths, borders, extra cells and queue duplicates.
 - Preserve the statically verified 0.4.52 protocol and its original 19-controller issuer scope. Existing working registrations need no stop/start.
