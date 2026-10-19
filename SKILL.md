@@ -9,7 +9,14 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.51.** The automatic reply advisory now matches the communication
+**Version: 0.4.52.** Claude Code native versioned executables are authenticated
+through the kernel executable, exact launcher target and file ownership/mode;
+a numeric process label alone is insufficient. Handshake contract failures settle
+with their original evidence and do not poll for an ACK or replay input. After a
+client upgrade, verify each actual process, startup settings and automatic hooks
+before claiming its collaboration works. See the [0.4.52 contract](references/release-0.4.52.md).
+
+The automatic reply advisory now matches the communication
 contract: send ready messages during normal work or native Goal. A separate new
 pack still requires fresh identity, handshake and validation, with no idle-turn
 requirement. Existing reviewed 0.4.50 file episodes keep their original controller

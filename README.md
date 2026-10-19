@@ -1,4 +1,9 @@
-Current source: **0.4.51**. Automatic reply guidance permits ready messages during
+Current source: **0.4.52**. Recognize authenticated Claude Code versioned native
+executables and settle handshake contract failures without duplicate input.
+Verify each upgraded client's actual process, startup settings, automatic hooks
+and real communication separately; see the [0.4.52 contract](references/release-0.4.52.md).
+
+Automatic reply guidance permits ready messages during
 normal work and native Goal. Fresh task preflight verifies identity, handshake
 and validation without waiting for idle. Reviewed 0.4.50 file episodes preserve
 their original controller and authority. See the
