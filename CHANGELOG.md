@@ -1,3 +1,17 @@
+## 0.4.50
+
+- Retain at most 120 compact sweep observations / 512 KiB under a separate
+  nonblocking lock and 0.25-second diagnostic budget. Preserve source, PID,
+  phase timings, registration order, rotation position and pending enrollment.
+- Record scheduler contention without replacing the active worker's STATUS or
+  cursor. Keep file inquiry outcomes independent of history contention, timeout
+  or uncertain writes; preserve invalid existing evidence.
+- Preserve the complete reviewed `0.4.49-689dda6455be` protocol and its original
+  14-member controller / 16-controller issuer scope without future grants.
+
+History is diagnostic evidence, not a demonstrated historical stall fix or live
+latency acceptance. See the [release contract](references/release-0.4.50.md).
+
 ## 0.4.49
 
 - Fix explicit stop/resume inquiry registration failing its read-only preview

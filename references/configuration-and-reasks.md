@@ -393,6 +393,36 @@ partial: a tick may have committed files before its return was interrupted.
 Do not interpret zero partial posts as proof of no execution. Source checks,
 the 10-second budget and original controller ownership remain unchanged.
 
+### Bounded sweep history
+
+`executor-reask-scheduler-v1/SWEEP-HISTORY.json` retains the latest 120 sweep
+observations or 512 KiB, whichever limit is reached first. Each observation
+records its source, process, start time, phase timings, previous and last
+rotation cursor, enrollment order, pending enrollment, returned counters and
+compact per-enrollment results. Keep the enrollment filename even when registry
+contention prevents authenticating a caller. Reservation payloads and message
+bodies are omitted; reservation count and inquiry authorization are observations.
+
+A competing invocation records `SCHEDULER_BUSY` without replacing the active
+worker's `STATUS.json` or cursor. History uses its own nonblocking lock and
+0.25-second budget after the existing bounded sweep. `history.status` in the
+returned result distinguishes `HISTORY_RECORDED`, `HISTORY_BUSY`,
+`HISTORY_BUDGET_EXHAUSTED` and `HISTORY_UNCONFIRMED`; these outcomes do not change
+file work, rotation, reservations or communication permissions. Malformed,
+oversized or unsafe existing history remains untouched. A write interrupted
+after replacement can be visible but unconfirmed; do not assert it is absent.
+
+Read `enrollment_order`, completed `episodes` and `pending_enrollment` together
+to distinguish an unvisited registration from registry/episode contention,
+formal reservations and a budget-interrupted tick. `file_posts_complete=false`
+still means partial counters. A busy invocation's zero applies only to that
+invocation, not the other worker. A missing or expired history entry cannot
+prove launchd failed to run: lock contention, the separate diagnostic budget
+and finite retention can also omit evidence. These diagnostics do not establish
+the cause of historical cadence gaps or prove an improvement in live latency.
+
+### Observing actual execution
+
 Check `executor-reask-scheduler-v1/STATUS.json` and the exact enrollment's
 last_execution separately from job registration. A file-only inquiry does not
 wake an idle supervisor. Supported PostToolUse context exposes it at a real tool

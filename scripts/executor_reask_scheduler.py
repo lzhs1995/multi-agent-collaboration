@@ -35,7 +35,7 @@ import configuration_guardian as guardian
 import executor_ready as ready
 import executor_reask as reask
 import executor_reask_protocol as protocol
-from cmux_evidence_io import read_bytes
+from cmux_evidence_io import open_regular_lock, read_bytes
 
 _IMPORTS_FINISHED_MONOTONIC = time.monotonic()
 
@@ -47,6 +47,10 @@ MAX_ENROLLMENTS = 256
 MAX_CHANNELS = 8
 MAX_SWEEP_SECONDS = 10.0
 SWEEP_INTERVAL_SECONDS = 60.0
+HISTORY_SCHEMA = 'executor-reask-sweep-history-v1'
+MAX_HISTORY_ENTRIES = 120
+MAX_HISTORY_BYTES = 512 * 1024
+MAX_HISTORY_SECONDS = 0.25
 BINDING_KEYS = ('caller_surface_uuid', 'supervisor', 'workspace_uuid', 'task_id',
                 'purpose', 'episode_id', 'channels', 'mailbox')
 LIVE_KEYS = ('workspace_uuid', 'caller_surface_uuid', 'target_surface_uuid', 'target_pane_uuid')
@@ -740,6 +744,85 @@ def _sweep_one(path, now, execution, *, verification=None):
     return row
 
 
+def _history_entry(result):
+    """Diagnostic facts only: no prompt bodies, reservation payloads or authority."""
+    keys = ('at_epoch', 'source', 'status', 'phase', 'phase_seconds', 'duration_seconds',
+            'file_posts', 'file_posts_complete', 'status_record_unchanged',
+            'previous_enrollment', 'last_enrollment', 'pending_enrollment',
+            'enrollment_order', 'cadence', 'startup_observation', 'error_type')
+    entry = {key: result[key] for key in keys if key in result}
+    entry.update(pid=os.getpid(), input_operations=0, episodes=[])
+    row_keys = ('enrollment', 'caller_surface_uuid', 'episode_id', 'status',
+                'file_posts', 'duration_seconds', 'next_due_epoch',
+                'reservation_inquiries_authorized', 'error_type')
+    for row in result.get('episodes', []):
+        compact = {key: row[key] for key in row_keys if key in row}
+        if 'paused_tasks' in row:
+            compact['paused_task_count'] = len(row['paused_tasks'])
+        entry['episodes'].append(compact)
+    return entry
+
+
+def record_history(result):
+    """Bound history independently; contention/failure cannot change sweep work.
+
+    STATUS retains the worker's rotation state. A competing worker may append
+    SCHEDULER_BUSY here but must never replace that STATUS. Missing history is
+    not proof that launchd did not run: this write has its own finite budget.
+    """
+    started = time.monotonic()
+    receipt = dict(status='HISTORY_UNCONFIRMED', phase='LOCK')
+    try:
+        with ready.runtime_limit(MAX_HISTORY_SECONDS):
+            secure_directory(root())
+            with open_regular_lock(root() / 'history.lock') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    receipt['status'] = 'HISTORY_BUSY'
+                    return receipt
+                receipt['phase'] = 'READ'
+                path = root() / 'SWEEP-HISTORY.json'
+                try:
+                    history = json.loads(read_bytes(path, limit=MAX_HISTORY_BYTES))
+                except FileNotFoundError:
+                    history = dict(schema=HISTORY_SCHEMA, entries=[])
+                if (not isinstance(history, dict) or history.get('schema') != HISTORY_SCHEMA
+                        or not isinstance(history.get('entries'), list)
+                        or len(history['entries']) > MAX_HISTORY_ENTRIES
+                        or not all(isinstance(entry, dict) for entry in history['entries'])):
+                    raise ValueError('invalid bounded sweep history')
+                receipt['phase'] = 'COMPACT'
+                entries = history['entries'] + [_history_entry(result)]
+                payload = dict(schema=HISTORY_SCHEMA, entries=[])
+                # Exact json.dump byte size, computed once per retained entry.
+                # Do not repeatedly serialize a full history while trimming it.
+                size = len(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+                for entry in reversed(entries[-MAX_HISTORY_ENTRIES:]):
+                    extra = len(json.dumps(entry, ensure_ascii=False).encode('utf-8'))
+                    extra += 2 if payload['entries'] else 0
+                    if size + extra > MAX_HISTORY_BYTES:
+                        if not payload['entries']:
+                            raise ValueError('one sweep exceeds the history byte budget')
+                        break
+                    payload['entries'].append(entry)
+                    size += extra
+                payload['entries'].reverse()
+                receipt['phase'] = 'WRITE'
+                ready.write_json(path, payload)
+                receipt.update(status='HISTORY_RECORDED', phase='COMPLETE',
+                               retained_entries=len(payload['entries']), bytes=size)
+    except ready.WaitBudgetExpired:
+        receipt['status'] = 'HISTORY_BUDGET_EXHAUSTED'
+    except Exception as exc:
+        # write_json can raise after replacement but before directory fsync.
+        # UNCONFIRMED does not assert that the record is absent.
+        receipt.update(status='HISTORY_UNCONFIRMED', error_type=type(exc).__name__)
+    finally:
+        receipt['duration_seconds'] = max(0, time.monotonic() - started)
+    return receipt
+
+
 def sweep(*, manifest=None, now=None, observe_startup=False):
     """A bounded zero-input sweep, skipping busy/mismatched/unenrolled episodes."""
     started = time.monotonic()
@@ -773,7 +856,12 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            return dict(result, status='SCHEDULER_BUSY')
+            phase('LOCK')
+            result.update(status='SCHEDULER_BUSY', file_posts_complete=True,
+                          status_record_unchanged=True,
+                          duration_seconds=max(0, time.monotonic() - started))
+            result['history'] = record_history(result)
+            return result
         try:
             with ready.runtime_limit(MAX_SWEEP_SECONDS):
                 # Preserve rotation before potentially slow full-release I/O.
@@ -785,6 +873,7 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
                 if not isinstance(last, str):
                     last = ''
                 result['last_enrollment'] = last
+                result['previous_enrollment'] = last
                 cursor_loaded = True
                 phase('VERIFY_RELEASE')
                 current = approved_release(manifest)
@@ -804,7 +893,9 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
                                 paths.append(Path(entry.path))
                 paths.sort()
                 start = bisect_right([path.name for path in paths], last)
-                for path in paths[start:] + paths[:start]:
+                ordered = paths[start:] + paths[:start]
+                result['enrollment_order'] = [path.name for path in ordered]
+                for path in ordered:
                     # Advance before work. A deadline inside a busy/slow caller
                     # must not starve everyone behind it on the next sweep.
                     result['last_enrollment'] = path.name
@@ -828,6 +919,7 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
         # return. Partial counters must never be presented as exact zero work.
         result['file_posts_complete'] = result['status'] == 'SWEPT'
         result['status_record_unchanged'] = not cursor_loaded
+        result['history'] = record_history(result)
         # If reading the legacy cursor itself timed out, retain its exact
         # source bytes and publish failure separately for the next sweep.
         target = 'STATUS.json' if cursor_loaded else 'LAST-ERROR.json'
