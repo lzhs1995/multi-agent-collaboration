@@ -30,6 +30,7 @@ MAX_RELEASE_FILES = 2048
 # Raw immutable manifests reviewed with LEGACY; never learn trust from a record
 # or from a manifest's self-reported version/tree hash.
 LEGACY_MANIFESTS = {
+    '0.4.52-0ca4d8002da7': '7fd8aae48af521d103525807c27e066fa0c761c40b430e2682d2b604d08b4fee',
     '0.4.51-587295817cef': 'eaa374d774766d606753a748c40dd3460dd518be09c9a2fc7ce80928014445a3',
     "0.4.50-3dd2945b5069": "4c91053a01d9a69e497635452330f15ed06a3931d4b50886c1e42e3d36bee2cc",
     "0.4.49-689dda6455be": "67c72f782ec5b055fe534b20b7bc7ba876a5a4914685d2877a32693d3ea81279",
@@ -52,6 +53,21 @@ LEGACY_MANIFESTS = {
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
 LEGACY = {
+    '0.4.52-0ca4d8002da7': {'VERSION': 'f69d7dffecc2ea5cde949a65edc36980a07c092dbace9d10a414e64287feb7a2',
+                             'scripts/executor_reask.py': '5273009e2c225081457c6594cc9fadfea077217376c5afc7ed2da694462c3bbb',
+                             'scripts/executor_ready.py': '1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79',
+                             'scripts/cmux_bridge.py': '84db1c47afdc4506a40c8b3696a9ddf8aa91e15a03e36d14c34efefe6bf0573a',
+                             'scripts/executor_reply.py': '160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312',
+                             'scripts/executor_reask_lifecycle.py': '9a93b642cf78f45eaaa713affaf0d5a9640faabc65970f474b1d5be11228fd09',
+                             'scripts/executor_reask_identity.py': 'c9a8542bb91d872bab910498083f478b6fded4c0dd867a208bc105acad7696a2',
+                             'scripts/executor_reask_protocol.py': 'e3eca6ce10934d12da3ad6dceb4c87224b5fa51acc4ed4d89d5bd7cb4c5c0ce6',
+                             'scripts/executor_reply_advisory.py': 'e2c76da58cf5b970d37627d57e984940776976cc6529bb553a9d1f841be822bb',
+                             'scripts/cmux_native_delivery.py': 'bd2249ec9f383f187b53c2036042ccabf3e968c509d5e31599cf6b13592fb656',
+                             'scripts/cmux_workspace_guard.py': '2fe39e7e1b545d7ac4a442c8e5f6d04bfd0343b506fbb6ae3feece182456e41b',
+                             'scripts/cmux_daemon_identity.py': '25e84742779316635d0e840d92b0213c903f46a3c96e5877eae087462745fdfb',
+                             'scripts/cmux_foreground_thread.py': '892cd5f401703e8b7f833cc1dd3a2aba2886fc1859b56b7bed681f5fd92b39b3',
+                             'scripts/cmux_coordination_paths.py': 'f8399aec9644a95bb05bd8b74048782c3e14b70dc9333aee9ca901cea94e8f32',
+                             'scripts/executor_reask_scheduler.py': 'bfdf1ec0d29515d5f5455045a4f728d3bb58d2c5d8ec8c03fc8388d8f3bb6524'},
     '0.4.51-587295817cef': {'VERSION': '5e726fc4c62b3affd1ce4bdf0bcb18b3ab9c0ce0827cb52fa14c7283ccb0d1f9',
                              'scripts/executor_reask.py': '5273009e2c225081457c6594cc9fadfea077217376c5afc7ed2da694462c3bbb',
                              'scripts/executor_ready.py': '1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79',
@@ -308,6 +324,27 @@ LEGACY = {
 # A historical issuer can only have enrolled controllers supported when it ran;
 # it cannot claim to have enrolled a future CURRENT or a subsequently added release.
 LEGACY_FILE_PROTOCOL = {
+    '0.4.52-0ca4d8002da7': {'descriptor': {'id': 'executor-reask-file-v1',
+                                            'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+                             'controllers': ('0.4.51-587295817cef',
+                                             '0.4.50-3dd2945b5069',
+                                             '0.4.49-689dda6455be',
+                                             '0.4.48-3b4304d24f90',
+                                             '0.4.47-46395e3b21e5',
+                                             '0.4.46-37e945dea2e3',
+                                             '0.4.44-2b9bce3b41eb',
+                                             '0.4.42-5947b2d1f8aa',
+                                             '0.4.41-28b36490b149',
+                                             '0.4.37-c7258c383218',
+                                             '0.4.36-8ab59dbb5a5a',
+                                             '0.4.35-e62f35828c7a',
+                                             '0.4.30-ff75100795a9',
+                                             '0.4.31-79ae83e9d5da',
+                                             '0.4.28-ae66245771d0',
+                                             '0.4.32-c7338a400bf4',
+                                             '0.4.33-09de16ceb823',
+                                             '0.4.34-d333557fb498',
+                                             '0.4.52-0ca4d8002da7')},
     '0.4.51-587295817cef': {'descriptor': {'id': 'executor-reask-file-v1',
                                             'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
                              'controllers': ('0.4.50-3dd2945b5069',
@@ -531,6 +568,21 @@ LEGACY_FILE_PROTOCOL = {
 }
 # Historical abilities are explicit and never inherit future FILES changes.
 LEGACY_CAPABILITIES = {
+    '0.4.52-0ca4d8002da7': {'controller_files': ('VERSION',
+                                                  'scripts/executor_reask.py',
+                                                  'scripts/executor_ready.py',
+                                                  'scripts/cmux_bridge.py',
+                                                  'scripts/executor_reply.py',
+                                                  'scripts/executor_reask_lifecycle.py',
+                                                  'scripts/executor_reask_identity.py',
+                                                  'scripts/executor_reask_protocol.py',
+                                                  'scripts/executor_reply_advisory.py',
+                                                  'scripts/cmux_native_delivery.py',
+                                                  'scripts/cmux_workspace_guard.py',
+                                                  'scripts/cmux_daemon_identity.py',
+                                                  'scripts/cmux_foreground_thread.py',
+                                                  'scripts/cmux_coordination_paths.py'),
+                             'reservation_inquiries': True},
     '0.4.51-587295817cef': {'controller_files': ('VERSION',
                                                   'scripts/executor_reask.py',
                                                   'scripts/executor_ready.py',

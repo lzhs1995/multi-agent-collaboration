@@ -1,4 +1,8 @@
-Current source: **0.4.52**. Recognize authenticated Claude Code versioned native
+Current source: **0.4.53**. Match the measured Claude 2.1.303 reference renderer
+without relaxing exact content or duplicate-input checks. See the
+[0.4.53 contract](references/release-0.4.53.md).
+
+The 0.4.52 release: Recognize authenticated Claude Code versioned native
 executables and settle handshake contract failures without duplicate input.
 Verify each upgraded client's actual process, startup settings, automatic hooks
 and real communication separately; see the [0.4.52 contract](references/release-0.4.52.md).

@@ -1,3 +1,9 @@
+## 0.4.53
+
+- Recognize the observed 180-column Claude 2.1.303 reference rows: a 172-character third row with 13 BODY padding cells, or 173 characters with 12 cells. Complete original contents and raw stability remain required.
+- Keep canonical unpadded drafts valid and reject altered markers, paths, hashes, lengths, borders, extra cells and queue duplicates.
+- Preserve the statically verified 0.4.52 protocol and its original 19-controller issuer scope. Existing working registrations need no stop/start.
+
 ## 0.4.52
 
 - Preserve the fully verified 0.4.51 file protocol and its original 18-controller issuer scope. Client upgrades require per-process automatic-hook verification; a new process does not inherit old consumer identity.
