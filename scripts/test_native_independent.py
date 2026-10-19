@@ -152,7 +152,7 @@ class NativeCase:
 
     def _ps(self, args, **kwargs):
         self.ps_calls.append(list(args))
-        if args == ["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,comm="]:
+        if args == ["/bin/ps", "-ww", "-U", str(os.getuid()), "-o", "pid=,comm="]:
             output = str(PID) + " " + self.process["executable"] + "\n"
         elif args == ["/bin/ps", "-p", str(PID), "-o", "tty="]:
             output = TTY + "\n"
@@ -676,4 +676,3 @@ class NativeSessionAcceptance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

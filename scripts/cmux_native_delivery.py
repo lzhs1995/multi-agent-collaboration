@@ -49,11 +49,33 @@ def _session_argument(p):
         raise NativeDeliveryError("NATIVE_SESSION_AMBIGUOUS")
     return found[0] if found else None
 
+_CLAUDE_NATIVE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+", re.ASCII)
+
+def _versioned_claude(p):
+    """Recognize the native install layout, never a version-shaped label alone."""
+    path = Path(p["executable"])
+    if (not path.is_absolute()
+            or path.parent != Path.home() / ".local/share/claude/versions"
+            or _CLAUDE_NATIVE_VERSION.fullmatch(path.name) is None):
+        return False
+    try:
+        st = path.stat()
+        argv0 = Path(p["argv"][0])
+        return (path.resolve(strict=True) == path
+                and argv0.is_absolute() and argv0.resolve(strict=True) == path
+                and stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid()
+                and bool(st.st_mode & 0o111) and not st.st_mode & 0o022
+                and p["file_identity"] == [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns])
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return False
+
 def _provider(p):
     name = Path(p["executable"]).name
     if name == "codex":
         return "codex"
     if name in ("claude", "claude.exe"):
+        return "claude"
+    if _versioned_claude(p):
         return "claude"
     if name == "node" and any("/@anthropic-ai/claude-code/" in arg
             and arg.endswith("/cli.js") for arg in p["argv"][1:3]):
@@ -113,14 +135,18 @@ def _tree_row(bridge, target):
     return rows[0]
 
 def _target_process(row):
-    listing = subprocess.run(["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,comm="],
+    listing = subprocess.run(["/bin/ps", "-ww", "-U", str(os.getuid()), "-o", "pid=,comm="],
                              capture_output=True, text=True, timeout=3, check=True)
     matches = []
     for line in listing.stdout.splitlines():
         fields = line.strip().split(None, 1)
         if len(fields) != 2 or not fields[0].isdigit():
             raise NativeDeliveryError("NATIVE_PROCESS_INVENTORY_INVALID")
-        if Path(fields[1]).name not in ("codex", "claude", "claude.exe", "node"):
+        # ps labels only admit discovery. The kernel executable and full native
+        # installation path must still pass _provider after the process read.
+        name = Path(fields[1]).name
+        if (name not in ("codex", "claude", "claude.exe", "node")
+                and _CLAUDE_NATIVE_VERSION.fullmatch(name) is None):
             continue
         try:
             p = identity.process(int(fields[0]), validate_argv=False)

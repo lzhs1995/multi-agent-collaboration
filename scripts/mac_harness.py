@@ -1989,6 +1989,21 @@ def _handshake_one(args, root, gate, item, per_executor):
         receipt["late_ack_recovered"] = False
         _write_handshake_receipt(root, per_executor)
         _info(f"{state} — polling the original nonce; no resend.")
+    except cmux.TaskPackContractError as e:
+        # A contract failure may precede the journal, or follow actual input.
+        # Settle this supervisor workflow without inventing NO_INPUT evidence
+        # or allowing a retry. Only preserve details returned by the sender.
+        handshake_evidence.record_dispatch(receipt, getattr(e, "details", None), failed=True)
+        failed_at = _now()
+        receipt.update(
+            status="FAIL", lifecycle="REJECTED", detector_side="supervisor",
+            attributable_to_executor=False, dispatch_error_type=type(e).__name__,
+            dispatch_error=str(e), error=str(e), dispatch_error_at=failed_at,
+            terminal_error_at=failed_at, updated_at=failed_at,
+        )
+        _write_handshake_receipt(root, per_executor)
+        _fail(f"SUPERVISOR_DISPATCH_CONTRACT_ERROR — {e}")
+        return False
 
     _info(f"Polling for PREFLIGHT_ACK (timeout={handshake_timeout}s, poll=3s)...")
     try:

@@ -1,3 +1,19 @@
+## Unreleased
+
+- Recognize native Claude executables under the current user's
+  `.local/share/claude/versions/<version>` directory using the actual executable,
+  argv target, file identity and permissions. Keep workspace, TTY, process birth
+  and ambiguity checks. A version-shaped process label only permits discovery.
+- Settle a handshake's supervisor workflow when the sender raises
+  `TaskPackContractError`, including lock contention before a journal exists.
+  Preserve any supplied original attempt and post-paste evidence. Missing
+  evidence stays unavailable; do not infer zero input, poll ACK or resend.
+- Cover partial multi-executor CLI failure so one successful ACK cannot certify
+  the whole panel, and a later failed executor does not cause further dispatch.
+
+These changes do not renew an old episode's process binding, recover an existing
+stranded draft, or demonstrate current-client hook execution or native receipt.
+
 ## 0.4.51
 
 - Remove the stale idle-preflight instruction from the automatic executor reply
