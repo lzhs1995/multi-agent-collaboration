@@ -313,8 +313,8 @@ def identify_surface(surface_ref, workspace=None, window=None):
     """
     Return identity details for an explicit surface.
 
-    This is used by the harness to prove the executor is in a different pane
-    from the supervisor when a new side split panel is required.
+    The harness records the executor's actual terminal placement. Existing
+    terminals may share a pane while retaining distinct surface identities.
     """
     args = ["identify", "--surface", surface_ref, "--json"]
     if workspace:

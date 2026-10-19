@@ -1028,7 +1028,7 @@ def cmd_identity_gate(args):
     # below has exactly one code path for one executor and for many.
     executor_refs = executor_refs or [executor_ref]
 
-    # Every executor must clear identity and side-panel validation before any
+    # Every executor must clear identity and terminal-channel validation before any
     # marker is written. Failing here writes a FAIL gate and no marker at all,
     # so a partially-validated set can never be armed.
     identities = {}
@@ -1061,42 +1061,8 @@ def cmd_identity_gate(args):
                 "updated_at": _now(),
             }
             _write(root / "identity-gate.json", gate)
-            _fail(f"EXECUTOR_IDENTITY_UNAVAILABLE — cannot prove {ref} is a visible side panel")
+            _fail(f"EXECUTOR_IDENTITY_UNAVAILABLE — cannot authenticate terminal {ref}")
             sys.exit(1)
-
-    # side_panel holds only when every executor pane exists, differs from the
-    # supervisor pane, and differs from every other executor pane. Two executors
-    # sharing a pane are not two visible panels.
-    seen_panes = {}
-    for ref in executor_refs:
-        pane = identities[ref].get("pane_ref", "")
-        conflict = ""
-        if not me.get("pane_ref") or not pane:
-            conflict = "missing pane_ref"
-        elif pane == me.get("pane_ref"):
-            conflict = f"shares supervisor pane {pane}"
-        elif pane in seen_panes:
-            conflict = f"shares pane {pane} with {seen_panes[pane]}"
-        if conflict:
-            gate = {
-                "task_id": args.task_id,
-                "status": "FAIL",
-                "reason": "EXECUTOR_NOT_SIDE_PANEL",
-                "workspace_ref": me["workspace_ref"],
-                "supervisor": supervisor_ref,
-                "supervisor_pane_ref": me.get("pane_ref", ""),
-                "executor": ref,
-                "executor_pane_ref": pane,
-                "executors": executor_refs,
-                "failed_executor": ref,
-                "conflict": conflict,
-                "required": "every executor pane must differ from the supervisor pane and from each other; use cmux new-split right|left|up|down",
-                "updated_at": _now(),
-            }
-            _write(root / "identity-gate.json", gate)
-            _fail(f"EXECUTOR_NOT_SIDE_PANEL — {ref} {conflict}")
-            sys.exit(1)
-        seen_panes[pane] = ref
 
     executor_identity = identities[executor_ref]
     uuid_map = cmux.surface_uuid_map()
@@ -1118,14 +1084,14 @@ def cmd_identity_gate(args):
             "surface_uuid": uuid,
             "workspace_ref": ws_ref,
             "pane_ref": pane_ref,
+            "workspace_uuid": workspace_proofs[ref]["workspace_uuid"],
+            "pane_uuid": workspace_proofs[ref]["target_pane_uuid"],
+            "surface_type": identities[ref].get("surface_type"),
         })
 
-    import cmux_hook_scope as hook_scope
-    native_participants = hook_scope.bind_participants(cmux, workspace_uuid, [
-        dict(role="supervisor", surface_uuid=supervisor_uuid, provider=supervisor_provider),
-        *[dict(role="executor", surface_uuid=p["surface_uuid"], provider=p["provider"])
-          for p in executors_list],
-    ])
+    panes = [p["pane_ref"] for p in executors_list]
+    side_panel = bool(me.get("pane_ref") and all(panes)
+                      and me["pane_ref"] not in panes and len(set(panes)) == len(panes))
 
     gate = {
         "task_id": args.task_id,
@@ -1136,6 +1102,8 @@ def cmd_identity_gate(args):
         "supervisor_provider": supervisor_provider,
         "supervisor_pane_ref": me["pane_ref"],
         "supervisor_surface_uuid": supervisor_uuid,
+        "supervisor_pane_uuid": workspace_proofs[executor_ref]["caller_pane_uuid"],
+        "supervisor_surface_type": me.get("surface_type"),
         # Singular fields for compatibility: fill from the first executor.
         "executor": executor_ref,
         "executor_provider": provider_overrides.get(executor_ref, executor_provider),
@@ -1144,14 +1112,29 @@ def cmd_identity_gate(args):
         "executor_surface_uuid": executor_uuid,
         # New field holding all executors.
         "executors": executors_list,
-        "panel_mode": spawned.get("panel_mode") if spawned else "existing-side-panel",
+        "panel_mode": spawned.get("panel_mode") if spawned else (
+            "existing-side-panel" if side_panel else "existing-terminal-tabs"),
         "panel_direction": args.direction if spawned else "",
-        "side_panel": True,
+        "side_panel": side_panel,
+        "terminal_channels_version": 1,
         "identity_source": "live-caller+live-tree+same-workspace-uuid",
         "workspace_proofs": workspace_proofs,
-        "native_participants": native_participants,
         "updated_at": _now(),
     }
+    from cmux_terminal_channels import check_gate
+    gate["terminal_channels"] = check_gate(gate)
+    if not gate["terminal_channels"]["pass"]:
+        gate.update(status="FAIL", reason="EXECUTOR_CHANNEL_IDENTITY_INVALID")
+        _write(root / "identity-gate.json", gate)
+        _fail("EXECUTOR_CHANNEL_IDENTITY_INVALID — " + gate["terminal_channels"].get("reason", ""))
+        sys.exit(1)
+    import cmux_hook_scope as hook_scope
+    native_participants = hook_scope.bind_participants(cmux, workspace_uuid, [
+        dict(role="supervisor", surface_uuid=supervisor_uuid, provider=supervisor_provider),
+        *[dict(role="executor", surface_uuid=p["surface_uuid"], provider=p["provider"])
+          for p in executors_list],
+    ])
+    gate["native_participants"] = native_participants
     _write(root / "identity-gate.json", gate)
     arm_task(
         args.task_id, root, supervisor=supervisor_ref,
@@ -2117,11 +2100,8 @@ def cmd_validate(args):
     }
 
     gate_data = _read(root / "identity-gate.json") or {}
-    # side_panel holds only when EVERY executor occupies its own visible pane.
-    # Checking just the singular executor_pane_ref passed a three-executor gate
-    # where executors 2 and 3 shared a pane with each other — two agents in one
-    # pane are not two visible panels, and the user cannot watch what is not
-    # separately displayed.
+    # Retain the actual pane layout as a diagnostic. New gates independently
+    # prove distinct terminal identities; sharing a pane does not deny messages.
     sup_pane = gate_data.get("supervisor_pane_ref", "")
     exec_panes = []
     for item in _gate_executors(gate_data):
@@ -2150,12 +2130,20 @@ def cmd_validate(args):
         "all_panes_distinct": bool(panes) and len(set(panes)) == len(panes),
         "panel_mode": gate_data.get("panel_mode", ""),
     }
+    channel_ok = side_panel_ok  # Historical gates keep their original contract.
+    if "terminal_channels_version" in gate_data:
+        from cmux_terminal_channels import check_gate
+        checks["terminal_channels"] = check_gate(gate_data)
+        channel_ok = checks["terminal_channels"]["pass"]
+        checks["side_panel"]["advisory"] = True
+        if channel_ok and not side_panel_ok:
+            checks["side_panel"]["status"] = "SHARED_PANE"
 
     gate_pass      = checks.get("identity_gate", {}).get("pass", False)
     naming_pass    = checks.get("naming_proof",  {}).get("pass", False)
     handshake_pass = checks.get("handshake",     {}).get("pass", False) and handshake_strict_ok
 
-    overall = "PASS" if (gate_pass and naming_pass and handshake_pass and side_panel_ok) else "FAIL"
+    overall = "PASS" if (gate_pass and naming_pass and handshake_pass and channel_ok) else "FAIL"
 
     validation = {
         "task_id": task_id,
@@ -2170,7 +2158,8 @@ def cmd_validate(args):
     if overall == "PASS":
         _ok("validation PASS — ready for task dispatch")
     else:
-        failing = [k for k, v in checks.items() if not v.get("pass", False) and k != "bridge_test"]
+        failing = [k for k, v in checks.items() if not v.get("pass", False)
+                   and not v.get("advisory", False)]
         _fail(f"validation FAIL — failing checks: {failing}")
         sys.exit(1)
 

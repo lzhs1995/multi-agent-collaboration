@@ -250,8 +250,8 @@ whole composer before every submit. See [input collisions](references/input-coll
   one-time authorization supported by the panel guard.
 - Discover the caller workspace with the installed `cmux-agent self` before selecting
   peers. Bind UUIDs and current role-map evidence, not remembered surface numbers,
-  titles, or another workspace's focused panel. Claude terminal peers must be visible
-  side splits. The explicitly authorized same-pane Codex native route is separate.
+  titles, or another workspace's focused panel. Distinct existing terminal tabs
+  may share a pane; retain exact surface identities and serialize input per pane.
   A new peer requires explicit authorization plus both
   `--spawn --spawn-authorized`; never create an agent tab as a shortcut.
 - The supervisor owns scope, authorization, final acceptance and evidence review.
@@ -265,8 +265,8 @@ whole composer before every submit. See [input collisions](references/input-coll
 ## Current caller and authorized peers
 
 Resolve the live caller through `cmux-agent self` or `caller_snapshot`, then pin
-both endpoints in the current tree. Ordinary messages default to peers in distinct
-panes of the same workspace. An explicitly authorized successor or maintenance
+both endpoints in the current tree. Ordinary messages address distinct terminal
+surfaces in the same workspace, including existing tabs in one pane. An explicitly authorized successor or maintenance
 coordinator may use `successor-rebind-v2` for the exact designated cross-workspace
 peer. Do not infer a new task, shared writer or replacement session from permission
 to communicate. Raw terminal writes remain outside the supported sender.
@@ -399,8 +399,8 @@ for timestamp boundaries and the limits of detected-to-consumed observations.
   error as executor unavailability or bypass workspace/compose guards.
 - Two user-authorized existing executors are useful for independent bounded
   tasks. Give each a separate task id, nonce, artifact root and write scope;
-  shared repositories have one writer. Two tabs in one executor pane are not
-  two independent UI channels: serialize input and recheck exact surface UUIDs.
+  shared repositories have one writer. Two tabs in one executor pane retain
+  separate surface identities: serialize input and recheck exact surface UUIDs.
   Supervisors continue independent work while callbacks are pending. Persistent
   executor failures use the authorized solo takeover boundary below.
 

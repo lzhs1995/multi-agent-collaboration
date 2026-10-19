@@ -143,6 +143,33 @@ class BridgeContinuationTests(unittest.TestCase):
         self.screen.assert_not_called()
         self.fixture.send.assert_not_called()
 
+    def test_new_shared_pane_gate_uses_complete_channel_evidence(self):
+        workspace, caller, target, pane = [
+            f'00000000-0000-4000-8000-{i:012d}' for i in range(1, 5)]
+        self.gate.update(workspace_uuid=workspace, supervisor_surface_uuid=caller,
+                         supervisor_pane_ref='pane:1', supervisor_pane_uuid=pane,
+                         supervisor_surface_type='terminal', side_panel=False,
+                         terminal_channels_version=1, executor='target',
+                         executor_surface_uuid=target, executor_pane_ref='pane:1')
+        self.gate['executors'][0].update(surface_uuid=target, pane_ref='pane:1',
+                                         pane_uuid=pane, surface_type='terminal',
+                                         workspace_ref='workspace:1', workspace_uuid=workspace)
+        self.gate['workspace_proofs']['target'] = dict(
+            workspace_uuid=workspace, workspace_ref='workspace:1',
+            caller_surface_uuid=caller, caller_surface_ref='caller', caller_pane_uuid=pane,
+            target_surface_uuid=target, target_surface_ref='target', target_pane_uuid=pane)
+        for row, surface in zip(self.gate['native_participants'], (caller, target)):
+            row['surface_uuid'] = surface
+        original = dict(self.row, executors=[self.row])
+        peer, row = continuation.eligible(harness, self.gate, original)
+        self.assertEqual(peer['surface_uuid'], target)
+        self.assertEqual(row, self.row)
+        self.gate['workspace_proofs']['target']['target_pane_uuid'] = workspace
+        with self.assertRaisesRegex(ValueError, 'BRIDGE_ORIGINAL_SINGLE_CLAUDE_REQUIRED'):
+            continuation.eligible(harness, self.gate, original)
+        self.fixture.send.assert_not_called()
+        self.fixture.key.assert_not_called()
+
     def test_original_token_once_archived_original_writer_and_same_reservation(self):
         original = (self.root / 'bridge-test-evidence.json').read_bytes()
         result = self.run_probe(apply=True)

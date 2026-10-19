@@ -240,10 +240,11 @@ class NativeSamePaneTests(MaintenanceRebindTests):
         self.artifact.update(authorization_record={'path': str(path), 'sha256': digest},
                              authorization_record_sha256=digest)
 
-    def test_same_pane_requires_explicit_native_authorization(self):
+    def test_same_pane_terminal_contact_uses_exact_maintenance_authorization(self):
         self.same_pane(native=False)
-        with self.assertRaisesRegex(s.SuccessorRebindError, 'distinct terminals'):
-            s.resolve_pair(self.identity, self.tree, self.artifact)
+        result = s.resolve_pair(self.identity, self.tree, self.artifact)
+        self.assertEqual(result['target']['pane_uuid'], CALLER_PANE)
+        self.assertNotEqual(result['caller']['surface_uuid'], result['target']['surface_uuid'])
 
     def test_same_pane_native_pair_with_original_threads(self):
         self.same_pane()

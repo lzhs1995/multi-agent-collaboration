@@ -80,9 +80,21 @@ class ScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.WorkspaceScopeError, 'changed'):
             self.resolve(expected={'workspace_uuid': X})
 
-    def test_same_pane(self):
+    def test_same_pane_uuid_cannot_name_different_pane_refs(self):
         self.workspace['panes'][1]['id'] = P
-        with self.assertRaisesRegex(guard.WorkspaceScopeError, 'side pane'):
+        with self.assertRaisesRegex(guard.WorkspaceScopeError, 'pane reference/UUID'):
+            self.resolve()
+
+    def test_distinct_terminal_tabs_in_one_pane_are_supported(self):
+        peer = self.workspace['panes'].pop()['surfaces'][0]
+        self.workspace['panes'][0]['surfaces'].append(peer)
+        proof = self.resolve()
+        self.assertEqual(proof['caller_pane_uuid'], proof['target_pane_uuid'])
+        self.assertNotEqual(proof['caller_surface_uuid'], proof['target_surface_uuid'])
+
+    def test_same_pane_ref_cannot_name_different_uuids(self):
+        self.workspace['panes'][1]['ref'] = 'pane:1'
+        with self.assertRaisesRegex(guard.WorkspaceScopeError, 'pane reference/UUID'):
             self.resolve()
 
     def test_self(self):
