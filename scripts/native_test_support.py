@@ -141,7 +141,7 @@ class NativeFixture(contextlib.AbstractContextManager):
         return copy.deepcopy(self.process_state)
 
     def _ps(self, args, **kwargs):
-        if args[:2] == ["/bin/ps", "-U"]:
+        if args[:3] == ["/bin/ps", "-ww", "-U"]:
             output = str(self.process_state["pid"]) + " " + self.process_state["executable"] + "\n"
         elif args[:2] == ["/bin/ps", "-p"]:
             output = self.process_tty + "\n"
