@@ -1,4 +1,9 @@
-Current source: **0.4.49**. Explicit inquiry re-enrollment by the original executor
+Current source: **0.4.50**. Bounded sweep history records scheduler timing,
+rotation and contention without changing file inquiries. The complete reviewed
+0.4.49 file protocol keeps its original authority. See the
+[0.4.50 release contract](references/release-0.4.50.md).
+
+Explicit inquiry re-enrollment by the original executor
 can preview past its previous stop while preserving formal reservations. The
 existing registration transaction clears that stop only after commit. Continuing
 reservation inquiries require explicit authorization; installed versions do not

@@ -9,7 +9,13 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.49.** An authenticated original executor can explicitly stop an
+**Version: 0.4.50.** The file scheduler retains bounded sweep history with an
+independent nonblocking lock and diagnostic budget. History records timing,
+rotation and contention without changing file inquiries or old registration
+authority. Missing history does not establish a root cause or prove no work
+occurred. See the [0.4.50 release contract](references/release-0.4.50.md).
+
+An authenticated original executor can explicitly stop an
 old inquiry episode and register a new one with `--resume-stopped`. Registration
 previews retain the old stop until the transaction commits and preserve recorded
 formal reservations. New reservation inquiries still require explicit continuing
