@@ -84,8 +84,11 @@ def resolve_snapshot(identity, tree, target, *, env=None, expected=None):
             deny("environment/live caller disagreement: " + env_key)
     if me["workspace_uuid"] != peer["workspace_uuid"]:
         deny(f"caller {me['workspace_ref']} and target {peer['workspace_ref']} differ")
-    if me["surface_uuid"] == peer["surface_uuid"] or me["pane_uuid"] == peer["pane_uuid"]:
-        deny("executor must be another terminal side pane")
+    if me["surface_uuid"] == peer["surface_uuid"]:
+        deny("caller and executor must be distinct terminal surfaces")
+    if ((me["pane_uuid"] == peer["pane_uuid"])
+            != (me["pane_ref"] == peer["pane_ref"])):
+        deny("pane reference/UUID disagreement")
     if me["surface_type"] != "terminal" or peer["surface_type"] != "terminal":
         deny("caller and executor must be terminal surfaces")
     binding = {"caller_surface_uuid": me["surface_uuid"],

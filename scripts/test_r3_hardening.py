@@ -23,6 +23,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -3096,6 +3097,10 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
 
     SUP = "surface:1"
 
+    @staticmethod
+    def uid(label):
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, label)).upper()
+
     def setUp(self):
         super().setUp()
         self.root = Path(tempfile.mkdtemp())
@@ -3108,8 +3113,8 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         active = mock.patch.object(HARNESS, "_ACTIVE_DIR", self.root / "_active")
         active.start()
         self.addCleanup(active.stop)
-        env = mock.patch.dict(os.environ, {"CMUX_WORKSPACE_ID": "ws-uuid",
-                                           "CMUX_SURFACE_ID": "sup-uuid"})
+        env = mock.patch.dict(os.environ, {"CMUX_WORKSPACE_ID": self.uid("workspace:10"),
+                                           "CMUX_SURFACE_ID": self.uid(self.SUP)})
         env.start()
         self.addCleanup(env.stop)
 
@@ -3125,19 +3130,28 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                     "window_ref": "window:1"}
         return side
 
-    def _run_gate(self, refs, panes=None, provider="codex"):
+    def _run_gate(self, refs, panes=None, provider="codex", proof_overrides=None):
         """cmd_identity_gate with N explicit executor refs."""
         plain = [r.partition("=")[0] for r in refs]
         panes = panes or {r: f"pane:{i + 1}" for i, r in enumerate(plain)}
-        uuid_map = {r: {"surface_id": f"uuid-{r.split(':')[-1]}",
-                        "workspace_id": "ws-uuid"} for r in plain}
-        uuid_map[self.SUP] = {"surface_id": "sup-uuid", "workspace_id": "ws-uuid"}
+        uuid_map = {r: {"surface_id": self.uid(r),
+                        "workspace_id": self.uid("workspace:10")} for r in plain}
+        uuid_map[self.SUP] = {"surface_id": self.uid(self.SUP), "workspace_id": self.uid("workspace:10")}
+        def pin(ref, **kwargs):
+            proof = dict(workspace_uuid=self.uid("workspace:10"), workspace_ref="workspace:10",
+                        caller_surface_uuid=self.uid(self.SUP), caller_surface_ref=self.SUP,
+                        caller_pane_uuid=self.uid("pane:0"),
+                        target_surface_uuid=self.uid(ref), target_surface_ref=ref,
+                        target_pane_uuid=self.uid(panes.get(ref, "unknown")))
+            proof.update((proof_overrides or {}).get(ref, {}))
+            return proof
         with (
+            mock.patch.object(HARNESS.cmux, "pin_workspace", side_effect=pin),
             mock.patch.object(HARNESS.cmux, "whoami", return_value={
                 "workspace_ref": "workspace:10", "surface_ref": self.SUP,
                 "surface_type": "terminal", "pane_ref": "pane:0",
-                "window_ref": "window:1", "workspace_id": "ws-uuid",
-                "surface_id": "sup-uuid"}),
+                "window_ref": "window:1", "workspace_id": self.uid("workspace:10"),
+                "surface_id": self.uid(self.SUP)}),
             mock.patch.object(HARNESS.cmux, "identify_surface",
                               side_effect=self._identify(panes)),
             mock.patch.object(HARNESS.cmux, "surface_uuid_map", return_value=uuid_map),
@@ -3167,7 +3181,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         self.assertEqual(g["executor_provider"], "codex")
         self.assertEqual(g["executor_pane_ref"], "pane:1")
         self.assertEqual(g["executor_workspace_ref"], "workspace:10")
-        self.assertEqual(g["executor_surface_uuid"], "uuid-2")
+        self.assertEqual(g["executor_surface_uuid"], self.uid("surface:2"))
         # The new list exists even for one executor, so readers never have to
         # branch on its absence.
         self.assertEqual(len(g["executors"]), 1)
@@ -3181,11 +3195,11 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         # every executor is role "executor" and order lives in ordinal. Keying
         # on ordinal here rather than on array position, per that schema.
         marker = json.loads(next(
-            (self.root / "_active" / "ws-uuid").glob("*.json")).read_text())
+            (self.root / "_active" / self.uid("workspace:10")).glob("*.json")).read_text())
         by_ord = {p["ordinal"]: p for p in marker["participants"]}
         self.assertEqual(by_ord[0]["role"], "supervisor")
-        self.assertEqual(by_ord[1]["surface_uuid"], "uuid-2")
-        self.assertEqual(by_ord[2]["surface_uuid"], "uuid-3")
+        self.assertEqual(by_ord[1]["surface_uuid"], self.uid("surface:2"))
+        self.assertEqual(by_ord[2]["surface_uuid"], self.uid("surface:3"))
         self.assertEqual({p["role"] for p in marker["participants"]},
                          {"supervisor", "executor"})
 
@@ -3203,7 +3217,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                          ["codex", "claude", "grok"])
         self.assertEqual(g["executor_provider"], "codex")
         marker = json.loads(next(
-            (self.root / "_active" / "ws-uuid").glob("*.json")).read_text())
+            (self.root / "_active" / self.uid("workspace:10")).glob("*.json")).read_text())
         by_ord = {p["ordinal"]: p for p in marker["participants"]}
         self.assertEqual(by_ord[0]["provider"], "codex")
         self.assertEqual(by_ord[1]["provider"], "codex")
@@ -3230,7 +3244,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
     # -- identity-gate poison cases: no marker on any failure ---------------
 
     def _markers(self):
-        d = self.root / "_active" / "ws-uuid"
+        d = self.root / "_active" / self.uid("workspace:10")
         return sorted(d.glob("*.json")) if d.exists() else []
 
     def _expect_gate_failure(self, refs, reason, panes=None):
@@ -3246,26 +3260,57 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                          "a failed identity-gate must not arm a marker")
         return g
 
-    def test_two_executors_sharing_one_pane_is_refused(self):
-        """POISON: executors 2 and 3 in the same pane.
+    def test_two_existing_executors_sharing_one_pane_are_supported(self):
+        code, _, _, _ = self._handshake(["surface:2", "surface:3", "surface:4"],
+                           panes={"surface:2": "pane:1", "surface:3": "pane:2",
+                                  "surface:4": "pane:2"})
+        self.assertIsNone(code)
+        g = json.loads((self.root / "identity-gate.json").read_text())
+        self.assertEqual(g["status"], "PASS")
+        self.assertFalse(g["side_panel"])
+        self.assertEqual(g["panel_mode"], "existing-terminal-tabs")
+        self.assertEqual(g["terminal_channels"]["shared_panes"], ["pane:2"])
+        self.assertTrue(self._markers())
+        with mock.patch.object(HARNESS.cmux, "rename_tab"):
+            HARNESS.cmd_name_surfaces(self._gate_args())
+        validated = self._validate()
+        self.assertEqual(validated["status"], "PASS")
+        self.assertTrue(validated["checks"]["terminal_channels"]["pass"])
+        self.assertEqual(validated["checks"]["side_panel"]["status"], "SHARED_PANE")
 
-        Two agents in one pane are not two visible panels. The old check only
-        compared each executor against the supervisor, so this passed.
-        """
-        g = self._expect_gate_failure(
-            ["surface:2", "surface:3", "surface:4"],
-            "EXECUTOR_NOT_SIDE_PANEL",
-            panes={"surface:2": "pane:1", "surface:3": "pane:2",
-                   "surface:4": "pane:2"})
-        self.assertEqual(g["failed_executor"], "surface:4")
-        self.assertIn("shares pane pane:2 with surface:3", g["conflict"])
+    def test_existing_executor_in_supervisor_pane_is_supported(self):
+        code, _, _, _ = self._handshake(["surface:2", "surface:3"],
+                           panes={"surface:2": "pane:1", "surface:3": "pane:0"})
+        self.assertIsNone(code)
+        g = json.loads((self.root / "identity-gate.json").read_text())
+        self.assertEqual(g["terminal_channels"]["shared_panes"], ["pane:0"])
+        self.assertFalse(g["side_panel"])
+        with mock.patch.object(HARNESS.cmux, "rename_tab"):
+            HARNESS.cmd_name_surfaces(self._gate_args())
+        validated = self._validate()
+        self.assertEqual(validated["status"], "PASS")
 
-    def test_executor_sharing_the_supervisor_pane_is_refused(self):
-        g = self._expect_gate_failure(
-            ["surface:2", "surface:3"], "EXECUTOR_NOT_SIDE_PANEL",
-            panes={"surface:2": "pane:1", "surface:3": "pane:0"})
-        self.assertEqual(g["failed_executor"], "surface:3")
-        self.assertIn("shares supervisor pane", g["conflict"])
+    def test_duplicate_uuid_or_invalid_channel_proof_never_arms(self):
+        for changes in ({"target_surface_uuid": self.uid(self.SUP)},
+                        {"target_surface_uuid": "not-a-uuid"},
+                        {"target_pane_uuid": self.uid("pane:1")},
+                        {"caller_pane_uuid": self.uid("different-pane")}):
+            with self.subTest(changes=changes), self.assertRaises(SystemExit):
+                self._run_gate(["surface:2", "surface:3"],
+                               proof_overrides={"surface:3": changes})
+            self.assertEqual(self._markers(), [])
+            gate = json.loads((self.root / "identity-gate.json").read_text())
+            self.assertEqual(gate["reason"], "EXECUTOR_CHANNEL_IDENTITY_INVALID")
+
+    def test_new_channel_evidence_cannot_use_legacy_layout_fallback(self):
+        g = self._run_gate(["surface:2", "surface:3"])
+        from cmux_terminal_channels import check_gate
+        for key in ("workspace_proofs", "supervisor_pane_uuid", "executors"):
+            changed = dict(g)
+            del changed[key]
+            self.assertFalse(check_gate(changed)["pass"])
+        for version in (True, None, 2):
+            self.assertFalse(check_gate(dict(g, terminal_channels_version=version))["pass"])
 
     def test_the_same_ref_passed_twice_is_refused(self):
         """POISON: --executor-surface surface:2 --executor-surface surface:2.
@@ -3375,7 +3420,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
 
     # -- handshake: one nonce per executor ----------------------------------
 
-    def _handshake(self, refs, answer=None):
+    def _handshake(self, refs, answer=None, panes=None):
         """cmd_handshake over an armed + bridge-tested N-executor gate.
 
         The real cmux.wait_for_ack is left in place and fed through read_screen.
@@ -3386,7 +3431,10 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         `answer` maps surface_ref -> a callable(nonces_by_surface) -> screen
         text. The default answer returns that surface's own correct ACK line.
         """
-        self._bridge(refs)
+        if panes is None:
+            self._bridge(refs)
+        else:
+            self._run_gate(refs, panes=panes)
         # Each executor must ACK under ITS OWN provider: the expected line embeds
         # `<provider>:identity`, so a heterogeneous panel cannot be answered with
         # one provider string.
@@ -3589,7 +3637,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         self.assertEqual(rm["executor2"]["provider"], "claude")
         self.assertEqual(rm["executor2"]["display"], "EXECUTOR_2")
 
-    # -- validate: every executor needs its own visible pane ----------------
+    # -- validate: every executor needs a consistent terminal identity -------
 
     def _validate(self, expect_exit=None):
         code = None
@@ -3602,33 +3650,29 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
             self.assertEqual(code, expect_exit)
         return json.loads((self.root / "validation.json").read_text())
 
-    def test_side_panel_requires_all_executor_panes_distinct(self):
-        """POISON: executors 2 and 3 share a pane.
-
-        identity-gate refuses this outright, so reach validate by editing the
-        gate file — which is also the drift case: a gate written by an older
-        harness, or hand-edited, must still not clear side_panel.
-        """
+    def test_changed_executor_pane_ref_cannot_pass_channel_proof(self):
+        """Changing only the recorded pane ref disagrees with its UUID proof."""
         self._run_gate(["surface:2", "surface:3", "surface:4"])
         p = self.root / "identity-gate.json"
         gate = json.loads(p.read_text())
         gate["executors"][2]["pane_ref"] = gate["executors"][1]["pane_ref"]
         p.write_text(json.dumps(gate))
         v = self._validate(expect_exit=1)
+        self.assertFalse(v["checks"]["terminal_channels"]["pass"])
         self.assertFalse(v["checks"]["side_panel"]["pass"])
         self.assertFalse(v["checks"]["side_panel"]["all_panes_distinct"])
         self.assertEqual(v["checks"]["side_panel"]["executor_count"], 3)
 
-    def test_side_panel_requires_no_executor_in_the_supervisor_pane(self):
+    def test_changed_supervisor_pane_alias_cannot_pass_channel_proof(self):
         self._run_gate(["surface:2", "surface:3"])
         p = self.root / "identity-gate.json"
         gate = json.loads(p.read_text())
         gate["executors"][1]["pane_ref"] = gate["supervisor_pane_ref"]
         p.write_text(json.dumps(gate))
         v = self._validate(expect_exit=1)
+        self.assertFalse(v["checks"]["terminal_channels"]["pass"])
         self.assertFalse(v["checks"]["side_panel"]["pass"])
-        # Panes are distinct from each other here; the supervisor clash is
-        # a separate condition and must fail on its own.
+        # Executor refs remain distinct, but this alias contradicts their pins.
         self.assertTrue(v["checks"]["side_panel"]["all_panes_distinct"])
 
     def test_side_panel_passes_for_three_distinct_panes(self):

@@ -314,14 +314,15 @@ class HelperEntrypointTests(unittest.TestCase):
         self.assertFalse(result["confirmed"])
         self.assertEqual(self.events("submit"), [])
 
-    def test_broadcast_only_original_same_workspace_side_panes(self):
+    def test_broadcast_original_workspace_terminals_including_same_pane_tab(self):
         self.data["rows"] += [row("surface:4", C, "4", workspace="99999999-9999-4999-8999-999999999999"),
                               row("surface:5", "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "1"),
                               row("surface:6", "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "6", kind="browser")]
         self.save()
         first = self.assert_exit(self.call("broadcast", "STATUS: sync"), 0)
-        self.assertEqual(len(first["recipients"]), 2)
-        self.assertEqual({e["surface"] for e in self.events("fixture_paste")}, {A, B})
+        self.assertEqual(len(first["recipients"]), 3)
+        self.assertEqual({e["surface"] for e in self.events("fixture_paste")},
+                         {A, B, "dddddddd-dddd-4ddd-8ddd-dddddddddddd"})
         self.data["rows"].append(row("surface:7", "ffffffff-ffff-4fff-8fff-ffffffffffff", "7"))
         self.data["rows"].reverse()
         for member in self.data["rows"]:
@@ -329,8 +330,8 @@ class HelperEntrypointTests(unittest.TestCase):
                 member[key] = member[key].upper()
         self.save()
         second = self.assert_exit(self.call("broadcast", "STATUS: sync"), 0)
-        self.assertEqual(len(second["recipients"]), 2)
-        self.assertEqual(len(self.events("fixture_paste")), 2)
+        self.assertEqual(len(second["recipients"]), 3)
+        self.assertEqual(len(self.events("fixture_paste")), 3)
         self.assertEqual([x["marker"] for x in first["recipients"]], [x["marker"] for x in second["recipients"]])
 
     def test_broadcast_group_drift_prevents_first_input(self):

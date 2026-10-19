@@ -254,8 +254,16 @@ def resolve_pair(identity, tree, artifact, *, env=None, now=None):
     if native_same_pane and (me["workspace_uuid"] != target["workspace_uuid"]
                              or me["pane_uuid"] != target["pane_uuid"]):
         _deny("native same-pane transport requires the pinned shared pane")
-    if me["surface_uuid"] == target["surface_uuid"] or (me["pane_uuid"] == target["pane_uuid"] and not native_same_pane):
+    if me["surface_uuid"] == target["surface_uuid"]:
         _deny("caller and target must be distinct terminals")
+    if me["pane_uuid"] == target["pane_uuid"] and (
+            me["workspace_uuid"] != target["workspace_uuid"]
+            or me["pane_ref"] != target["pane_ref"]):
+        _deny("shared pane identity disagreement")
+    if (me["workspace_uuid"] == target["workspace_uuid"]
+            and me["pane_ref"] == target["pane_ref"]
+            and me["pane_uuid"] != target["pane_uuid"]):
+        _deny("pane reference/UUID disagreement")
     env = env or {}
     if env.get("CMUX_SURFACE_ID") and _uuid(env["CMUX_SURFACE_ID"], "CMUX_SURFACE_ID") != me["surface_uuid"]:
         _deny("environment/live caller disagreement")

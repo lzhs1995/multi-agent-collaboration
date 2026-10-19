@@ -391,8 +391,7 @@ class Adapter:
                 rows = [r for r in bridge.list_surfaces()
                         if r.get("surface_type") == "terminal"
                         and uuid(r.get("workspace_id")) == caller_pin["workspace_uuid"]
-                        and uuid(r.get("surface_id")) != caller_pin["caller_surface_uuid"]
-                        and r.get("pane_ref") != caller["pane_ref"]]
+                        and uuid(r.get("surface_id")) != caller_pin["caller_surface_uuid"]]
                 identities = sorted((self.live(r["surface_id"])[0] for r in rows),
                                     key=lambda item: item["target_surface_uuid"])
                 if not identities:

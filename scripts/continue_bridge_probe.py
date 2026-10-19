@@ -50,7 +50,11 @@ def digest(raw):
 def eligible(harness, gate, original):
     rows = original.get('executors')
     peers = harness._gate_executors(gate)
-    if (gate.get('status') != 'PASS' or gate.get('side_panel') is not True
+    layout_ok = gate.get('side_panel') is True
+    if 'terminal_channels_version' in gate:
+        from cmux_terminal_channels import check_gate
+        layout_ok = check_gate(gate)['pass']
+    if (gate.get('status') != 'PASS' or not layout_ok
             or len(peers) != 1 or peers[0].get('provider') != 'claude'
             or not isinstance(rows, list) or len(rows) != 1
             or {k: v for k, v in original.items() if k != 'executors'} != rows[0]):

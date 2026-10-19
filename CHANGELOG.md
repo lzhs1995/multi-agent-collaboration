@@ -1,3 +1,14 @@
+## Unreleased
+
+- Admit distinct existing terminal tabs in the same pane through ordinary
+  messages, broadcast discovery, exact maintenance contact and formal identity
+  gates. Authenticate every surface and keep pane/target input locks.
+- Record versioned terminal-channel evidence separately from the actual
+  side-panel layout. Validate all participant/proof UUIDs and reject duplicates,
+  pane aliases or changed bindings; historical gates retain their original contract.
+- Preserve native Codex transport, Claude draft protection, original-attempt
+  budgets, frozen broadcast recipients and the explicit authorization for new sessions.
+
 ## 0.4.53
 
 - Include the measured 134-column STATUS continuation layout (93 content cells plus 18 padding cells), retaining full original text and raw-row stability.
