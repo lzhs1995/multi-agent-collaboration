@@ -1,3 +1,17 @@
+## 0.4.51
+
+- Remove the stale idle-preflight instruction from the automatic executor reply
+  advisory. Ready messages in either direction use the supported entrypoint during
+  normal work or native Goal; separate task packs still require fresh identity,
+  handshake and validation.
+- Preserve the complete reviewed `0.4.50-3dd2945b5069` file protocol, its 14-member
+  controller and original 17-controller issuer scope. Keep existing episodes and
+  old input evidence unchanged; earlier issuers gain no reverse or future authority.
+
+This corrects live advisory text. It does not establish a sender defect, the root
+cause of historical stalls, or completion of real reservation-inquiry cycles.
+See the [release contract](references/release-0.4.51.md).
+
 ## 0.4.50
 
 - Retain at most 120 compact sweep observations / 512 KiB under a separate

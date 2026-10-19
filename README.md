@@ -1,4 +1,10 @@
-Current source: **0.4.50**. Bounded sweep history records scheduler timing,
+Current source: **0.4.51**. Automatic reply guidance permits ready messages during
+normal work and native Goal. Fresh task preflight verifies identity, handshake
+and validation without waiting for idle. Reviewed 0.4.50 file episodes preserve
+their original controller and authority. See the
+[0.4.51 release contract](references/release-0.4.51.md).
+
+Bounded sweep history records scheduler timing,
 rotation and contention without changing file inquiries. The complete reviewed
 0.4.49 file protocol keeps its original authority. See the
 [0.4.50 release contract](references/release-0.4.50.md).

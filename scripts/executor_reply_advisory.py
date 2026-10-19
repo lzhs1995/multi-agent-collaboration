@@ -353,7 +353,9 @@ def emit_context(notice):
              'can act, end this waiting turn normally and state the pending dependency. Do not '
              'start another model wait loop solely to look active. Preserve Goal/loop and the '
              'authorized file scheduler; its enrollment is not proof of a running sweep. '
-             'The supervisor must observe fresh idle preflight before a separate new pack. '
+             'A separate new pack requires fresh identity, handshake and validation preflight. '
+             'Both agents should send ready messages through the supported entrypoint during '
+             'normal work or native Goal; do not wait for idle or pause Goal to communicate. '
              'This reminder sends no input and proves neither reading nor acceptance.\n'
             + json.dumps(notice, ensure_ascii=False))
     print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse',
