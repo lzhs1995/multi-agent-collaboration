@@ -9,7 +9,13 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.50.** The file scheduler retains bounded sweep history with an
+**Version: 0.4.51.** The automatic reply advisory now matches the communication
+contract: send ready messages during normal work or native Goal. A separate new
+pack still requires fresh identity, handshake and validation, with no idle-turn
+requirement. Existing reviewed 0.4.50 file episodes keep their original controller
+and authority. See the [0.4.51 release contract](references/release-0.4.51.md).
+
+The file scheduler retains bounded sweep history with an
 independent nonblocking lock and diagnostic budget. History records timing,
 rotation and contention without changing file inquiries or old registration
 authority. Missing history does not establish a root cause or prove no work
