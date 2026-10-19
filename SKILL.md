@@ -9,7 +9,13 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.53.** Claude Code 2.1.303 reference notices now accept the
+**Version: 0.4.54.** Existing terminal tabs in the same pane can exchange
+ready messages and complete formal preflight. Each participant retains its
+authenticated surface identity; pane/target input locks still serialize writes.
+Historical attempts and working registrations keep their original controllers.
+See the [0.4.54 contract](references/release-0.4.54.md).
+
+The 0.4.53 renderer: Claude Code 2.1.303 reference notices now accept the
 measured 180-column 12/13-cell padding layouts while preserving exact payload
 and raw draft stability. An already pasted notice must be reconciled under its
 original controller; never repaste it after upgrading. See the

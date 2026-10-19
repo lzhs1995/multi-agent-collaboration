@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.54
 
 - Admit distinct existing terminal tabs in the same pane through ordinary
   messages, broadcast discovery, exact maintenance contact and formal identity
@@ -8,6 +8,8 @@
   pane aliases or changed bindings; historical gates retain their original contract.
 - Preserve native Codex transport, Claude draft protection, original-attempt
   budgets, frozen broadcast recipients and the explicit authorization for new sessions.
+
+- Preserve the complete verified 0.4.53 protocol and its original 20-controller issuer scope; working .52 episodes need no restart.
 
 ## 0.4.53
 

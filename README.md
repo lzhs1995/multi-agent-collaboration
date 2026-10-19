@@ -1,4 +1,8 @@
-Current source: **0.4.53**. Match the measured Claude 2.1.303 reference renderer
+Current source: **0.4.54**. Communicate between distinct existing terminal tabs
+in one pane, preserving authenticated identities and serialized input. See the
+[0.4.54 contract](references/release-0.4.54.md).
+
+The 0.4.53 renderer: Match the measured Claude 2.1.303 reference renderer
 without relaxing exact content or duplicate-input checks. See the
 [0.4.53 contract](references/release-0.4.53.md).
 
