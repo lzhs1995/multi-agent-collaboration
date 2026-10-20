@@ -123,6 +123,13 @@ def continue_handshake(args, modules=None):
                                 validation if name == 'validation.json' and validation is not None else pin)
                     if recovery.optional_snapshot(evidence, root / name) != expected:
                         raise ValueError('HANDSHAKE_CONTINUATION_FILES_CHANGED')
+                # Validate the next peer's original diagnostic postcondition
+                # before preview and before allocating its one-use slot. This
+                # uses no clear-recovery argument and therefore never probes or
+                # clears: absent evidence or one clear-confirmed row is needed.
+                harness._handshake_bridge_context(
+                    SimpleNamespace(task_id=gate['task_id'], bridge_clear_recovery=None),
+                    root, gate, peer['surface_ref'])
                 if any(root.glob('*task-pack*.json')):
                     raise ValueError('HANDSHAKE_CONTINUATION_TASK_PACK_EXISTS')
                 current = json.loads(evidence.read_bytes(marker_path))
@@ -201,11 +208,11 @@ def continue_handshake(args, modules=None):
                     ok = harness._handshake_one(SimpleNamespace(task_id=gate['task_id'],
                         lines=args.lines, timeout=None, handshake_timeout=args.handshake_timeout,
                         force_compose=False, bridge_clear_recovery=None), root, gate, peer, work)
-                    harness._write_handshake_receipt(root, work)
-                    published = evidence.snapshot(root / 'handshake-receipt.json')
                     if (work[:len(rows)] != rows or len(work) != len(rows) + 1
                             or not panel.matches(work[-1], peer)):
                         raise ValueError('HANDSHAKE_CONTINUATION_ORIGINAL_PREFIX_CHANGED')
+                    harness._write_handshake_receipt(root, work)
+                    published = evidence.snapshot(root / 'handshake-receipt.json')
                     # Old writers do not count never-started peers. Keep the panel
                     # incomplete even when one invocation succeeds before a third peer.
                     expected = panel.aggregate(work, peers)
@@ -222,7 +229,12 @@ def continue_handshake(args, modules=None):
                             raise
                     validation = evidence.snapshot(root / 'validation.json')
                     check(receipt=published, validation=validation)
-                    result.update(status='HANDSHAKE_CONTINUED' if ok else 'HANDSHAKE_CONTINUED_PENDING_ACK',
+                    outcome = ('HANDSHAKE_CONTINUED' if ok else
+                               'HANDSHAKE_CONTINUED_PENDING_ACK'
+                               if work[-1].get('lifecycle') == 'PENDING'
+                               and work[-1].get('status') != 'FAIL'
+                               else 'HANDSHAKE_CONTINUED_TERMINAL')
+                    result.update(status=outcome, executor_lifecycle=work[-1].get('lifecycle'),
                         receipt_sha256=recovery.observation.digest(published[0]),
                         validation=json.loads(validation[0]).get('status'), original_attempts_unchanged=True,
                         next_action='Observe/reconcile the new original nonce; never replay this slot.')

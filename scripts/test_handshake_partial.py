@@ -131,6 +131,11 @@ class PartialHandshakeTests(unittest.TestCase):
     def continued_args(self):
         self.partial()
         self.assertEqual(self.run_reconcile(apply=True)['status'], 'ACK_RECONCILED')
+        # Earlier reconciliation helper carries generic bridge fixture bytes.
+        # A continuation needs the actual original peer postconditions.
+        (self.root / 'bridge-test-evidence.json').write_text(json.dumps(dict(
+            task_id=self.task, executors=[dict(executor='surface:21', clear_confirmed=True),
+                                         dict(executor='surface:22', clear_confirmed=True)])))
         reservation = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
         marker_path = harness._ACTIVE_DIR / self.gate['workspace_uuid'] / (reservation + '.json')
         marker_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,13 +182,61 @@ class PartialHandshakeTests(unittest.TestCase):
                 mock.patch.object(native, 'require_bound', side_effect=require), \
                 mock.patch.object(harness, '_handshake_one', side_effect=send) as sender:
             result = continuation.continue_handshake(args, self.modules)
-            self.assertEqual(result['status'], 'HANDSHAKE_CONTINUED_PENDING_ACK', result)
+            self.assertEqual(result['status'], 'HANDSHAKE_CONTINUED_TERMINAL', result)
+            self.assertEqual(result['executor_lifecycle'], 'EXPIRED')
             sender.assert_called_once()
             again = continuation.continue_handshake(args, self.modules)
             self.assertEqual(again['status'], 'HANDSHAKE_CONTINUATION_UNAVAILABLE')
             sender.assert_called_once()
         self.assertEqual(original, self.attempt_path.read_bytes())
         self.assertEqual(json.loads(self.receipt_path.read_bytes())['executors'][0], before_row)
+
+    def test_real_original_bridge_check_refuses_without_consuming_slot(self):
+        args = self.continued_args()
+        evidence_path = self.root / 'bridge-test-evidence.json'
+        cases = [[], [dict(executor='surface:22', clear_confirmed=False)],
+                 [dict(executor='surface:22', clear_confirmed=True)] * 2]
+        for rows in cases:
+            evidence_path.write_text(json.dumps(dict(task_id=self.task, executors=rows)))
+            for apply in (False, True):
+                with self.subTest(rows=rows, apply=apply):
+                    args.apply = apply
+                    before = self.files()
+                    result = continuation.continue_handshake(args, self.modules)
+                    self.assertEqual(result['status'], 'HANDSHAKE_CONTINUATION_UNAVAILABLE', result)
+                    self.assertEqual(result['handshake_invocations'], 0)
+                    self.assertEqual(result['input_operations'], 0)
+                    self.assertFalse((self.root / 'handshake-continuation-2').exists())
+                    self.assertEqual(self.files(), before)
+        evidence_path.write_text(json.dumps(dict(task_id=self.task,
+            executors=[dict(executor='surface:22', clear_confirmed=True)])))
+        args.apply = False
+        self.assertEqual(continuation.continue_handshake(args, self.modules)['status'],
+                         'READY_ORIGINAL_HANDSHAKE_CONTINUATION')
+
+    def test_changed_prefix_is_not_published_by_continuation(self):
+        args = self.continued_args()
+        args.apply = True
+        before = self.receipt_path.read_bytes()
+        next_binding = copy.deepcopy(self.binding)
+        next_binding['identity']['target_surface_uuid'] = 'target2'
+        next_binding['session_id'] = 'second-original-session'
+        original_require = native.require_bound
+        def require(bridge, target, binding, text, **kw):
+            if target != 'target2':
+                return original_require(bridge, target, binding, text, **kw)
+        def changed(_args, root, gate, peer, rows):
+            rows[0]['ack_nonce'] = 'changed'
+            rows.append(dict(rows[0], executor='surface:22', ordinal=2))
+            return True
+        with mock.patch.object(native, 'bind_target', return_value=next_binding), \
+                mock.patch.object(native, 'require_bound', side_effect=require), \
+                mock.patch.object(harness, '_handshake_one', side_effect=changed), \
+                mock.patch.object(harness, '_write_handshake_receipt') as write:
+            result = continuation.continue_handshake(args, self.modules)
+        self.assertIn('ORIGINAL_PREFIX_CHANGED', result['error'])
+        write.assert_not_called()
+        self.assertEqual(self.receipt_path.read_bytes(), before)
 
     def test_wrong_supervisor_cannot_continue_or_create_slot(self):
         args = self.continued_args()
