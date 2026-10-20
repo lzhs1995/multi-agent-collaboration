@@ -693,3 +693,17 @@ The independent scheduler remains files-only: no transcript reads, native input,
 terminal paste, forced turns or blocking Stop hook. Verify the original executor's
 explicit enrollment, automatic sweeps, exact replies, actual consumption, two
 successive rounds and task/stop boundaries separately from installation.
+
+
+### Stable request snapshots
+
+A supervisor discovery notice points to a content-addressed, read-only copy of
+that exact request, with its SHA256 and original mailbox. The rotating CURRENT
+file is only a discovery source: another 60-second inquiry must not change the
+bytes named by an earlier notice. Read the complete snapshot and reply to its
+original mailbox; discovery does not accept the request or consume the reply.
+The hook copies only authenticated, bounded requests it is about to expose,
+reuses identical snapshots, and commits its discovery cursor only after output
+flush. A failed or conflicting snapshot is never replaced with a mutable path.
+Snapshots are evidence; do not delete them on a timer while original replies or
+consumption remain unresolved. Existing episodes and old notices are unchanged.

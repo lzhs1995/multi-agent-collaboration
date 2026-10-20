@@ -1,7 +1,8 @@
 """Bounded file-request discovery by the existing authenticated supervisor hook.
 
 No terminal input. A discovery record is not native receipt or task acceptance.
-One current request and one discovery cursor per caller keep storage bounded.
+Current requests and cursors remain bounded; emitted request snapshots retain
+the exact bytes until their original reply can be read and consumed.
 """
 import fcntl
 import errno
@@ -18,6 +19,7 @@ import uuid
 import bounded_directory as directory
 import cmux_hook_identity as identity
 import cmux_hook_thread as thread_scope
+import cmux_prompt_reference as references
 import executor_ready as ready
 import executor_reask as reask
 import executor_reply as replies
@@ -104,6 +106,22 @@ def request_bytes(path):
         return None, None
 
 
+def freeze_request(raw):
+    """Preserve the already-read bytes; never reread the rotating source path."""
+    root = ready.state_root() / 'supervisor-request-snapshots-v1'
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = root.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        raise ValueError('UNSAFE_REQUEST_SNAPSHOT_DIRECTORY')
+    digest = hashlib.sha256(raw).hexdigest()
+    reference = dict(format=references.SINGLE_LINE_FORMAT,
+                     path=str(root / (digest + '.txt')),
+                     sha256=digest, bytes=len(raw))
+    references.persist(reference, raw.decode('utf-8'))
+    return reference
+
+
 def _uuid(value):
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value.lower()
@@ -152,7 +170,7 @@ def answered(body, reply_path, scan=None):
 
 
 def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None):
-    """Read-only unless an emitter succeeds; commit after flushed context output."""
+    """Freeze exact requests before exposure; commit cursors only after flush."""
     if not _uuid(workspace) or not _uuid(supervisor) or not _uuid(thread_id):
         return []
     now = time.time() if now is None else now
@@ -219,8 +237,15 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
             if (seen.get('token') == token
                     and now - last_emitted < REMINDER_SECONDS):
                 continue
-            notice = dict(state='REQUEST_DISCOVERED', request=str(path),
-                          request_sha256=hashlib.sha256(raw).hexdigest(), marker=marker,
+            try:
+                frozen = freeze_request(raw)
+            except (OSError, ValueError):
+                # Do not publish a moving path or overwrite a conflicting
+                # snapshot. Other valid callers can still be discovered.
+                continue
+            notice = dict(state='REQUEST_DISCOVERED', request=frozen['path'],
+                          source_request=str(path),
+                          request_sha256=frozen['sha256'], marker=marker,
                           caller_surface_uuid=body['caller_surface_uuid'], supervisor_uuid=supervisor,
                           workspace_uuid=workspace, task_id=body.get('task_id', ''),
                           episode_id=body['episode_id'], reply_mailbox=str(reply_path),
@@ -235,7 +260,7 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
         if emit is not None:
             emit(notices)  # exceptions leave all cursors unchanged; no lost notice
             for notice in notices:
-                ready.write_json(cursor / Path(notice['request']).name, notice)
+                ready.write_json(cursor / Path(notice['source_request']).name, notice)
             # Empty/invalid pages also advance, but observation never consumes.
             ready.write_json(frontier_path, frontier)
         return notices

@@ -75,6 +75,54 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(len(self.discover()), 1, self.discovery_trace)
         self.assertEqual(len(list(path.parent.glob('*.json'))), 1)
 
+    def test_notice_snapshot_survives_rotation_before_supervisor_first_read(self):
+        state, current = self.request()
+        original = current.read_bytes()
+        notice = self.discover()[0]
+        reask.write_channels(state, 'EXECUTOR_READY_two', 'new inquiry', 62.0)
+        snapshot = Path(notice['request'])
+        self.assertEqual(snapshot.read_bytes(), original)
+        self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+                         notice['request_sha256'])
+        self.assertFalse(snapshot.stat().st_mode & 0o222)
+        self.assertEqual(notice['source_request'], str(current))
+        body = json.loads(snapshot.read_bytes())
+        self.assertEqual(body['marker'], notice['marker'])
+        self.assertEqual(body['reply_mailbox'], notice['reply_mailbox'])
+
+    def test_same_snapshot_is_reused_without_changing_its_identity(self):
+        _state, _current = self.request()
+        first = self.discover()[0]
+        snapshot = Path(first['request'])
+        before = snapshot.stat()
+        second = self.discover(now=161.)[0]
+        after = Path(second['request']).stat()
+        self.assertEqual(first['request'], second['request'])
+        self.assertEqual((before.st_ino, before.st_mtime_ns),
+                         (after.st_ino, after.st_mtime_ns))
+        self.assertFalse(after.st_mode & 0o222)
+
+    def test_conflicting_snapshot_is_not_overwritten_or_offered(self):
+        _state, _current = self.request()
+        first = self.discover()[0]
+        snapshot = Path(first['request'])
+        snapshot.chmod(0o600)
+        snapshot.write_bytes(b'changed by another writer')
+        other = str(uuid.uuid4())
+        self.request(other)
+        notices = self.discover(now=161.)
+        self.assertEqual([n['caller_surface_uuid'] for n in notices], [other])
+        self.assertEqual(snapshot.read_bytes(), b'changed by another writer')
+
+    def test_snapshot_directory_symlink_cannot_redirect_discovered_body(self):
+        _state, _current = self.request()
+        external = self.home / 'other-owner'
+        external.mkdir()
+        snapshots = ready.state_root() / 'supervisor-request-snapshots-v1'
+        snapshots.symlink_to(external, target_is_directory=True)
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(list(external.iterdir()), [])
+
     def test_wrong_workspace_supervisor_paths_templates_and_inactive_requests_refused(self):
         _state, path = self.request()
         body = ready.read_json(path)
@@ -417,7 +465,7 @@ class InboxTest(unittest.TestCase):
         for _ in range(15):
             self.request(str(uuid.uuid4()))
         first = self.discover()
-        root = Path(first[0]['request']).parent
+        root = Path(first[0]['source_request']).parent
         archived = root.with_name(root.name + '-previous')
         root.rename(archived)
         root.mkdir()
