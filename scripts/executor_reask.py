@@ -956,7 +956,7 @@ def run(caller, max_seconds=MAX_RUN_SECONDS, poll=POLL, send=default_send,
     state = tick(caller, clock(), send)
     while (state.get('state') == WAITING and not state.get('outcome')
            and (not state.get('paused_tasks')
-                or state.get('continuation', {}).get('proactive_hook') is True)
+                or (state.get('continuation') or {}).get('proactive_hook') is True)
            and not state.get('registration_observation') and clock() + poll < deadline):
         sleep(poll)
         state = tick(caller, clock(), send)
@@ -966,14 +966,14 @@ def run(caller, max_seconds=MAX_RUN_SECONDS, poll=POLL, send=default_send,
     # This is not an assertion that the terminal is idle or a task is accepted.
     reason = ('REPLY_REQUIRES_ORIGINAL_CONSUME' if state.get('state') == ANSWERED
               else 'FORMAL_RESERVATION_WAIT' if state.get('paused_tasks')
-              and state.get('continuation', {}).get('proactive_hook') is not True
+              and (state.get('continuation') or {}).get('proactive_hook') is not True
               else 'OBSERVATION_DEADLINE' if state.get('state') == WAITING
               and not state.get('outcome') and not state.get('registration_observation')
               else 'EPISODE_RETURNED')
     return dict(state, runner_returned=True, run_return_reason=reason,
                 wait_boundary=dict(when='ONLY_SUPERVISOR_ACTION_REMAINS',
                                    next_action=('CONTINUE_AUTHORIZED_TASK_OR_BOUNDED_REASK'
-                                       if state.get('continuation', {}).get('proactive_hook') is True
+                                       if (state.get('continuation') or {}).get('proactive_hook') is True
                                        and state.get('state') == WAITING
                                        else 'END_WAITING_TURN_NORMALLY'),
                                    idle_observed=False, goal_state_changed=False,
