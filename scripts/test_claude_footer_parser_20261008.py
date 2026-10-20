@@ -1,4 +1,6 @@
-"""真实只读屏幕及其明确标注的派生变体；禁止测试向 live 终端发输入。"""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+真实只读屏幕及其明确标注的派生变体；禁止测试向 live 终端发输入。"""
 from pathlib import Path
 import re
 import textwrap
@@ -6,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "verification" / "fixtures"
@@ -35,7 +37,7 @@ def footer_variant(screen, transform):
 
 class ClaudeFooterParserTests(unittest.TestCase):
     def assert_zero_input(self, screen):
-        with NativeFixture(provider="claude"), patch.object(b, "read_screen", return_value=screen), \
+        with LegacyTerminalFixture(provider="claude"), patch.object(b, "read_screen", return_value=screen), \
                 patch.object(b, "send_text") as paste, patch.object(b, "send_key") as key:
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", "STATUS: new-token", marker="new-token")

@@ -312,6 +312,7 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False,
 
             try:
                 attempt['native_binding'] = native.bind_target(bridge, pack['callback_target'], pack['completion_callback'])
+                attempt['native_binding'] = native.marker_binding(attempt['native_binding'], pack['completion_callback'], pack['completion_nonce'])
                 write_json(attempt_path, attempt)
                 result = bridge.submit_text(
                     pack['callback_target'], pack['completion_callback'],

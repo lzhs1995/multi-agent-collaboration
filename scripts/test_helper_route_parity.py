@@ -65,7 +65,7 @@ class HelperRouteParityTests(unittest.TestCase):
         args.callback_transport = "bridge"
         harness.cmd_helper_parity(args)
 
-    def test_workspace_guard_admits_only_verified_direct_helper(self):
+    def test_workspace_guard_allows_direct_helper(self):
         with patch.object(workspace.shutil, 'which', return_value=str(self.helper)):
             for command in ('rtk cmux-agent ask surface:2 "STATUS: review ready"',
                             'rtk proxy cmux-agent send surface:2 "STATUS: review ready"',
@@ -73,16 +73,16 @@ class HelperRouteParityTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertTrue(workspace.validate_command(command)[0])
 
-    def test_workspace_guard_rejects_legacy_changed_and_foreign_route(self):
+    def test_workspace_guard_does_not_block_unverified_helper_route(self):
         with patch.object(workspace.shutil, 'which', return_value=str(self.helper)):
             for raw in (b'#!/bin/sh\ncmux send "$@"\n', self.raw + b'\necho changed\n',
                         self.raw.replace(str(self.release).encode(), str(self.root).encode(), 1),
                         self.raw.replace(b' -I -B ', b' -B ', 1)):
                 with self.subTest(raw=raw[:60]):
                     self.helper.write_bytes(raw)
-                    self.assertFalse(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
+                    self.assertTrue(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
 
-    def test_workspace_guard_rejects_wrappers_overrides_and_extra_commands(self):
+    def test_workspace_guard_does_not_block_direct_commands(self):
         with patch.object(workspace.shutil, 'which', return_value=str(self.helper)):
             for command in ('env PATH=/tmp rtk cmux-agent ask surface:2 hi',
                             'PATH=/tmp rtk cmux-agent ask surface:2 hi',
@@ -93,12 +93,12 @@ class HelperRouteParityTests(unittest.TestCase):
                             'rtk cmux send --surface surface:2 hi',
                             'rtk cmux send-key --surface surface:2 enter'):
                 with self.subTest(command=command):
-                    self.assertFalse(workspace.validate_command(command)[0])
+                    self.assertTrue(workspace.validate_command(command)[0])
 
-    def test_workspace_guard_rejects_non_executable_or_other_python(self):
+    def test_workspace_guard_leaves_executable_errors_to_runtime(self):
         with patch.object(workspace.shutil, 'which', return_value=str(self.helper)):
             self.helper.chmod(0o644)
-            self.assertFalse(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
+            self.assertTrue(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
             self.helper.chmod(0o755)
             other = self.root / 'python'
             other.write_text('#!/bin/sh\nexit 0\n')
@@ -107,7 +107,7 @@ class HelperRouteParityTests(unittest.TestCase):
                 (self.release / 'tests/fixtures/cmux-agent-legacy.sh').read_bytes(),
                 expected_sha256=renderer.BASELINE_SHA256, python=other,
                 adapter=self.release / 'scripts/cmux_agent_adapter.py'))
-            self.assertFalse(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
+            self.assertTrue(workspace.validate_command('rtk cmux-agent ask surface:2 hi')[0])
 
     def hook_command(self, script, command):
         return subprocess.run(
@@ -124,37 +124,25 @@ class HelperRouteParityTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(result.stdout), {})
 
-    def test_real_hook_rejection_identifies_actual_entrypoint_and_full_helper(self):
+    def test_unverified_helper_is_diagnostic_not_a_communication_ban(self):
         sentinel = self.root / 'MUST_NOT_RUN'
         self.helper.write_bytes(self.raw + ('\ntouch ' + shlex.quote(str(sentinel)) + '\n').encode())
         for script in ('cmux_workspace_guard.py', 'cmux_agent_panel_guard.py'):
             with self.subTest(script=script):
                 result = self.hook_command(script, shlex.quote(str(self.helper))
                                            + ' ask surface:2 "PRIVATE_PAYLOAD_DO_NOT_LOG"')
-                self.assertEqual(result.returncode, 2, result.stdout)
-                diagnostic = json.JSONDecoder().raw_decode(
-                    result.stderr.split('HELPER_ROUTE_REJECTED ', 1)[1])[0]
-                self.assertFalse(diagnostic['verified'])
-                self.assertEqual(diagnostic['guard_entrypoint'],
-                                 str(self.release / 'scripts' / script))
-                self.assertEqual(diagnostic['guard_controller'], str(self.release))
-                self.assertEqual(diagnostic['guard_python_resolved'], str(Path(sys.executable).resolve()))
-                self.assertEqual(diagnostic['helper_sha256'], hashlib.sha256(self.helper.read_bytes()).hexdigest())
-                self.assertNotEqual(diagnostic['reason'], 'HELPER_VERIFIED')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {})
                 self.assertNotIn('PRIVATE_PAYLOAD_DO_NOT_LOG', result.stdout + result.stderr)
                 self.assertFalse(sentinel.exists())
 
-    def test_real_hook_parse_error_preserves_rejection_without_payload(self):
+    def test_hook_does_not_use_shell_parse_errors_as_communication_ban(self):
         for script in ('cmux_workspace_guard.py', 'cmux_agent_panel_guard.py'):
             with self.subTest(script=script):
                 result = self.hook_command(script, shlex.quote(str(self.helper))
                                            + ' ask surface:2 "PRIVATE_UNCLOSED_PAYLOAD')
-                self.assertEqual(result.returncode, 2, result.stdout)
-                diagnostic = json.JSONDecoder().raw_decode(
-                    result.stderr.split('HELPER_ROUTE_REJECTED ', 1)[1])[0]
-                self.assertEqual(diagnostic['reason'], 'HELPER_COMMAND_PARSE_ERROR')
-                self.assertEqual(diagnostic['guard_entrypoint'],
-                                 str(self.release / 'scripts' / script))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {})
                 self.assertNotIn('PRIVATE_UNCLOSED_PAYLOAD', result.stderr)
 
 

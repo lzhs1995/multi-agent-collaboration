@@ -1,4 +1,20 @@
-Current source: **0.4.53**. Match the measured Claude 2.1.303 reference renderer
+# Current release: 0.4.54
+
+Send ready messages directly in both directions, including during work, Goal and
+compaction. Raw cmux send/send-key/paste is allowed. The optional bridge uses
+native Codex input when available and falls back to a single terminal paste and
+Enter only before any native input intent. Confirm a new user message containing
+the unique marker in the original receiver transcript. Never repaste an uncertain
+message; at most one recorded extra Enter may recover residual input after compaction ends.
+See [direct delivery](references/verified-compose-delivery.md).
+
+## Earlier release notes (historical behavior, not new-message admission rules)
+
+Current source: **0.4.54**. Communicate between distinct existing terminal tabs
+in one pane, preserving authenticated identities and serialized input. See the
+[0.4.54 contract](references/release-0.4.54.md).
+
+The 0.4.53 renderer: Match the measured Claude 2.1.303 reference renderer
 without relaxing exact content or duplicate-input checks. See the
 [0.4.53 contract](references/release-0.4.53.md).
 
@@ -173,15 +189,14 @@ Evidence-bound collaboration for Codex and Claude Code in macOS cmux.
 
 New messages use bounded single-line notices for pinned
 bodies; formal packs and callbacks retain their dedicated task-bound routes.
-Native RPC acceptance, Enter or Tab only requests submission. Reception requires the complete exact
-payload in a new record of the bound receiver's native journal. See the
+Native RPC acceptance, Enter or Tab only requests submission. Reception requires the unique marker in a new user message of the bound receiver's native journal. See the
 [delivery contract](references/verified-compose-delivery.md).
 
-The existing Codex control socket must authenticate as the current user and expose
-the exact loaded receiver thread. Persist one native input intent before the only
-steer/start request. Never fall back to paste/Tab after failure or uncertainty.
-Claude-bound input retains the protected terminal route; old queued callbacks
-remain under their original controller for read-only reconciliation.
+When present, the Codex control socket must authenticate as the current user
+and expose the exact loaded receiver thread. If it is unavailable before input,
+use terminal fallback. After an input intent, reconcile the original record and
+never change transport or repaste. Claude sends directly without an idle or
+composer gate. Old attempts retain their original controller and contract.
 
 ## Install
 

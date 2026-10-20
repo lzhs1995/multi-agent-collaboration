@@ -1,9 +1,11 @@
-"""Synthetic observed-layout fixtures keep rules-count chrome outside the borders."""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Synthetic observed-layout fixtures keep rules-count chrome outside the borders."""
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import FIXTURES, with_draft, footer_variant
 
 
@@ -16,7 +18,7 @@ def captured(surface):
 
 class ClaudeRulesFooterTests(unittest.TestCase):
     def assert_zero_input(self, screen):
-        with NativeFixture(provider="claude"), patch.object(b, "read_screen", return_value=screen), \
+        with LegacyTerminalFixture(provider="claude"), patch.object(b, "read_screen", return_value=screen), \
                 patch.object(b, "send_text") as paste, patch.object(b, "send_key") as key:
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", "STATUS: new-token", marker="new-token")

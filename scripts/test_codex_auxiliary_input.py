@@ -294,10 +294,19 @@ class SuccessorCodexRouteTests(OfflineRouteCase):
         self.assertEqual(result["input_operations"], 0)
         self.fixture.rpc.assert_not_called()
 
-    def test_nonaccepting_thread_refuses_input_without_composer_fallback(self):
+    def test_nonaccepting_native_method_uses_terminal_once(self):
         self.rpc.thread_changes["canAcceptDirectInput"] = False
-        with self.assertRaisesRegex(native.NativeDeliveryError, "NOT_ACCEPTING"):
-            self.submit()
+        terminal = self.guards.pop("_run_successor")
+        def send(*args, **kwargs):
+            if args[0] == 'send-key':
+                self.fixture.append_user('Wrapped notice: ' + self.text)
+            return '{}'
+        terminal.side_effect = send
+        result = self.submit()
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['transport'], 'terminal-direct-marker-v1')
+        self.assertEqual(result['input_operations'], 2)
+        self.assertEqual(terminal.call_count, 2)
         self.assertEqual(self.rpc.mutations, [])
         self.assertNotIn("NATIVE_INPUT_INTENT", [event["phase"] for event in self.events()])
 
@@ -561,12 +570,21 @@ class ExecutorReaskCodexRouteTests(OfflineRouteCase):
         self.assert_exact_input("turn/steer", self.original(new)["text"])
         self.assertEqual({path: path.read_bytes() for path in self.attempt_paths(ask)}, saved)
 
-    def test_nonaccepting_thread_does_not_read_or_fall_back_to_composer(self):
+    def test_nonaccepting_native_method_falls_back_for_original_reask(self):
         self.rpc.thread_changes["canAcceptDirectInput"] = False
+        send = self.guards.pop('send_text')
+        key = self.guards.pop('send_key')
+        payload = []
+        send.side_effect = lambda surface, text: payload.append(text)
+        key.side_effect = lambda surface, key: self.fixture.append_user('Wrapped: ' + payload[-1])
         state = self.tick()
-        self.assert_native_ask(state, confirmed=False, intent=False, no_input=True)
+        ask = state['asks'][-1]
+        self.assertTrue(ask['native_received'], ask)
+        self.assertEqual(ask['outcome'], 'CONFIRMED')
         self.assertEqual(self.rpc.mutations, [])
-        self.assertIsNone(state["terminal_pending"])
+        self.assertIsNone(state['terminal_pending'])
+        send.assert_called_once()
+        key.assert_called_once()
 
     def test_long_reask_confirms_reference_notice_without_claiming_body_read(self):
         state = self.tick()

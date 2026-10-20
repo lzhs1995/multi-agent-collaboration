@@ -213,6 +213,8 @@ class LegacyTerminalFixture(NativeFixture):
 
         self.stack.enter_context(patch.object(bridge, "_submit_text_once",
                                              side_effect=historical_terminal_dispatch))
+        self.stack.enter_context(patch.object(native, "marker_binding",
+                                             side_effect=lambda binding, text, marker: binding))
         return self
 
 

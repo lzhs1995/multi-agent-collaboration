@@ -1,10 +1,12 @@
-"""Measured footer geometry with synthetic history; all transport is mocked."""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Measured footer geometry with synthetic history; all transport is mocked."""
 import re
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import FIXTURES, with_draft, footer_variant
 
 
@@ -26,7 +28,7 @@ def clipped_git_footer(width=55, draft="", split_model=False):
 
 class LiveOpusFooterTests(unittest.TestCase):
     def assert_zero_input(self, screen):
-        with NativeFixture(provider="claude"), \
+        with LegacyTerminalFixture(provider="claude"), \
                 patch.object(b, "read_screen", return_value=screen), \
                 patch.object(b, "send_text") as paste, patch.object(b, "send_key") as key:
             with self.assertRaises(b.DispatchUnconfirmed):
@@ -36,7 +38,7 @@ class LiveOpusFooterTests(unittest.TestCase):
 
     def test_ellipsis_clipped_git_footer_permits_one_verified_send(self):
         for width, split_model in ((55, False), (90, False), (55, True), (90, True)):
-            with self.subTest(width=width, split_model=split_model), NativeFixture(provider="claude") as native:
+            with self.subTest(width=width, split_model=split_model), LegacyTerminalFixture(provider="claude") as native:
                 screen = clipped_git_footer(width, split_model=split_model)
                 self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")
                 self.assertTrue(b.compose_block_is_empty(screen))

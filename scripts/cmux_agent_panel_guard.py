@@ -761,13 +761,6 @@ def validate_command(command: str) -> tuple[bool, str]:
     if _has_help_flag(command):
         return True, "help query allowed"
 
-    if _raw_cmux_task_dispatch(command):
-        return False, (
-            "Blocked: executor task dispatch bypasses the finalized task-pack contract. "
-            "Use cmux_bridge.submit_task_pack with required_skill, a fresh completion "
-            "nonce, callback_target, and require_confirmed completion delivery."
-        )
-
     if _has_cmux_new_split(command):
         direction = _new_split_direction(command)
         if direction not in ALLOWED_DIRECTIONS:

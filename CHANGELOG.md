@@ -1,4 +1,11 @@
-## Unreleased
+## 0.4.54
+
+- Remove blanket raw cmux communication bans. Ready messages can be sent during
+  work, Goal and compaction without composer admission checks.
+- Fall back from unavailable native Codex input before any input intent to one
+  terminal paste and Enter. Never fall back after uncertain native mutation.
+- Confirm new attempts by a fresh marker-bearing receiver user message. Preserve
+  old contracts, original EOF fences, deduplication and a single extra-Enter budget.
 
 - Admit distinct existing terminal tabs in the same pane through ordinary
   messages, broadcast discovery, exact maintenance contact and formal identity
@@ -6,8 +13,10 @@
 - Record versioned terminal-channel evidence separately from the actual
   side-panel layout. Validate all participant/proof UUIDs and reject duplicates,
   pane aliases or changed bindings; historical gates retain their original contract.
-- Preserve native Codex transport, Claude draft protection, original-attempt
-  budgets, frozen broadcast recipients and the explicit authorization for new sessions.
+- Preserve native identity checks, original-attempt budgets, frozen broadcast
+  recipients and the explicit authorization for new sessions.
+
+- Preserve the complete verified 0.4.53 protocol and its original 20-controller issuer scope; working .52 episodes need no restart.
 
 ## 0.4.53
 

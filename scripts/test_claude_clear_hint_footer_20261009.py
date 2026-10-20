@@ -1,4 +1,6 @@
-"""Synthetic Claude layouts retaining measured footer parser conditions.
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Synthetic Claude layouts retaining measured footer parser conditions.
 
 Private task paths, UUIDs and transcript prose are not part of these public
 fixtures. They exercise parser behavior and are not live delivery evidence.
@@ -7,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture, ScreenSequence
+from native_test_support import LegacyTerminalFixture, ScreenSequence
 from test_claude_footer_parser_20261008 import FIXTURES, footer_variant, with_draft
 
 
@@ -25,7 +27,7 @@ def with_hint(hint):
 
 class ClaudeClearHintFooterTests(unittest.TestCase):
     def assert_zero_input(self, screen):
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", return_value=screen):
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", TEXT, marker="FOOTER044")
@@ -156,7 +158,7 @@ class ClaudeClearHintFooterTests(unittest.TestCase):
         start = max(i for i, row in enumerate(rows) if row.startswith("❯"))
         rows.insert(start - 1, "✢ Crafting… (23s · ↑ 4.9k tokens)")
         for screen in (tool, "\n".join(rows)):
-            with self.subTest(screen=screen[-800:]), NativeFixture(provider="claude") as native:
+            with self.subTest(screen=screen[-800:]), LegacyTerminalFixture(provider="claude") as native:
                 self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")
                 self.assertTrue(b.compose_block_is_empty(screen))
                 self.assertTrue(b._queued_or_active_input(screen))
@@ -182,7 +184,7 @@ class ClaudeClearHintFooterTests(unittest.TestCase):
                       "[Pasted text #1 +3 lines]"):
             before = captured("b")
             after = with_draft(before, draft)
-            with self.subTest(draft=draft), NativeFixture(provider="claude") as native, \
+            with self.subTest(draft=draft), LegacyTerminalFixture(provider="claude") as native, \
                     patch.object(b, "read_screen", side_effect=ScreenSequence([before, after])):
                 with self.assertRaises(b.DispatchUnconfirmed):
                     b.submit_text("offline-peer", TEXT, marker="FOOTER044")
@@ -193,7 +195,7 @@ class ClaudeClearHintFooterTests(unittest.TestCase):
         before = captured("b")
         draft = with_draft(before, TEXT)
         edited = with_draft(before, TEXT.replace("exact", "edited"))
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", side_effect=ScreenSequence([before, draft, edited])):
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", TEXT, marker="FOOTER044")
@@ -202,7 +204,7 @@ class ClaudeClearHintFooterTests(unittest.TestCase):
 
     def test_recognized_footer_and_enter_do_not_prove_native_reception(self):
         before = captured("b")
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", side_effect=native.ready_screens(before, with_draft(before, TEXT))):
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", TEXT, marker="FOOTER044")
@@ -211,7 +213,7 @@ class ClaudeClearHintFooterTests(unittest.TestCase):
 
     def test_exact_stable_draft_and_new_native_user_confirm_delivery_offline(self):
         before = captured("b")
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", side_effect=native.ready_screens(before, with_draft(before, TEXT))):
             native.key.side_effect = native.receipt_on_key(TEXT)
             result = b.submit_text("offline-peer", TEXT, marker="FOOTER044")

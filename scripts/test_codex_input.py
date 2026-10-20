@@ -187,20 +187,17 @@ class CodexInputTests(unittest.TestCase):
         self.assertEqual(self.rpc.calls, [])
         self.assert_no_terminal()
 
-    def test_unavailable_goal_state_is_diagnosed_without_resume_or_input(self):
+    def test_unavailable_native_goal_can_receive_terminal_message_without_resuming_goal(self):
         self.rpc.thread_changes['status'] = {'type': 'notLoaded'}
         self.rpc.turn_changes.update(status='interrupted', error={'code': 429, 'message': 'busy'})
-        with self.assertRaisesRegex(native.NativeDeliveryError, 'TURN_CHANGED_OR_UNAVAILABLE') as caught:
-            self.send()
-        details = caught.exception.details
-        metadata = details['native_metadata']
-        self.assertEqual(details['input_operations'], 0)
-        self.assertEqual(metadata['thread_status'], 'notLoaded')
-        self.assertEqual(metadata['latest_turn_status'], 'interrupted')
-        self.assertEqual(metadata['latest_turn_error']['code'], 429)
-        self.assertIn("If the original client", metadata['resume_guidance'])
-        self.assertEqual([r[0] for r in self.rpc.calls], ['thread/read', 'thread/turns/list'])
-        self.assert_no_terminal()
+        self.fixture.key.side_effect = self.fixture.receipt_on_key(self.text)
+        result = self.send()
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['transport'], 'terminal-direct-marker-v1')
+        self.assertEqual(self.rpc.mutations, [])
+        self.fixture.send.assert_called_once_with('target', self.text)
+        self.fixture.key.assert_called_once_with('target', 'enter')
+        bridge.read_screen.assert_not_called()
 
     def test_probe_reads_only_metadata_and_creates_no_attempt(self):
         result = direct.probe_target(bridge, 'target')
@@ -233,16 +230,16 @@ class CodexInputTests(unittest.TestCase):
         self.assertEqual(len(self.rpc.mutations), 1)
         self.assert_no_terminal()
 
-    def test_latest_turn_change_refuses_input(self):
+    def test_unavailable_native_turn_falls_back_before_any_rpc_input(self):
         self.rpc.turn_changes['status'] = 'completed'
-        with self.assertRaisesRegex(native.NativeDeliveryError, 'TURN_CHANGED'):
-            self.send()
+        self.fixture.key.side_effect = self.fixture.receipt_on_key(self.text)
+        self.assertTrue(self.send()['confirmed'])
         self.assertEqual(self.rpc.mutations, [])
-        self.assert_no_terminal()
+        self.fixture.send.assert_called_once_with('target', self.text)
+        bridge.read_screen.assert_not_called()
 
     def test_wrong_thread_path_or_nonaccepting_thread_refuses_input(self):
-        for delta in ({'path': '/different/session.jsonl'}, {'id': str(uuid.uuid4())},
-                      {'canAcceptDirectInput': False}):
+        for delta in ({'path': '/different/session.jsonl'}, {'id': str(uuid.uuid4())}):
             with self.subTest(delta=delta):
                 self.rpc.thread_changes = delta
                 with self.assertRaisesRegex(native.NativeDeliveryError, 'NOT_ACCEPTING'):

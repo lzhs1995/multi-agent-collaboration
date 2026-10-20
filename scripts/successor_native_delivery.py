@@ -395,15 +395,7 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
         wire, reference = planned["text"], planned["reference"]
         body_pin = prompt_reference.persist(reference, text)
         binding = bind_target(bridge, artifact, wire)
-        if binding["provider"] != "codex":
-            before = bridge.read_screen_successor(artifact)
-            bridge.require_agent_input(before, binding["identity"]["target_surface_uuid"])
-            if not bridge.compose_block_is_empty(before):
-                raise native.NativeDeliveryError("SUCCESSOR_COMPOSE_OCCUPIED: zero input; preserve existing draft")
-            if bridge.receiver_cannot_submit_now(before):
-                raise native.NativeDeliveryError("SUCCESSOR_RECEIVER_NOT_READY: zero input")
-            if "".join(marker.split()) in "".join(before.split()):
-                raise native.NativeDeliveryError("SUCCESSOR_MARKER_ALREADY_VISIBLE: zero input")
+        binding = native.marker_binding(binding, wire, marker)
         attempt = dict(schema="successor-attempt-v2", artifact=artifact,
                        artifact_sha256=_hash(_canonical(artifact)), marker=marker,
                        body=text, body_sha256=_hash(text.encode()), wire=wire,
@@ -413,70 +405,42 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
         _exclusive_json(journal / "attempt.json", attempt)
         operations = 0
         try:
+            def recheck():
+                require_bound(bridge, artifact, binding, wire)
+                if reference is not None and prompt_reference.verify(reference, text) != body_pin:
+                    raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
+            def emit(phase, screen=None, *, evidence=None):
+                nonlocal operations
+                recheck()
+                fields = native.input_event_fields(_legacy_binding(binding), wire, phase, evidence)
+                if phase == "PASTE_INTENT":
+                    fields["native_paste_fence"] = native.capture_paste_fence(_legacy_binding(binding))
+                if screen is not None:
+                    fields.update(screen=screen, screen_sha256=_hash(screen.encode()))
+                _event(journal, phase, **fields)
+                if phase in ("NATIVE_INPUT_INTENT", "PASTE_INTENT", "ENTER_INTENT", "EXTRA_ENTER_INTENT"):
+                    operations += 1
+            def terminal():
+                from cmux_direct_input import send_once as direct_send
+                return direct_send(wire, marker, recheck=recheck, emit=emit,
+                    paste=lambda value: bridge._run_successor("rpc", "terminal.paste", json.dumps({
+                        "text": value, "submit_key": "none",
+                        "workspace_id": binding["identity"]["target_workspace_uuid"],
+                        "surface_id": binding["identity"]["target_surface_uuid"]}, ensure_ascii=False), artifact=artifact,
+                        receipt_contract=binding.get("receipt_contract")),
+                    key=lambda value: bridge._run_successor("send-key", "--surface",
+                        binding["identity"]["target_surface_uuid"], "--", value, artifact=artifact,
+                        receipt_contract=binding.get("receipt_contract")),
+                    observe=lambda: _observe(bridge, journal, artifact, text, marker),
+                    read_screen=lambda: bridge.read_screen_successor(artifact), wait_seconds=seconds)
             if binding["provider"] == "codex":
                 from cmux_codex_input import send_once
-                def recheck_native():
-                    require_bound(bridge, artifact, binding, wire)
-                    if reference is not None and prompt_reference.verify(reference, text) != body_pin:
-                        raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
-                def emit_native(phase, *, evidence):
-                    nonlocal operations
-                    recheck_native()
-                    fields = native.input_event_fields(_legacy_binding(binding), wire, phase, evidence)
-                    _event(journal, phase, **fields)
-                    if phase == "NATIVE_INPUT_INTENT":
-                        operations = 1
-                result = send_once(_legacy_binding(binding), wire,
-                    recheck=recheck_native, emit=emit_native,
+                result = send_once(_legacy_binding(binding), wire, recheck=recheck, emit=emit,
                     observe=lambda: _observe(bridge, journal, artifact, text, marker),
-                    wait_seconds=seconds)
-                result["reconciled_read_only"] = False
-                return _publish_observation(bridge, journal, artifact, text, marker, result)
-            require_bound(bridge, artifact, binding, wire)
-            fence = native.capture_paste_fence(_legacy_binding(binding))
-            _event(journal, "PASTE_INTENT", screen=before, screen_sha256=_hash(before.encode()),
-                   native_paste_fence=fence)
-            require_bound(bridge, artifact, binding, wire)
-            if reference is not None and prompt_reference.verify(reference, text) != body_pin:
-                raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
-            operations += 1
-            bridge._run_successor("rpc", "terminal.paste", json.dumps({
-                "text": wire, "submit_key": "none",
-                "workspace_id": binding["identity"]["target_workspace_uuid"],
-                "surface_id": binding["identity"]["target_surface_uuid"],
-            }, ensure_ascii=False), artifact=artifact)
-            _event(journal, "PASTED")
-            stable = None
-            for _ in range(20):
-                screen = bridge.read_screen_successor(artifact)
-                if bridge.receiver_cannot_submit_now(screen) or bridge.pending_queue_holds(screen, wire):
-                    raise native.NativeDeliveryError("SUCCESSOR_RECEIVER_NOT_READY: preserve original draft")
-                if bridge._exact_pending_text(screen, wire):
-                    structure = bridge._draft_structure(screen, wire)
-                    if stable is not None and stable == structure:
-                        break
-                    stable = structure
-                else:
-                    stable = None
-                time.sleep(0.25)
+                    wait_seconds=seconds, fallback=terminal)
             else:
-                raise native.NativeDeliveryError("SUCCESSOR_EXACT_STABLE_DRAFT_NOT_OBSERVED")
-            queue = bridge._codex_tab_queue_allowed(screen, wire)
-            actual_key = "tab" if queue else "enter"
-            if key is not None and key != actual_key:
-                raise native.NativeDeliveryError("SUCCESSOR_KEY_NOT_SUPPORTED_BY_CURRENT_RECEIVER")
-            if binding["provider"] == "codex" and bridge._queued_or_active_input(screen) and not queue:
-                raise native.NativeDeliveryError("SUCCESSOR_NO_SUPPORTED_SUBMIT_ACTION")
-            _event(journal, "KEY_INTENT", key=actual_key, screen=screen, screen_sha256=_hash(screen.encode()))
-            require_bound(bridge, artifact, binding, wire)
-            operations += 1
-            bridge._run_successor("send-key", "--surface", binding["identity"]["target_surface_uuid"],
-                                  "--", actual_key, artifact=artifact)
-            _event(journal, "KEY_SENT", key=actual_key)
-            result = observe_receipt(lambda: _observe(bridge, journal, artifact, text, marker),
-                                     seconds, stop_when_queued=True)
-            result.update(input_operations=operations, terminal_input_operations=operations,
-                          reconciled_read_only=False, submission_key=actual_key)
+                result = terminal()
+            result["reconciled_read_only"] = False
             return _publish_observation(bridge, journal, artifact, text, marker, result)
         except BaseException as exc:
             try:

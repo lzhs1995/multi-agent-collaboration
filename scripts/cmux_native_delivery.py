@@ -272,6 +272,24 @@ def _check_file(f, binding):
         raise NativeDeliveryError("NATIVE_TRANSCRIPT_BASELINE_CHANGED")
     return st.st_size
 
+def marker_binding(binding, text, marker):
+    """Pin the new receipt contract before the original attempt is persisted."""
+    if not isinstance(marker, str) or not marker or marker not in text:
+        raise NativeDeliveryError("DIRECT_UNIQUE_MARKER_REQUIRED")
+    return dict(binding, receipt_contract="native-user-marker-v1", receipt_marker=marker)
+
+
+def _user_text_matches(content, binding, text, block_type):
+    if binding.get("receipt_contract") != "native-user-marker-v1":
+        return content == [{"type": block_type, "text": text}] or (block_type == "text" and content == text)
+    marker = binding["receipt_marker"]
+    chunks = ([content] if isinstance(content, str) and block_type == "text" else
+              [item.get("text") for item in content
+               if isinstance(item, dict) and item.get("type") == block_type]
+              if isinstance(content, list) else [])
+    return any(isinstance(chunk, str) and marker in chunk for chunk in chunks)
+
+
 def _validate_binding(b, text):
     if not isinstance(b, dict) or b.get("schema") != SCHEMA:
         raise NativeDeliveryError("ORIGINAL_NATIVE_BINDING_REQUIRED: no retroactive intent")
@@ -279,6 +297,10 @@ def _validate_binding(b, text):
         raise NativeDeliveryError("NATIVE_PAYLOAD_CHANGED")
     if _uuid(b["session_id"]) != b["session_id"]:
         raise NativeDeliveryError("NATIVE_SESSION_INVALID")
+    if "receipt_contract" in b and (b["receipt_contract"] != "native-user-marker-v1"
+            or not isinstance(b.get("receipt_marker"), str) or not b["receipt_marker"]
+            or b["receipt_marker"] not in text):
+        raise NativeDeliveryError("NATIVE_RECEIPT_MARKER_INVALID")
     pin = b["transcript"]
     if (not isinstance(pin, dict) or not isinstance(b.get("identity"), dict)
             or set(b["identity"]) != set(IDENTITY_KEYS)
@@ -426,14 +448,14 @@ def _inbound(r, b, text, not_before=None, *, fenced=False):
             return None
         if (r.get("type") == "response_item" and p.get("type") == "message"
                 and p.get("role") == "user"
-                and p.get("content") == [{"type": "input_text", "text": text}]):
+                and _user_text_matches(p.get("content"), b, text, "input_text")):
             return "native_user_message"
     else:
         if r.get("sessionId") != b["session_id"] or r.get("isSidechain") is True:
             return None
         if r.get("type") == "user":
             p = r.get("message", {})
-            if isinstance(p, dict) and p.get("role") == "user" and p.get("content") in (text, [{"type": "text", "text": text}]):
+            if isinstance(p, dict) and p.get("role") == "user" and _user_text_matches(p.get("content"), b, text, "text"):
                 return "native_user_message"
         if r.get("type") == "attachment":
             p = r.get("attachment", {})

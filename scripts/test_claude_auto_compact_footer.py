@@ -1,9 +1,11 @@
-"""Synthetic auto-compact footer regression; all transport calls are mocked."""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Synthetic auto-compact footer regression; all transport calls are mocked."""
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import with_draft
 from test_claude_provider_goal_footer import frame
 
@@ -19,7 +21,7 @@ def screen(hint=HINT, **kwargs):
 
 class AutoCompactFooterTests(unittest.TestCase):
     def assert_zero_input(self, value):
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", return_value=value):
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", TEXT, marker="auto-compact-footer",
@@ -117,7 +119,7 @@ class AutoCompactFooterTests(unittest.TestCase):
 
     def test_busy_goal_accepts_ready_message_without_clear_or_pause(self):
         for goal in ("inline", "final"):
-            with self.subTest(goal=goal), NativeFixture(provider="claude") as native:
+            with self.subTest(goal=goal), LegacyTerminalFixture(provider="claude") as native:
                 before = screen(goal_position=goal, tool=True,
                                 status="✢ Crafting… (23s · ↑ 4.9k tokens)")
                 self.assertTrue(b._queued_or_active_input(before))
@@ -147,7 +149,7 @@ class AutoCompactFooterTests(unittest.TestCase):
                 self.assertEqual(current["screen"], before)
 
     def test_queue_only_is_unconfirmed_and_reconciliation_never_resends(self):
-        with NativeFixture(provider="claude") as native:
+        with LegacyTerminalFixture(provider="claude") as native:
             before = screen(tool=True)
             current = {"screen": before}
 

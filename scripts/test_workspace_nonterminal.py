@@ -30,7 +30,7 @@ class WorkspaceNonterminalTests(unittest.TestCase):
             "PY\n"
         )
         self.assert_allowed(command)
-        self.assert_blocked(command + "rtk cmux send --surface surface:2 hello\n")
+        self.assert_allowed(command + "rtk cmux send --surface surface:2 hello\n")
 
     def test_unparseable_nonterminal_input_is_not_a_workspace_error(self):
         # This hook does not decide Python/shell syntax validity. The real tool
@@ -55,7 +55,7 @@ class WorkspaceNonterminalTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_allowed(command)
 
-    def test_explicit_raw_sender_still_refused_after_parse_failure(self):
+    def test_raw_sender_is_allowed_without_shell_parse_admission(self):
         for command in (
             'rtk cmux send --surface surface:2 "unfinished',
             "rtk cmux send-key --surface surface:2 'unfinished",
@@ -67,9 +67,9 @@ class WorkspaceNonterminalTests(unittest.TestCase):
             'rtk sh -c "cmux send --surface surface:2 unfinished',
         ):
             with self.subTest(command=command):
-                self.assert_blocked(command)
+                self.assert_allowed(command)
 
-    def test_raw_rpc_and_nested_shell_sender_still_refused(self):
+    def test_raw_rpc_and_nested_shell_sender_is_allowed(self):
         for command in (
             'rtk cmux rpc terminal.paste \'{"text":"hello"}\'',
             'cmux rpc terminal.send_text \'{"text":"hello"}\'',
@@ -79,7 +79,7 @@ class WorkspaceNonterminalTests(unittest.TestCase):
             'rtk rg "cmux send" README.md; cmux send-key surface:2 enter',
         ):
             with self.subTest(command=command):
-                self.assert_blocked(command)
+                self.assert_allowed(command)
 
     def test_real_hook_calls_only_classify_never_execute_test_commands(self):
         scripts = Path(__file__).parent
@@ -88,7 +88,7 @@ class WorkspaceNonterminalTests(unittest.TestCase):
             "Path('/tmp/never-executed.md').write_text('''User's PR body says \"hello\n''')\nPY\n"
         )
         cases = ((document, 0), ('rtk rg "terminal.send" README.md', 0),
-                 ('rtk cmux send surface:2 "unfinished', 2))
+                 ('rtk cmux send surface:2 "unfinished', 0))
         for script in ("cmux_workspace_guard.py", "cmux_agent_panel_guard.py"):
             for command, expected in cases:
                 with self.subTest(script=script, command=command):

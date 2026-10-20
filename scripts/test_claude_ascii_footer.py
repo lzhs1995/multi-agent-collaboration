@@ -1,9 +1,11 @@
-"""Measured empty Stata Claude composers; all input is isolated/mocked."""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Measured empty Stata Claude composers; all input is isolated/mocked."""
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import FIXTURES, with_draft
 
 
@@ -13,7 +15,7 @@ def captured(name):
 
 class ClaudeAsciiFooterTests(unittest.TestCase):
     def assert_zero_input(self, screen):
-        with NativeFixture(provider="claude") as native, \
+        with LegacyTerminalFixture(provider="claude") as native, \
                 patch.object(b, "read_screen", return_value=screen):
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", "STATUS: fresh-token", marker="fresh-token")
@@ -22,7 +24,7 @@ class ClaudeAsciiFooterTests(unittest.TestCase):
 
     def test_measured_empty_composers_deliver_once(self):
         for name in ("control", "state"):
-            with self.subTest(name=name), NativeFixture(provider="claude") as native:
+            with self.subTest(name=name), LegacyTerminalFixture(provider="claude") as native:
                 screen = captured(name)
                 self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")
                 self.assertTrue(b.compose_block_is_empty(screen))

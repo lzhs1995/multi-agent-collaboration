@@ -26,6 +26,7 @@ class FakeTerminal:
         self.before_read = None
         self.fail_paste = False
         self.occupied = False
+        self.after_paste = None
 
     def pin_successor_pair(self, artifact, **kwargs):
         pair = rebind.resolve_pair(self.owner.identity, self.owner.tree, artifact)
@@ -44,7 +45,7 @@ class FakeTerminal:
         if self.before_read is not None:
             action, self.before_read = self.before_read, None
             action()
-        return "foreign draft" if self.occupied else "idle" if self.wire is None else "draft:" + self.wire
+        return "foreign draft" if self.occupied else "idle" if self.wire is None else "idle"
 
     def require_agent_input(self, *args):
         pass
@@ -70,7 +71,7 @@ class FakeTerminal:
     def _queued_or_active_input(self, screen):
         return False
 
-    def _run_successor(self, *args, artifact):
+    def _run_successor(self, *args, artifact, receipt_contract=None):
         # Observe actual durable bytes at the terminal side-effect boundary.
         journal = self.owner.journal()
         attempt = json.loads((journal / "attempt.json").read_text())
@@ -80,12 +81,14 @@ class FakeTerminal:
         assert len(paste) == 1 and "native_paste_fence" in paste[0]
         self.operations.append(args[0])
         if args[0] == "rpc":
-            assert not any(event["phase"] == "KEY_INTENT" for event in events)
+            assert not any(event["phase"] == "ENTER_INTENT" for event in events)
             if self.fail_paste:
                 raise RuntimeError("ambiguous paste failure")
             self.wire = json.loads(args[2])["text"]
+            if self.after_paste:
+                self.after_paste()
         else:
-            assert len([event for event in events if event["phase"] == "KEY_INTENT"]) == 1
+            assert len([event for event in events if event["phase"] == "ENTER_INTENT"]) == 1
             if self.response == "user":
                 self.owner.append_record(self.wire)
             elif self.response == "queued":
@@ -93,7 +96,7 @@ class FakeTerminal:
             elif self.response == "partial":
                 self.owner.append_record(self.wire, newline=False)
             elif self.response == "wrong":
-                self.owner.append_record(self.wire + " ")
+                self.owner.append_record("unrelated user text without the marker")
             elif self.response == "cross_fence":
                 with self.owner.transcript.open("ab") as stream:
                     stream.write(self.owner.cross_fence_tail)
@@ -162,7 +165,12 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual((self.journal() / "attempt.json").read_bytes(), original_bytes)
 
     def test_record_between_bind_and_paste_is_not_a_receipt(self):
-        self.bridge.before_read = lambda: self.append_record(self.text)
+        original_fence = delivery.native.capture_paste_fence
+        def fence(binding):
+            self.append_record(self.text)
+            return original_fence(binding)
+        self.addCleanup(patch.stopall)
+        patch.object(delivery.native, "capture_paste_fence", side_effect=fence).start()
         self.bridge.response = "none"
         self.assertFalse(self.submit()["confirmed"])
         self.append_record(self.text)
@@ -175,7 +183,12 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
             with self.transcript.open("ab") as stream:
                 stream.write(raw[:middle])
             self.cross_fence_tail = raw[middle:]
-        self.bridge.before_read = partial_before_fence
+        original_fence = delivery.native.capture_paste_fence
+        def fence(binding):
+            partial_before_fence()
+            return original_fence(binding)
+        self.addCleanup(patch.stopall)
+        patch.object(delivery.native, "capture_paste_fence", side_effect=fence).start()
         self.bridge.response = "cross_fence"
         self.assertFalse(self.submit()["confirmed"])
         self.append_record(self.text)
@@ -196,7 +209,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["state"], "NATIVE_QUEUED")
 
-    def test_whole_exact_payload_required(self):
+    def test_unrelated_user_text_does_not_confirm_marker(self):
         self.bridge.response = "wrong"
         self.assertFalse(self.submit()["confirmed"])
 
@@ -293,12 +306,10 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
                 self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
                 self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
 
-    def test_foreign_draft_has_zero_input_and_no_attempt(self):
+    def test_composer_state_does_not_gate_direct_communication(self):
         self.bridge.occupied = True
-        with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "COMPOSE_OCCUPIED"):
-            self.submit()
-        self.assertEqual(self.bridge.operations, [])
-        self.assertFalse((self.journal() / "attempt.json").exists())
+        self.assertTrue(self.submit()['confirmed'])
+        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
 
     def test_changed_body_cannot_reuse_original_marker(self):
         self.submit()
@@ -308,13 +319,9 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
 
     def test_pane_drift_before_key_preserves_single_paste(self):
-        original_read = self.bridge.read_screen_successor
-        def drift(artifact):
-            result = original_read(artifact)
-            if self.bridge.wire is not None:
-                self.tree["windows"][0]["workspaces"][0]["panes"][0]["id"] = SUCCESSOR
-            return result
-        self.bridge.read_screen_successor = drift
+        def drift():
+            self.tree["windows"][0]["workspaces"][0]["panes"][0]["id"] = SUCCESSOR
+        self.bridge.after_paste = drift
         with self.assertRaisesRegex(rebind.SuccessorRebindError, "pane drift"):
             self.submit()
         self.assertEqual(self.bridge.operations, ["rpc"])

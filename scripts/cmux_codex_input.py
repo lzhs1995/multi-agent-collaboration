@@ -1,8 +1,8 @@
-"""Direct input to the bound, already-loaded Codex thread; never terminal input.
+"""Native input to the bound Codex thread, with pre-input terminal fallback.
 
 An active turn uses turn/steer with its exact id; an idle thread uses turn/start
 without changing any settings. One durable intent authorizes one RPC request.
-An ambiguous return is observed, never retried or converted to paste/Tab/Enter.
+An ambiguous mutation is observed, never retried or converted to terminal input.
 Only the original native transcript can prove reception.
 """
 import contextlib
@@ -63,7 +63,7 @@ def _metadata_client():
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
             raise annotate_error(exc, transport=TRANSPORT, input_operations=0,
                 terminal_input_operations=0, native_metadata=dict(
-                    metadata_rpc_status="UNAVAILABLE",
+                    metadata_rpc_status="UNAVAILABLE", metadata_phase="CONNECT",
                     metadata_rpc_error=rpc_error_details(exc)))
         yield client
 
@@ -122,7 +122,7 @@ def prepare(client, binding, text):
     if method is None:
         reason = ("CODEX_NATIVE_THREAD_NOT_ACCEPTING" if metadata["can_accept_direct_input"] is not True
                   else "CODEX_NATIVE_TURN_CHANGED_OR_UNAVAILABLE")
-        raise annotate_error(native.NativeDeliveryError(reason + ": zero input; no terminal fallback"),
+        raise annotate_error(native.NativeDeliveryError(reason + ": native method unavailable before input"),
                              native_metadata=metadata, input_operations=0)
     params = {"threadId": binding["session_id"], "input": [{"type": "text", "text": text}]}
     if method == "turn/steer":
@@ -175,7 +175,7 @@ def validate_request(value, binding, text):
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
-def send_once(binding, text, *, recheck, emit, observe, wait_seconds=None):
+def _send_native_once(binding, text, *, recheck, emit, observe, wait_seconds=None):
     """Callers hold their existing journal locks and fsync emit() before input."""
     seconds = wait_budget(wait_seconds)
     recheck()
@@ -222,3 +222,32 @@ def send_once(binding, text, *, recheck, emit, observe, wait_seconds=None):
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
         raise annotate_error(exc, **fields)
     return dict(proof, **fields, elapsed_ms=round((time.monotonic() - started) * 1000, 3))
+
+
+def send_once(binding, text, *, recheck, emit, observe, wait_seconds=None, fallback=None):
+    """Prefer native input; unavailable transport before intent may use terminal.
+
+    Never fall back after an input intent, RPC timeout, uncertain result or
+    changed receiver identity. The fallback keeps this same original journal.
+    """
+    intended = False
+    def record(phase, *, evidence):
+        nonlocal intended
+        if phase == INPUT_PHASE:
+            intended = True
+        emit(phase, evidence=evidence)
+    try:
+        return _send_native_once(binding, text, recheck=recheck, emit=record,
+                                 observe=observe, wait_seconds=wait_seconds)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        import errno
+        metadata = getattr(exc, "details", {}).get("native_metadata", {})
+        unavailable = (isinstance(exc, OSError) and exc.errno in
+                       (errno.ENOENT, errno.ECONNREFUSED)
+                       and metadata.get("metadata_phase") == "CONNECT")
+        unavailable = unavailable or (metadata.get("metadata_rpc_status") == "AVAILABLE"
+            and metadata.get("available_input_method") is None)
+        if fallback is None or intended or not unavailable:
+            raise
+        recheck()
+        return dict(fallback(), native_fallback_reason=rpc_error_details(exc))

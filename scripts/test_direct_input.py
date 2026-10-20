@@ -1,0 +1,208 @@
+"""Real journals/transcripts: direct fallback, recovery budget and receipt scope."""
+import errno
+import json
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+
+import cmux_bridge as bridge
+import cmux_direct_input as direct
+import cmux_native_delivery as native
+from native_test_support import NativeFixture
+
+
+class DirectInputTests(unittest.TestCase):
+    def setUp(self):
+        self.f = NativeFixture.attach(self)
+        self.marker = 'DIRECT_POLICY_0454_ABC123'
+        self.text = 'STATUS: ' + self.marker + ' release verification'
+        self.f.rpc.side_effect = FileNotFoundError(errno.ENOENT, 'missing control socket')
+
+    def send(self, **kwargs):
+        return bridge.submit_text('target', self.text, marker=self.marker,
+                                  wait_seconds=0, **kwargs)
+
+    def test_missing_socket_immediate_enter_and_wrapped_user_marker_confirms(self):
+        self.f.key.side_effect = self.f.receipt_on_key('queued context\n' + self.text + '\n')
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('no admission read')):
+            result = self.send()
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['transport'], direct.TRANSPORT)
+        self.assertEqual(result['terminal_input_operations'], 2)
+        self.f.send.assert_called_once_with('target', self.text)
+        self.f.key.assert_called_once_with('target', 'enter')
+        before = self.f.send.call_count
+        with self.assertRaisesRegex(bridge.TaskPackContractError, 'RECEIPT_EXISTS'):
+            self.send(reconcile_only=True)
+        self.assertEqual(before, self.f.send.call_count)
+
+    def test_existing_draft_does_not_gate_or_get_cleared(self):
+        original_draft = 'Unsubmitted receiver note. '
+        self.f.key.side_effect = self.f.receipt_on_key(original_draft + self.text)
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('no composer admission')):
+            result = self.send()
+        self.assertTrue(result['confirmed'])
+        self.f.send.assert_called_once_with('target', self.text)
+        self.f.key.assert_called_once_with('target', 'enter')
+        self.assertIn(original_draft, self.f.transcript.read_text())
+
+    def test_one_extra_enter_after_compaction_ends_without_second_paste(self):
+        def key(surface, value):
+            if self.f.key.call_count == 2:
+                self.f.append_user(self.text)
+        self.f.key.side_effect = key
+        with patch.object(bridge, 'read_screen', side_effect=['Compacting context', self.text]):
+            result = bridge.submit_text('target', self.text, marker=self.marker, wait_seconds=1)
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['extra_enter'], 1)
+        self.assertEqual(self.f.key.call_count, 2)
+        self.f.send.assert_called_once()
+
+    def test_active_compaction_preserves_extra_enter_budget(self):
+        with patch.object(bridge, 'read_screen', return_value='Compacting context'):
+            with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
+                self.send()
+        self.f.send.assert_called_once()
+        self.f.key.assert_called_once()
+        self.assertNotIn('EXTRA_ENTER_INTENT',
+            [e['phase'] for e in json.loads(next(self.f.home.rglob('attempt-0001.json')).read_text())['events']])
+
+    def test_non_socket_enoent_never_causes_fallback(self):
+        with patch('cmux_codex_input._send_native_once', side_effect=FileNotFoundError(errno.ENOENT, 'transcript gone')):
+            with self.assertRaises(FileNotFoundError):
+                self.send()
+        self.f.send.assert_not_called()
+        self.f.key.assert_not_called()
+
+    def test_consumed_extra_key_never_repeats_on_reconcile_or_resubmit(self):
+        with patch.object(bridge, 'read_screen', return_value=self.text):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.send()
+        self.assertEqual(self.f.key.call_count, 2)
+        with self.assertRaises(bridge.TaskPackContractError):
+            self.send()
+        with self.assertRaises(bridge.DispatchUnconfirmed):
+            self.send(reconcile_only=True)
+        self.assertEqual(self.f.key.call_count, 2)
+        self.f.send.assert_called_once()
+
+    def test_receipt_race_before_extra_key_returns_without_key(self):
+        def screen(*args, **kwargs):
+            self.f.append_user(self.text)
+            return self.text
+        with patch.object(bridge, 'read_screen', side_effect=screen):
+            self.assertTrue(self.send()['confirmed'])
+        self.f.key.assert_called_once()
+
+    def test_uncertain_paste_never_sends_key_or_repastes(self):
+        self.f.send.side_effect = TimeoutError('paste outcome unknown')
+        with self.assertRaises(TimeoutError):
+            self.send()
+        with self.assertRaises(bridge.TaskPackContractError):
+            self.send()
+        self.f.send.assert_called_once()
+        self.f.key.assert_not_called()
+
+    def test_process_change_after_paste_prevents_key(self):
+        def paste(*args):
+            self.f.process_state['birth'] = 'different process'
+        self.f.send.side_effect = paste
+        with self.assertRaisesRegex(native.NativeDeliveryError, 'BIRTH'):
+            self.send()
+        self.f.key.assert_not_called()
+
+    def test_old_marker_and_assistant_or_tool_echo_do_not_confirm(self):
+        self.f.append_user(self.text)  # before original intent
+        def key(*args):
+            from datetime import datetime, timezone
+            for role in ('assistant', 'tool'):
+                self.f.append_record({'type': 'response_item',
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'payload': {'type': 'message', 'role': role,
+                        'content': [{'type': 'input_text', 'text': self.text}]}})
+        self.f.key.side_effect = key
+        with patch.object(bridge, 'read_screen', return_value='busy without draft'):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.send()
+        self.f.key.assert_called_once()
+
+    def test_new_policy_is_pinned_before_paste_and_durable(self):
+        def paste(*args):
+            paths = list(self.f.home.rglob('attempt-0001.json'))
+            attempt = json.loads(paths[0].read_text())
+            self.assertEqual(attempt['native_binding']['receipt_marker'], self.marker)
+            self.assertEqual(attempt['events'][-1]['phase'], 'PASTE_INTENT')
+            native.original_input_event(attempt['events'], attempt['native_binding'], self.text)
+        self.f.send.side_effect = paste
+        self.f.key.side_effect = self.f.receipt_on_key(self.text)
+        self.assertTrue(self.send()['confirmed'])
+
+
+class DirectFormalDeliveryTests(unittest.TestCase):
+    def enterContext(self, context):
+        value = context.__enter__()
+        self.addCleanup(context.__exit__, None, None, None)
+        return value
+
+    def prepare(self, provider, callback):
+        self.f = self.enterContext(NativeFixture(provider=provider))
+        self.marker = 'FORMAL_DIRECT_NONCE_0454'
+        self.packpath = self.f.home / 'pack.json'
+        report = self.f.home / 'report.md'
+        report.write_text('Completed work for this exact task.')
+        self.receipt = self.f.home / 'completion-receipt.json'
+        self.pack = dict(task_id='formal-direct-test', completion_nonce=self.marker,
+            executor_uuid=self.f.identity['caller_surface_uuid'] if callback
+                          else self.f.identity['target_surface_uuid'],
+            report=str(report), callback_target='target', completion_receipt=str(self.receipt))
+        self.pack['completion_callback'] = f'DONE|formal-direct-test|{self.marker}|REPORT={report}'
+        self.packpath.write_text(json.dumps(self.pack))
+        self.enterContext(patch.object(bridge, 'validate_task_pack_contract', return_value=self.pack))
+        self.enterContext(patch('availability_contract.require_action'))
+        self.f.rpc.side_effect = FileNotFoundError(errno.ENOENT, 'control socket absent')
+        self.text = self.pack['completion_callback'] if callback else 'STATUS: ' + self.marker
+        self.call = (lambda **kw: bridge.submit_completion_callback(str(self.packpath), wait_seconds=0, **kw)) if callback else (
+            lambda **kw: bridge.submit_task_pack('target', self.text, str(self.packpath),
+                marker=self.marker, wait_seconds=0, **kw))
+
+    def test_task_pack_receipt_accepts_user_marker_during_claude_work(self):
+        self.prepare('claude', False)
+        self.f.key.side_effect = self.f.receipt_on_key('Queued context\n' + self.text)
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('no idle gate')):
+            result = self.call()
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['transport'], direct.TRANSPORT)
+        self.f.send.assert_called_once()
+        self.f.key.assert_called_once()
+        with self.assertRaises(bridge.TaskPackContractError):
+            self.call()
+        self.f.send.assert_called_once()
+
+    def test_callback_socket_missing_delivers_once_without_duplicate(self):
+        self.prepare('codex', True)
+        self.f.key.side_effect = self.f.receipt_on_key('Context wrapper\n' + self.text + '\n')
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('no idle gate')):
+            result = self.call()
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(result['transport'], direct.TRANSPORT)
+        self.assertTrue(self.receipt.is_file())
+        with self.assertRaisesRegex(bridge.TaskPackContractError, 'RECEIPT_EXISTS'):
+            self.call(reconcile_only=True)
+        self.f.send.assert_called_once()
+        self.f.key.assert_called_once()
+
+    def test_claude_queue_is_not_user_receipt_and_does_not_trigger_extra_enter(self):
+        self.prepare('claude', False)
+        self.f.key.side_effect = lambda *args: self.f.append_queued(self.text)
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('queue needs no key')):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.call()
+        self.f.key.assert_called_once()
+        self.f.append_user('Delivered after queued attachment: ' + self.text)
+        self.assertTrue(self.call(reconcile_only=True)['confirmed'])
+        self.f.key.assert_called_once()
+        self.f.send.assert_called_once()
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,9 +1,11 @@
-"""Synthetic measured HUD layout; no private task text or live terminal input."""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Synthetic measured HUD layout; no private task text or live terminal input."""
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import FIXTURES, footer_variant, with_draft
 
 
@@ -27,7 +29,7 @@ def breakdown(value):
 
 class ClaudeContextBreakdownTests(unittest.TestCase):
     def assert_zero_input(self, screen):
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", return_value=screen):
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.submit_text("offline-peer", "STATUS: CONTEXT0433", marker="CONTEXT0433")
@@ -58,7 +60,7 @@ class ClaudeContextBreakdownTests(unittest.TestCase):
     def test_idle_complete_draft_and_native_user_receipt_confirm_one_send(self):
         before = idle()
         payload = "STATUS: CONTEXT0433"
-        with NativeFixture(provider="claude") as native, patch.object(
+        with LegacyTerminalFixture(provider="claude") as native, patch.object(
                 b, "read_screen", side_effect=native.ready_screens(
                     before, with_draft(before, payload))):
             native.key.side_effect = native.receipt_on_key(payload)

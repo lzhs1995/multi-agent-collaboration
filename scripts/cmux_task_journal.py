@@ -194,6 +194,7 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
 
             try:
                 attempt['native_binding'] = native.bind_target(bridge, surface, text)
+                attempt['native_binding'] = native.marker_binding(attempt['native_binding'], text, marker)
                 write_json(attempt_path, attempt)
                 result = bridge.submit_text(surface, text, marker=marker, confirm_lines=confirm_lines,
                     task_pack_path=task_pack_path, delivery_observer=observe,

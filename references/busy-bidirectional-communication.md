@@ -8,9 +8,9 @@
 ## 实际入口
 
 - Codex接收新消息时，认证原线程和既有control socket；运行中一次
-  `turn/steer`，空闲时一次`turn/start`。不读写其composer。
-- Claude接收新消息时，原bridge核真实身份及完整空composer，粘贴一次；
-  完整原文稳定后提交一次。工具运行和已识别的Goal状态栏本身不拒收。
+  `turn/steer`，空闲时一次`turn/start`。socket 不可用且尚未输入时自动降级直发。
+- Claude 接收新消息时核真实身份，粘贴一次并立即 Enter，不要求 composer 判读。
+  双方忙碌、Goal 和压缩均不作为通信禁令；原转录新增含唯一 marker 的 user 消息确认送达。
 - 消息、握手、正式任务包及callback沿各自已有入口，不另建发送器。
   同pane输入保持串行，只覆盖实际输入操作，不锁住整个模型回合。
 

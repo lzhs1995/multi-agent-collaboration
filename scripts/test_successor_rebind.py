@@ -254,14 +254,27 @@ class NativeSamePaneTests(MaintenanceRebindTests):
             with self.assertRaises(s.SuccessorRebindError):
                 s.resolve_pair(self.identity, self.tree, dict(self.artifact, **changes))
 
-    def test_native_authorization_never_allows_terminal_paste_or_keys(self):
+    def test_original_same_pane_pair_can_use_terminal_fallback(self):
         self.same_pane()
-        with patch.object(bridge.subprocess, 'run') as run:
-            for args in [('rpc', 'terminal.paste', '{}'), ('send', '--surface', TARGET, 'hello'),
+        proof = dict(target_workspace_uuid=NEW_WS, target_surface_uuid=TARGET)
+        with patch.object(bridge, 'pin_successor_pair', return_value=proof), \
+                patch.object(bridge.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '{}'
+            params = dict(text='STATUS: ORIGINAL_PAIR', submit_key='none',
+                          workspace_id=NEW_WS, surface_id=TARGET)
+            for args in [('rpc', 'terminal.paste', json.dumps(params)),
+                         ('send', '--surface', TARGET, 'STATUS: ORIGINAL_PAIR'),
                          ('send-key', '--surface', TARGET, 'enter')]:
-                with self.assertRaisesRegex(Exception, 'forbids terminal input'):
-                    bridge._run_successor(*args, artifact=self.artifact)
-            run.assert_not_called()
+                bridge._run_successor(*args, artifact=self.artifact, receipt_contract="native-user-marker-v1")
+            self.assertEqual(run.call_count, 3)
+            with self.assertRaisesRegex(Exception, 'target surface override'):
+                bridge._run_successor('send-key', '--surface', OLD_SUP, 'enter',
+                                      artifact=self.artifact, receipt_contract="native-user-marker-v1")
+            self.assertEqual(run.call_count, 3)
+            with self.assertRaisesRegex(Exception, 'Historical native-only'):
+                bridge._run_successor('send-key', '--surface', TARGET, 'enter', artifact=self.artifact)
+            self.assertEqual(run.call_count, 3)
 
     def test_actual_caller_foreground_thread_required(self):
         self.same_pane()
