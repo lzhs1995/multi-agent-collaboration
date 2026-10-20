@@ -107,40 +107,69 @@ def request_bytes(path):
 
 
 def freeze_request(raw):
-    """Preserve the already-read bytes; never reread the rotating source path."""
+    """Publish exact bytes; recover an interrupted own staging name in O(1)."""
     root = ready.state_root() / 'supervisor-request-snapshots-v1'
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     digest = hashlib.sha256(raw).hexdigest()
+    final = digest + '.txt'
+    temporary = '.staging-' + digest
     reference = dict(format=references.SINGLE_LINE_FORMAT,
-                     path=str(root / (digest + '.txt')),
-                     sha256=digest, bytes=len(raw))
+                     path=str(root / final), sha256=digest, bytes=len(raw))
     text = raw.decode('utf-8')
     folder = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    temporary = '.staging-' + uuid.uuid4().hex
+    lock = None
     try:
         info = os.fstat(folder)
         if info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError('UNSAFE_REQUEST_SNAPSHOT_DIRECTORY')
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                     0o600, dir_fd=folder)
+        lock = os.open('.publication.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                       0o600, dir_fd=folder)
+        lock_info = os.fstat(lock)
+        if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1
+                or lock_info.st_uid != os.getuid() or lock_info.st_mode & 0o077):
+            raise ValueError('UNSAFE_REQUEST_SNAPSHOT_LOCK')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # One short publication lock lets a later hook clean this exact staging
+        # name after process death. No directory scan or age-based deletion.
         try:
-            with os.fdopen(fd, 'wb') as handle:
-                handle.write(raw)
-                handle.flush()
-                os.fchmod(handle.fileno(), 0o400)
-                os.fsync(handle.fileno())
-            try:
-                os.link(temporary, digest + '.txt', src_dir_fd=folder,
-                        dst_dir_fd=folder, follow_symlinks=False)
-            except FileExistsError:
-                pass  # Only verify an existing snapshot, never repair it.
-        finally:
+            stale = os.stat(temporary, dir_fd=folder, follow_symlinks=False)
+        except FileNotFoundError:
+            stale = None
+        if stale is not None:
+            if (not stat.S_ISREG(stale.st_mode) or stale.st_uid != os.getuid()
+                    or stale.st_nlink not in (1, 2)):
+                raise ValueError('UNSAFE_REQUEST_STAGING')
+            if stale.st_nlink == 2:
+                final_info = os.stat(final, dir_fd=folder, follow_symlinks=False)
+                if (stale.st_dev, stale.st_ino) != (final_info.st_dev, final_info.st_ino):
+                    raise ValueError('UNSAFE_REQUEST_STAGING_LINK')
             os.unlink(temporary, dir_fd=folder)
+        try:
+            os.stat(final, dir_fd=folder, follow_symlinks=False)
+        except FileNotFoundError:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=folder)
+            try:
+                with os.fdopen(fd, 'wb') as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fchmod(handle.fileno(), 0o400)
+                    os.fsync(handle.fileno())
+                try:
+                    os.link(temporary, final, src_dir_fd=folder, dst_dir_fd=folder,
+                            follow_symlinks=False)
+                except FileExistsError:
+                    pass  # Never replace a conflicting final name.
+            finally:
+                os.unlink(temporary, dir_fd=folder)
+            os.fsync(folder)
         current = root.lstat()
         if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
             raise ValueError('REQUEST_SNAPSHOT_DIRECTORY_CHANGED')
         references.verify(reference, text)
     finally:
+        if lock is not None:
+            os.close(lock)
         os.close(folder)
     return reference
 

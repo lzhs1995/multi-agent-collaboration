@@ -128,7 +128,7 @@ class InboxTest(unittest.TestCase):
         with mock.patch.object(inbox.os, 'link', side_effect=OSError('publish interrupted')):
             self.assertEqual(self.discover(), [])
         root = ready.state_root() / 'supervisor-request-snapshots-v1'
-        self.assertEqual(list(root.iterdir()), [])
+        self.assertEqual([p.name for p in root.iterdir()], ['.publication.lock'])
         frontier = ready.read_json(self.cursor() / 'frontier.json')
         self.assertEqual(frontier['snapshot_failures'], {'count': 1, 'last_kind': 'OSError'})
         notice = self.discover(now=161.)[0]
@@ -146,6 +146,47 @@ class InboxTest(unittest.TestCase):
             return link(source, destination, **kwargs)
         with mock.patch.object(inbox.os, 'link', side_effect=inspect):
             self.assertEqual(len(self.discover()), 1)
+
+    def test_postlink_process_death_recovers_exact_staging_without_replacing_final(self):
+        _state, current = self.request()
+        raw = current.read_bytes()
+        first = inbox.freeze_request(raw)
+        final = Path(first['path'])
+        inode = final.stat().st_ino
+        staging = final.parent / ('.staging-' + first['sha256'])
+        os.link(final, staging)
+        self.assertEqual(final.stat().st_nlink, 2)
+        notice = self.discover()[0]
+        self.assertEqual(notice['request'], str(final))
+        self.assertEqual(final.stat().st_ino, inode)
+        self.assertEqual(final.stat().st_nlink, 1)
+        self.assertFalse(staging.exists())
+        self.assertEqual(final.read_bytes(), raw)
+
+    def test_prelink_partial_staging_is_recovered_without_touching_other_names(self):
+        _state, current = self.request()
+        root = ready.state_root() / 'supervisor-request-snapshots-v1'
+        root.mkdir(mode=0o700)
+        digest = hashlib.sha256(current.read_bytes()).hexdigest()
+        (root / ('.staging-' + digest)).write_bytes(b'partial')
+        unrelated = root / '.staging-unrelated'
+        unrelated.write_bytes(b'preserve')
+        notice = self.discover()[0]
+        self.assertEqual(Path(notice['request']).read_bytes(), current.read_bytes())
+        self.assertEqual(unrelated.read_bytes(), b'preserve')
+
+    def test_busy_snapshot_publication_lock_never_waits_or_removes_staging(self):
+        _state, current = self.request()
+        root = ready.state_root() / 'supervisor-request-snapshots-v1'
+        root.mkdir(mode=0o700)
+        temporary = root / ('.staging-' + hashlib.sha256(current.read_bytes()).hexdigest())
+        temporary.write_bytes(b'in progress')
+        with (root / '.publication.lock').open('w') as lock:
+            os.chmod(lock.name, 0o600)
+            inbox.fcntl.flock(lock, inbox.fcntl.LOCK_EX | inbox.fcntl.LOCK_NB)
+            self.assertEqual(self.discover(), [])
+            self.assertEqual(temporary.read_bytes(), b'in progress')
+        self.assertEqual(len(self.discover(now=161.)), 1)
 
     def test_wrong_workspace_supervisor_paths_templates_and_inactive_requests_refused(self):
         _state, path = self.request()

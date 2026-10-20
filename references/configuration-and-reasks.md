@@ -707,7 +707,13 @@ reuses identical snapshots, and commits its discovery cursor only after output
 flush. A failed or conflicting snapshot is never replaced with a mutable path.
 The final SHA filename is published only after a private staging file has been
 fully written, made read-only and synced. Interrupted staging writes cannot
-poison that final filename. A bounded `snapshot_failures` count and last error
+poison that final filename. A nonblocking publication lock serializes only this
+short file operation. The staging name is derived from the exact request SHA:
+after process death, the next attempt cleans only that owned staging name,
+including a second hard link to the same final inode, before verification.
+It never scans or deletes other staging files. An orphan for a request that is
+never revisited remains for the authorized archive process.
+A bounded `snapshot_failures` count and last error
 kind are recorded in the discovery frontier after successful output flush;
 other valid requests may still be offered.
 
