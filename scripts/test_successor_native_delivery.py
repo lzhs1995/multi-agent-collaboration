@@ -164,6 +164,25 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
         self.assertEqual((self.journal() / "attempt.json").read_bytes(), original_bytes)
 
+    def test_deferred_direct_recovery_after_compaction(self):
+        self.bridge.response = 'none'
+        with patch.object(self.bridge, 'read_screen_successor', return_value='Compacting context'):
+            self.assertFalse(self.submit()['confirmed'])
+            self.assertFalse(delivery.recover(self.bridge, self.artifact, self.text,
+                marker=self.marker, state_root=self.root, wait_seconds=0)['confirmed'])
+        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+        original = (self.journal() / 'attempt.json').read_bytes()
+        self.bridge.response = 'user'
+        with patch.object(self.bridge, 'read_screen_successor', return_value=self.text):
+            result = delivery.recover(self.bridge, self.artifact, self.text,
+                marker=self.marker, state_root=self.root, wait_seconds=0)
+            self.assertTrue(result['confirmed'])
+            with self.assertRaisesRegex(ValueError, 'BUDGET_UNAVAILABLE'):
+                delivery.recover(self.bridge, self.artifact, self.text,
+                    marker=self.marker, state_root=self.root, wait_seconds=0)
+        self.assertEqual(self.bridge.operations, ['rpc', 'send-key', 'send-key'])
+        self.assertEqual((self.journal() / 'attempt.json').read_bytes(), original)
+
     def test_record_between_bind_and_paste_is_not_a_receipt(self):
         original_fence = delivery.native.capture_paste_fence
         def fence(binding):

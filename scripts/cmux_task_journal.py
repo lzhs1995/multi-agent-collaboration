@@ -70,10 +70,12 @@ def verified_receipt(bridge, surface, text, marker, task_pack_path):
 
 
 def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=200,
-            force_compose=False, *, reconcile_only=False, wait_seconds=None):
+            force_compose=False, *, reconcile_only=False, wait_seconds=None, recover_stranded=False):
     from cmux_confirmation import (wait_budget, controller_provenance, attempt_details,
                                    annotate_attempt_error, observe_attempt)
     seconds = wait_budget(wait_seconds, reconcile_only=reconcile_only)
+    if reconcile_only and recover_stranded:
+        raise bridge.TaskPackContractError("CONFLICTING_RECOVERY_MODES")
     from availability_contract import require_action
     pack = bridge.validate_task_pack_contract(task_pack_path, prompt_text=text)
     require_action(pack['task_id'], 'dispatch', pack)
@@ -153,7 +155,33 @@ def deliver(bridge, surface, text, task_pack_path, marker=None, confirm_lines=20
         if receipt.exists():
             raise bridge.TaskPackContractError('DISPATCH_RECEIPT_EXISTS: no duplicate task')
         recheck()
-        if reconcile_only:
+        if recover_stranded:
+            if not old or (old.get('native_binding') or {}).get('receipt_contract') != 'native-user-marker-v1':
+                raise bridge.TaskPackContractError('DIRECT_ORIGINAL_MARKER_CONTRACT_REQUIRED')
+            attempt_path = attempts[-1]
+            def observe_recovery(phase, screen=None):
+                recheck()
+                if json.loads(read_bytes(attempt_path)) != old:
+                    raise bridge.TaskPackContractError('RECOVERY_JOURNAL_CHANGED')
+                event = dict(phase=phase, at_epoch=time.time(), recovery='direct_marker')
+                if screen is not None:
+                    event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
+                old['events'].append(event)
+                old['phase'] = phase
+                write_json(attempt_path, old)
+            try:
+                result = bridge.recover_stranded_once(surface, text, marker, '',
+                    confirm_lines=confirm_lines, delivery_observer=observe_recovery,
+                    native_binding=old['native_binding'], native_attempt=attempt_path,
+                    wait_seconds=seconds)
+            except BaseException as exc:
+                annotate_attempt_error(exc, attempt_path, old)
+                old.update(recovery_error=str(exc), recovery_error_details=exc.details)
+                write_json(attempt_path, old)
+                raise
+            old.update(phase='CONFIRMED', ended_at_epoch=time.time())
+            write_json(attempt_path, old)
+        elif reconcile_only:
             if not old or old.get('phase') in ('PREPARED', 'NO_INPUT'):
                 raise bridge.TaskPackContractError('NO_SUBMITTED_DISPATCH')
             result = observe_attempt(lambda: native.scan_original(

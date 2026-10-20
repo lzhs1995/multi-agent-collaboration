@@ -12,6 +12,55 @@ from cmux_confirmation import annotate_error, observe_receipt, wait_budget
 TRANSPORT = "terminal-direct-marker-v1"
 
 
+def recover_once(text, marker, *, original, recheck, emit, key, observe,
+                 read_screen, wait_seconds=None):
+    """Spend an unused extra Enter on the original current-contract attempt.
+
+    The caller holds its original locks and persists emit before every key.
+    A deferred observation spends no budget; an uncertain key spends it forever.
+    No paste, original-screen comparison, new fence or native RPC is permitted.
+    """
+    seconds = wait_budget(wait_seconds)
+    binding = original.get("native_binding") or {}
+    if (binding.get("receipt_contract") != "native-user-marker-v1"
+            or binding.get("receipt_marker") != marker or not marker or marker not in text):
+        raise ValueError("DIRECT_ORIGINAL_MARKER_CONTRACT_REQUIRED")
+    events = original.get("events", [])
+    phases = [event.get("phase") for event in events]
+    if (any(phases.count(p) != 1 for p in
+            ("PASTE_INTENT", "PASTED", "ENTER_INTENT", "ENTER_SENT"))
+            or any("TAB" in str(p) or p in ("EXTRA_ENTER_INTENT", "EXTRA_ENTER_SENT",
+                    "NATIVE_INPUT_INTENT") for p in phases)):
+        raise ValueError("DIRECT_RECOVERY_BUDGET_UNAVAILABLE: reconcile original")
+    operations = 0
+    try:
+        recheck()
+        result = observe()
+        if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
+            screen = read_screen()
+            emit("DIRECT_RECOVERY_OBSERVATION", screen)
+            if "compacting" in screen.lower():
+                result = dict(result, extra_enter_deferred="COMPACTION_STILL_ACTIVE")
+            elif marker not in screen:
+                result = dict(result, extra_enter_deferred="MARKER_NOT_VISIBLE")
+            else:
+                result = observe()
+                if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
+                    recheck()
+                    emit("EXTRA_ENTER_INTENT", screen)
+                    recheck()
+                    operations = 1
+                    key("enter")
+                    emit("EXTRA_ENTER_SENT")
+                    result = observe_receipt(observe, seconds, stop_when_queued=True)
+        return dict(result, transport=TRANSPORT, recovered="enter" if operations else "observed",
+                    input_operations=operations, terminal_input_operations=operations,
+                    extra_enter=operations, retries=0)
+    except BaseException as exc:
+        raise annotate_error(exc, transport=TRANSPORT, input_operations=operations,
+            terminal_input_operations=operations, extra_enter=operations, no_repaste=True)
+
+
 def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
               wait_seconds=None):
     if not isinstance(marker, str) or not marker or marker not in text:

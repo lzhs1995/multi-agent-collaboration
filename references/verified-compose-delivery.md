@@ -29,6 +29,14 @@ Codex bridge 优先调用已绑定原线程的 turn/steer 或 turn/start；contr
 补键意图先落盘；不再次粘贴，不因崩溃、重试或换版重置预算。已入原生队列
 先观察，不补键。超出本轮观察窗不等于丢失；使用原参数 --reconcile-only。
 
+若压缩结束后仍未确认且本次 marker 留在屏幕，原发送方可对同一普通消息、
+正式任务或 callback 使用原参数加 `--recover-stranded`；继任联络使用
+`successor_rebind_cli.py recover` 加原 artifact、text-file、marker。
+这些入口只接受当前 marker 合同下恰好一次粘贴和首次 Enter 完成的原次，
+不要求原 ENTER 截图。仍压缩、marker 不可见或已排队时不补键；原生已收件
+只核收。一次补键意图已落盘后，失败、崩溃和再次调用均不恢复该预算。
+旧合同仍走原恢复规则；`--reconcile-only` 始终零输入。
+
 原 pane/target 输入锁及逐操作身份核验仍保留。直接 raw cmux 返回成功只证明
 操作返回；操作者必须记录并核目标原转录，不能把 Enter 当送达。
 

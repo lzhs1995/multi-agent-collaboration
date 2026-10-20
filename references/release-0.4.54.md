@@ -25,5 +25,11 @@ message containing the original marker confirms delivery. One recorded extra
 Enter may recover residual input; never paste twice or fall back after an
 uncertain native mutation. Existing attempts keep their original contract.
 
+If compaction outlasts the observation window, the original sender can spend
+the still-unused extra Enter later through `--recover-stranded` (message, task
+or callback), or successor `recover`. The current marker contract does not
+require historical composer screenshots. The original journal, locks, identity,
+EOF fence and durable one-key budget remain authoritative; no body is repasted.
+
 Publication, installation, actual hooks, native receipt and business acceptance
 remain separate evidence. The fallback does not create or repair a control socket.

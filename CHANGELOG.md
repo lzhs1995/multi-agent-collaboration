@@ -6,6 +6,10 @@
   terminal paste and Enter. Never fall back after uncertain native mutation.
 - Confirm new attempts by a fresh marker-bearing receiver user message. Preserve
   old contracts, original EOF fences, deduplication and a single extra-Enter budget.
+- Recover a deferred extra Enter after a long compaction through the original
+  message, task, callback or successor journal. Current marker attempts no longer
+  enter the historical screenshot matcher; already queued/received input and
+  spent or uncertain key intents never authorize another key.
 
 - Admit distinct existing terminal tabs in the same pane through ordinary
   messages, broadcast discovery, exact maintenance contact and formal identity

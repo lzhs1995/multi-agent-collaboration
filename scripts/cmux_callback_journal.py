@@ -99,11 +99,11 @@ def verified_receipt(bridge, surface, task_pack_path):
 
 
 def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False,
-            resume_queue_only=False, wait_seconds=None):
+            resume_queue_only=False, wait_seconds=None, recover_stranded=False):
     from cmux_confirmation import (wait_budget, controller_provenance, attempt_details,
                                    annotate_attempt_error, observe_attempt, RECEIPT_DIAGNOSTICS)
     seconds = wait_budget(wait_seconds, reconcile_only=reconcile_only)
-    if reconcile_only and resume_queue_only:
+    if sum(map(bool, (reconcile_only, resume_queue_only, recover_stranded))) > 1:
         raise bridge.TaskPackContractError("CONFLICTING_RECOVERY_MODES")
     from availability_contract import require_action
     pack = bridge.validate_task_pack_contract(task_pack_path)
@@ -184,7 +184,43 @@ def deliver(bridge, task_pack_path, confirm_lines=200, *, reconcile_only=False,
         }
         if old and old['binding'] != binding:
             raise bridge.TaskPackContractError('CALLBACK_BINDING_CHANGED: preserve previous attempt')
-        if resume_queue_only:
+        if recover_stranded:
+            if not old or (old.get('native_binding') or {}).get('receipt_contract') != 'native-user-marker-v1':
+                raise bridge.TaskPackContractError('DIRECT_ORIGINAL_MARKER_CONTRACT_REQUIRED')
+            attempt_path = attempts[-1]
+            def observe_recovery(phase, screen=None):
+                if (bridge.pin_workspace(pack['callback_target']) != proof
+                        or bridge._sha256_file(report) != binding['report_sha256']
+                        or bridge._sha256_file(task_pack_path) != binding['task_pack_sha256']):
+                    raise bridge.TaskPackContractError('RECOVERY_BINDING_CHANGED')
+                require_action(pack['task_id'], 'callback', pack)
+                for held, held_path in ((lock, lock_path), (pane_lock, pane_lock_path),
+                                        (target_lock, target_lock_path)):
+                    opened, current = os.fstat(held.fileno()), os.lstat(held_path)
+                    if (opened.st_dev, opened.st_ino, opened.st_nlink) != (current.st_dev, current.st_ino, 1):
+                        raise bridge.TaskPackContractError('RECOVERY_LOCK_CHANGED')
+                if json.loads(read_bytes(attempt_path)) != old:
+                    raise bridge.TaskPackContractError('RECOVERY_JOURNAL_CHANGED')
+                event = dict(phase=phase, at_epoch=time.time(), recovery='direct_marker')
+                if screen is not None:
+                    event.update(screen=screen, screen_sha256=bridge.screen_hash(screen))
+                old['events'].append(event)
+                old['phase'] = phase
+                write_json(attempt_path, old)
+            try:
+                result = bridge.recover_stranded_once(pack['callback_target'], pack['completion_callback'],
+                    pack['completion_nonce'], '', confirm_lines=confirm_lines,
+                    delivery_observer=observe_recovery, native_binding=old['native_binding'],
+                    native_attempt=attempt_path, wait_seconds=seconds)
+            except BaseException as exc:
+                annotate_attempt_error(exc, attempt_path, old)
+                old.update(recovery_error=str(exc), recovery_error_details=exc.details)
+                write_json(attempt_path, old)
+                raise
+            old.update(phase='CONFIRMED', result=result, ended_at_epoch=time.time())
+            write_json(attempt_path, old)
+            evidence = {'reconciled_read_only': False, 'attempt': str(attempt_path)}
+        elif resume_queue_only:
             # 原生核验先于任何恢复意图；旧版本无基线不能事后补造。
             if not old:
                 raise bridge.TaskPackContractError('NO_RECOVERABLE_ENTER_ATTEMPT')
