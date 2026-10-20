@@ -51,7 +51,7 @@ class DirectInputTests(unittest.TestCase):
             if self.f.key.call_count == 2:
                 self.f.append_user(self.text)
         self.f.key.side_effect = key
-        with patch.object(bridge, 'read_screen', side_effect=['Compacting context', self.text]):
+        with patch.object(bridge, 'read_screen', side_effect=['Compacting context', '> ' + self.text]):
             result = bridge.submit_text('target', self.text, marker=self.marker, wait_seconds=1)
         self.assertTrue(result['confirmed'])
         self.assertEqual(result['extra_enter'], 1)
@@ -97,7 +97,7 @@ class DirectInputTests(unittest.TestCase):
                     self.send(recover_stranded=True)
         self.f.key.assert_called_once()
         self.f.key.side_effect = self.f.receipt_on_key(self.text)
-        with patch.object(bridge, 'read_screen', return_value=self.text):
+        with patch.object(bridge, 'read_screen', return_value='> ' + self.text):
             self.assertTrue(self.send(recover_stranded=True)['confirmed'])
         self.assertEqual(self.f.key.call_count, 2)
         self.f.send.assert_called_once()
@@ -105,7 +105,7 @@ class DirectInputTests(unittest.TestCase):
     def test_deferred_recovery_key_failure_does_not_replenish_budget(self):
         self.deferred()
         self.f.key.side_effect = TimeoutError('uncertain extra key')
-        with patch.object(bridge, 'read_screen', return_value=self.text):
+        with patch.object(bridge, 'read_screen', return_value='> ' + self.text):
             with self.assertRaises(TimeoutError):
                 self.send(recover_stranded=True)
             with self.assertRaisesRegex(bridge.TaskPackContractError, 'ALREADY_USED'):
@@ -127,8 +127,47 @@ class DirectInputTests(unittest.TestCase):
             self.send(recover_stranded=True)
         self.f.key.assert_called_once()
 
+    def test_body_compacting_word_does_not_block_automatic_extra_enter(self):
+        self.text += ' compacting 时不补键'
+        def key(*args):
+            if self.f.key.call_count == 2:
+                self.f.append_user(self.text)
+        self.f.key.side_effect = key
+        with patch.object(bridge, 'read_screen', return_value='> ' + self.text + '\n ? for shortcuts'):
+            self.assertTrue(self.send()['confirmed'])
+        self.assertEqual(self.f.key.call_count, 2)
+        self.f.send.assert_called_once()
+
+    def test_body_compacting_word_does_not_block_later_recovery(self):
+        self.text += ' compacting 时不补键'
+        self.deferred()
+        self.f.key.side_effect = self.f.receipt_on_key(self.text)
+        with patch.object(bridge, 'read_screen', return_value='❯ ' + self.text):
+            self.assertTrue(self.send(recover_stranded=True)['confirmed'])
+        self.assertEqual(self.f.key.call_count, 2)
+
+    def test_history_marker_cannot_submit_other_draft(self):
+        self.deferred()
+        screen = '❯ ' + self.text + '\n⏺ prior reply\n❯ other draft'
+        with patch.object(bridge, 'read_screen', return_value=screen):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.send(recover_stranded=True)
+        self.f.key.assert_called_once()
+
+    def test_status_scope_separates_compaction_from_payload_and_old_activity(self):
+        for status in ('Compacting context', '• Compacting context (31s • esc to interrupt)',
+                       '✻ Compacting conversation… (23s)'):
+            with self.subTest(status=status):
+                self.assertTrue(direct.is_compacting(status + '\n❯ ' + self.text))
+                self.assertFalse(direct.is_compacting(status + '\n• Working (2s)\n› ' + self.text))
+        for prompt in ('>', '›', '❯'):
+            self.assertFalse(direct.is_compacting(prompt + ' compacting context ' + self.text))
+        self.assertFalse(direct.is_compacting('⏺ We discussed compacting context\n❯ ' + self.text))
+        self.assertFalse(direct.residual_marker(self.text + '\n❯ unrelated', self.marker))
+        self.assertFalse(direct.residual_marker(self.text, self.marker))
+
     def test_consumed_extra_key_never_repeats_on_reconcile_or_resubmit(self):
-        with patch.object(bridge, 'read_screen', return_value=self.text):
+        with patch.object(bridge, 'read_screen', return_value='> ' + self.text):
             with self.assertRaises(bridge.DispatchUnconfirmed):
                 self.send()
         self.assertEqual(self.f.key.call_count, 2)
@@ -142,7 +181,7 @@ class DirectInputTests(unittest.TestCase):
     def test_receipt_race_before_extra_key_returns_without_key(self):
         def screen(*args, **kwargs):
             self.f.append_user(self.text)
-            return self.text
+            return '> ' + self.text
         with patch.object(bridge, 'read_screen', side_effect=screen):
             self.assertTrue(self.send()['confirmed'])
         self.f.key.assert_called_once()
@@ -265,7 +304,7 @@ class DirectFormalDeliveryTests(unittest.TestCase):
                 self.call(recover_stranded=True)
         self.f.key.assert_called_once()
         self.f.key.side_effect = self.f.receipt_on_key(self.text)
-        with patch.object(bridge, 'read_screen', return_value=self.text):
+        with patch.object(bridge, 'read_screen', return_value='> ' + self.text):
             self.assertTrue(self.call(recover_stranded=True)['confirmed'])
             with self.assertRaises(bridge.TaskPackContractError):
                 self.call(recover_stranded=True)

@@ -5,11 +5,39 @@ are not admission gates. No draft is cleared or pasted twice. A single extra
 Enter is permitted only after a pending receipt and visible residual/compaction.
 """
 import math
+import re
 import time
 
 from cmux_confirmation import annotate_error, observe_receipt, wait_budget
 
 TRANSPORT = "terminal-direct-marker-v1"
+
+
+def _screen_regions(screen):
+    rows = screen.splitlines()
+    prompts = [i for i, row in enumerate(rows) if re.match(r"^\s*[›❯>](?:\s|$)", row)]
+    if not prompts:
+        return rows, ""
+    index = prompts[-1]
+    return rows[:index], "\n".join(rows[index:])
+
+
+def is_compacting(screen):
+    """Inspect the latest activity row, excluding the current input body."""
+    before, _ = _screen_regions(screen)
+    activities = [row.strip() for row in before
+                  if re.match(r"^\s*[•·⏺✻✢✳✶✽◐◑◒◓](?:\s|$)", row)
+                  and not re.search(r"Queued follow-up|Messages to be submitted", row, re.I)]
+    rows = activities[-1:] if activities else [row.strip() for row in before]
+    return any(re.fullmatch(r"(?:[•·✻✢✳✶✽◐◑◒◓]\s+)?Compacting"
+        r"(?:\s+(?:context|conversation))?(?:…|\.\.\.)?(?:\s*\([^\n]*\))?", row, re.I)
+        for row in rows)
+
+
+def residual_marker(screen, marker):
+    # Recovery only: a marker in chat history does not authorize submitting a
+    # different draft. No full composer parser/stability or initial-send gate.
+    return marker in _screen_regions(screen)[1]
 
 
 def recover_once(text, marker, *, original, recheck, emit, key, observe,
@@ -39,9 +67,9 @@ def recover_once(text, marker, *, original, recheck, emit, key, observe,
         if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
             screen = read_screen()
             emit("DIRECT_RECOVERY_OBSERVATION", screen)
-            if "compacting" in screen.lower():
+            if is_compacting(screen):
                 result = dict(result, extra_enter_deferred="COMPACTION_STILL_ACTIVE")
-            elif marker not in screen:
+            elif not residual_marker(screen, marker):
                 result = dict(result, extra_enter_deferred="MARKER_NOT_VISIBLE")
             else:
                 result = observe()
@@ -93,7 +121,7 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
             # Initial sending never waits for compaction. Only the single
             # recovery key waits: pressing it during compaction can swallow it.
             for index in range(math.ceil(seconds) + 1):
-                if "compacting" not in screen.lower():
+                if not is_compacting(screen):
                     break
                 result = observe()
                 if result.get("confirmed") or result.get("state") != "NATIVE_PENDING":
@@ -104,9 +132,9 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
                 time.sleep(min(1.0, left))
                 screen = read_screen()
                 emit("DIRECT_RECOVERY_OBSERVATION", screen)
-            if "compacting" in screen.lower():
+            if is_compacting(screen):
                 result = dict(result, extra_enter_deferred="COMPACTION_STILL_ACTIVE")
-            elif marker in screen:
+            elif residual_marker(screen, marker):
                 result = observe()  # close the receipt race before one extra key
                 if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
                     emit("EXTRA_ENTER_INTENT", screen)

@@ -10,6 +10,9 @@
   message, task, callback or successor journal. Current marker attempts no longer
   enter the historical screenshot matcher; already queued/received input and
   spent or uncertain key intents never authorize another key.
+- Read compaction from the latest activity outside the input region, not a word
+  in the payload. An extra Enter requires the marker in the current input region;
+  a historical message does not authorize submitting an unrelated draft.
 
 - Admit distinct existing terminal tabs in the same pane through ordinary
   messages, broadcast discovery, exact maintenance contact and formal identity
