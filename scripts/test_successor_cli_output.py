@@ -98,7 +98,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertEqual(again['maintenance_context']['offer_id'], offer['offer_id'])
         self.assertEqual(again['input_operations'], 0)
         self.assertEqual({p: p.read_bytes() for p in before}, before)
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste'])
 
     def complete_offer(self, result):
         offer = json.loads(Path(result['maintenance_context']['offer']).read_text())
@@ -140,7 +140,7 @@ class SuccessorOutputTests(unittest.TestCase):
         code, result, _ = self.invoke('submit', output=self.root / 'new-marker.json', extra=options)
         self.assertEqual(code, 2)
         self.assertEqual(result['details']['input_operations'], 0)
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste'])
         self.assertEqual(self.maintenance_reply.read_bytes(), reply_before)
         self.assertEqual(json.loads(Path(first['maintenance_context']['offer']).read_text()), offer)
 
@@ -176,7 +176,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(rejected['details']['input_operations'], 0)
         self.assertEqual(Path(first['attempt']).read_bytes(), old_attempt)
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key', 'rpc', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste', 'paste'])
 
     def test_damaged_unrelated_offer_does_not_block_independent_transport(self):
         options = self.maintenance_fixture()
@@ -190,7 +190,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertEqual(second['state'], 'NATIVE_QUEUED')
         self.assertEqual(second['maintenance_context']['state'], 'ENROLLMENT_FAILED')
         self.assertEqual(registered.read_bytes(), before)
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key', 'rpc', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste', 'paste'])
 
     def test_missing_queue_proof_waits_without_enrollment_or_more_input(self):
         options = self.maintenance_fixture()
@@ -201,7 +201,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.append_record(self.bridge.wire, queued=True)
         _, second, _ = self.invoke('reconcile', output=self.root / 'queued-later.json', extra=options)
         self.assertEqual(second['maintenance_context']['state'], 'ENROLLED')
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste'])
 
     def test_enrollment_error_retains_transport_result_and_never_replaces_unread_offer(self):
         options = self.maintenance_fixture()
@@ -266,7 +266,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertEqual(second["input_operations"], 0)
         self.assertEqual((self.root / "reconcile.json").read_bytes(), raw)
         self.assertEqual((self.journal() / "attempt.json").read_bytes(), before)
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_pending_then_late_native_receipt_uses_original_attempt(self):
         self.bridge.response = "queued"
@@ -280,7 +280,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertTrue(received["confirmed"])
         self.assertEqual(received["input_operations"], 0)
         self.assertEqual((self.root / "late.json").read_bytes(), raw)
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_command_error_is_persisted_and_stdout_is_identical(self):
         self.artifact_path.write_bytes(b"{")
@@ -352,7 +352,7 @@ class SuccessorOutputTests(unittest.TestCase):
         original = self.bridge._run_successor
         def target_appears(*args, **kwargs):
             result = original(*args, **kwargs)
-            if args[0] == "send-key":
+            if args[0] == "paste":
                 self.output.write_bytes(b"concurrent owner")
             return result
         with patch.object(self.bridge, "_run_successor", side_effect=target_appears):
@@ -367,7 +367,7 @@ class SuccessorOutputTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(received["confirmed"])
         self.assertEqual(received["input_operations"], 0)
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_temporary_name_collision_preserves_other_file_and_reservation(self):
         path = self.root / ".successor-result-fixed.tmp"

@@ -71,7 +71,11 @@ class FakeTerminal:
     def _queued_or_active_input(self, screen):
         return False
 
-    def _run_successor(self, *args, artifact, receipt_contract=None):
+    def _run_successor(self, *args, artifact, receipt_contract=None, json_output=False):
+        if args[:2] == ('rpc', 'surface.input_state'):
+            target = json.loads(args[2])
+            return json.dumps(dict(target, state='draft' if self.occupied else 'empty',
+                agent=True, terminal=True, blocks_typing=self.occupied))
         # Observe actual durable bytes at the terminal side-effect boundary.
         journal = self.owner.journal()
         attempt = json.loads((journal / "attempt.json").read_text())
@@ -80,14 +84,20 @@ class FakeTerminal:
         paste = [event for event in events if event["phase"] == "PASTE_INTENT"]
         assert len(paste) == 1 and "native_paste_fence" in paste[0]
         self.operations.append(args[0])
-        if args[0] == "rpc":
-            assert not any(event["phase"] == "ENTER_INTENT" for event in events)
+        if args[0] in ("rpc", "paste"):
+            if args[0] == "paste":
+                assert json_output and '--submit' in args and '--force' not in args[:-1]
+                assert len([event for event in events if event['phase'] == 'ENTER_INTENT']) == 1
+                if self.occupied:
+                    raise RuntimeError('refused existing receiver draft')
+            else:
+                assert not any(event["phase"] == "ENTER_INTENT" for event in events)
             if self.fail_paste:
                 raise RuntimeError("ambiguous paste failure")
-            self.wire = json.loads(args[2])["text"]
+            self.wire = args[-1] if args[0] == 'paste' else json.loads(args[2])["text"]
             if self.after_paste:
                 self.after_paste()
-        else:
+        if args[0] != 'rpc':
             assert len([event for event in events if event["phase"] == "ENTER_INTENT"]) == 1
             if self.response == "user":
                 self.owner.append_record(self.wire)
@@ -100,7 +110,7 @@ class FakeTerminal:
             elif self.response == "cross_fence":
                 with self.owner.transcript.open("ab") as stream:
                     stream.write(self.owner.cross_fence_tail)
-        return "ok"
+        return json.dumps({'submitted': True}) if args[0] == 'paste' else "ok"
 
 
 class SuccessorNativeDeliveryTests(unittest.TestCase):
@@ -156,12 +166,12 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
     def test_actual_journal_precedes_paste_and_key_and_repeated_submit_has_zero_input(self):
         first = self.submit()
         self.assertTrue(first["confirmed"])
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
         original_bytes = (self.journal() / "attempt.json").read_bytes()
         again = self.submit()
         self.assertTrue(again["confirmed"])
         self.assertEqual(again["input_operations"], 0)
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
         self.assertEqual((self.journal() / "attempt.json").read_bytes(), original_bytes)
 
     def test_deferred_direct_recovery_after_compaction(self):
@@ -170,7 +180,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
             self.assertFalse(self.submit()['confirmed'])
             self.assertFalse(delivery.recover(self.bridge, self.artifact, self.text,
                 marker=self.marker, state_root=self.root, wait_seconds=0)['confirmed'])
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste'])
         original = (self.journal() / 'attempt.json').read_bytes()
         self.bridge.response = 'user'
         with patch.object(self.bridge, 'read_screen_successor', return_value='> ' + self.text):
@@ -180,7 +190,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'BUDGET_UNAVAILABLE'):
                 delivery.recover(self.bridge, self.artifact, self.text,
                     marker=self.marker, state_root=self.root, wait_seconds=0)
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key', 'send-key'])
+        self.assertEqual(self.bridge.operations, ['paste', 'send-key'])
         self.assertEqual((self.journal() / 'attempt.json').read_bytes(), original)
 
     def test_record_between_bind_and_paste_is_not_a_receipt(self):
@@ -251,7 +261,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         result = self.submit()
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["input_operations"], 0)
-        self.assertEqual(self.bridge.operations, ["rpc"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def assert_primary_failure_preserved(self, *, fail_annotation, fail_event):
         self.bridge.fail_paste = True
@@ -283,14 +293,14 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(len(errors), int(not fail_event))
         if errors:
             self.assertEqual(errors[0]['error'], 'ambiguous paste failure')
-            self.assertEqual(errors[0]['input_operations_attempted'], 1)
+            self.assertEqual(errors[0]['input_operations_attempted'], 2)
         before = (self.journal() / 'attempt.json').read_bytes()
         for again in (self.reconcile, self.submit):
             result = again()
             self.assertFalse(result['confirmed'])
             self.assertEqual(result['input_operations'], 0)
         self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
-        self.assertEqual(self.bridge.operations, ['rpc'])
+        self.assertEqual(self.bridge.operations, ['paste'])
 
     def test_annotation_failure_preserves_primary_and_original_input_budget(self):
         self.assert_primary_failure_preserved(fail_annotation=True, fail_event=False)
@@ -323,27 +333,29 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
                 self.assertEqual(primary.__notes__[0], 'earlier diagnostic')
                 self.assertIn('annotation unavailable', '\n'.join(primary.__notes__))
                 self.assertEqual((self.journal() / 'attempt.json').read_bytes(), before)
-                self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+                self.assertEqual(self.bridge.operations, ['paste'])
 
-    def test_composer_state_does_not_gate_direct_communication(self):
+    def test_foreign_draft_refusal_never_falls_through_to_a_key(self):
         self.bridge.occupied = True
-        self.assertTrue(self.submit()['confirmed'])
-        self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
+        with self.assertRaisesRegex(RuntimeError, 'PROMPT_NOT_EMPTY'):
+            self.submit()
+        self.assertEqual(self.bridge.operations, [])
+        self.assertIsNone(self.bridge.wire)
 
     def test_changed_body_cannot_reuse_original_marker(self):
         self.submit()
         self.text += " changed"
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "ORIGINAL_ATTEMPT_CHANGED"):
             self.submit()
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
-    def test_pane_drift_before_key_preserves_single_paste(self):
+    def test_pane_drift_during_host_request_never_earns_a_receipt_or_second_command(self):
         def drift():
             self.tree["windows"][0]["workspaces"][0]["panes"][0]["id"] = SUCCESSOR
         self.bridge.after_paste = drift
         with self.assertRaisesRegex(rebind.SuccessorRebindError, "pane drift"):
             self.submit()
-        self.assertEqual(self.bridge.operations, ["rpc"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_missing_paste_fence_cannot_be_reconstructed(self):
         binding = delivery.bind_target(self.bridge, self.artifact, self.text)
@@ -367,7 +379,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertTrue(result["confirmed"])
         self.assertEqual(result["input_operations"], 0)
         self.assertEqual((self.journal() / "attempt.json").read_bytes(), original)
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_cached_proof_is_revalidated_against_exact_record_bytes(self):
         self.submit()
@@ -377,7 +389,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
             stream.write(b"!")
         with self.assertRaises(delivery.native.NativeDeliveryError):
             self.reconcile()
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_transcript_rotation_and_truncation_cannot_reuse_cached_proof(self):
         self.submit()
@@ -391,7 +403,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         replacement.replace(self.transcript)
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "REPLACED"):
             self.reconcile()
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_changed_cursor_binding_refuses_observation_without_new_input(self):
         self.bridge.response = "none"
@@ -402,7 +414,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         path.write_text(json.dumps(cursor))
         with self.assertRaisesRegex(delivery.native.NativeDeliveryError, "SCAN_BINDING_CHANGED"):
             self.reconcile()
-        self.assertEqual(self.bridge.operations, ["rpc", "send-key"])
+        self.assertEqual(self.bridge.operations, ["paste"])
 
     def test_invalid_window_never_creates_successor_attempt(self):
         for value in (-1, 61, True, float("nan")):

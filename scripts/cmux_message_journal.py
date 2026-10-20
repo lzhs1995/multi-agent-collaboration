@@ -234,7 +234,10 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             if reconcile_only or not old:
                 raise bridge.TaskPackContractError('NO_STRANDED_MESSAGE')
             phases = [e['phase'] for e in old.get('events', [])]
-            if (phases.count('PASTE_INTENT') != 1 or 'ENTER_SENT' not in phases
+            submitted_or_declined = ('ENTER_SENT' in phases or
+                ((old.get('native_binding') or {}).get('receipt_contract') == 'native-user-marker-v1'
+                 and 'ENTER_NOT_SENT' in phases))
+            if (phases.count('PASTE_INTENT') != 1 or not submitted_or_declined
                     or old.get('phase') in ('PREPARED', 'NO_INPUT', 'CONFIRMED')):
                 raise bridge.TaskPackContractError('NO_STRANDED_MESSAGE')
             if 'QUEUE_TAB_INTENT' in phases or 'EXTRA_ENTER_INTENT' in phases:

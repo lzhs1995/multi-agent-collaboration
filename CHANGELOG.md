@@ -1,3 +1,11 @@
+## 0.4.58
+
+- Check receiver input state before terminal mutation; preserve existing drafts, dialogs and unknown states without treating normal work or Goal as busy gates. Authenticate Claude 2.1.303 before using its complete empty input frame when the host registry has no agent state.
+- Use one protected paste/submit command and read its submitted/queued result. Nonzero, timeout or uncertain input never permits blind Enter or a second paste. Recovery requires the complete original draft and a fresh reread.
+- Retain shared pane/target locks and original controller budgets. Explicitly record the remaining non-atomic host check/input window; native marker reception does not prove body reading or business acceptance.
+- Distinguish the CLI's exact original-target pre-paste refusal from generic nonzero/unknown results without erasing intent records or granting automatic retry. Preserve complete verified 0.4.57 inquiry registrations and their original issuer scope.
+- Publish supervisor inquiry notices from the already-read exact bytes, then commit discovery cursors after output flush. Recover only the deterministic owned staging name under a nonblocking lock after interruption; never overwrite a conflicting final snapshot or scan unrelated files.
+
 ## 0.4.57
 
 - Write task-continuation and fail-open classifications through the audit writer's supported advisory mode; keep distinct scope_status values and private exceptions out of receipts.

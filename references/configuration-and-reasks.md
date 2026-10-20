@@ -693,3 +693,34 @@ The independent scheduler remains files-only: no transcript reads, native input,
 terminal paste, forced turns or blocking Stop hook. Verify the original executor's
 explicit enrollment, automatic sweeps, exact replies, actual consumption, two
 successive rounds and task/stop boundaries separately from installation.
+
+
+### Stable request snapshots
+
+A supervisor discovery notice points to a content-addressed, read-only copy of
+that exact request, with its SHA256 and original mailbox. The rotating CURRENT
+file is only a discovery source: another 60-second inquiry must not change the
+bytes named by an earlier notice. Read the complete snapshot and reply to its
+original mailbox; discovery does not accept the request or consume the reply.
+The hook copies only authenticated, bounded requests it is about to expose,
+reuses identical snapshots, and commits its discovery cursor only after output
+flush. A failed or conflicting snapshot is never replaced with a mutable path.
+The final SHA filename is published only after a private staging file has been
+fully written, made read-only and synced. Interrupted staging writes cannot
+poison that final filename. A nonblocking publication lock serializes only this
+short file operation. The staging name is derived from the exact request SHA:
+after process death, the next attempt cleans only that owned staging name,
+including a second hard link to the same final inode, before verification.
+It never scans or deletes other staging files. An orphan for a request that is
+never revisited remains for the authorized archive process.
+A bounded `snapshot_failures` count and last error
+kind are recorded in the discovery frontier after successful output flush;
+other valid requests may still be offered.
+
+A snapshot may exist even when the subsequent output failed. File existence
+alone therefore proves neither hook exposure nor supervisor reading. Snapshots
+are evidence; do not delete them on a timer while original replies or consumption
+remain unresolved. Their accumulated size is not bounded by the per-sweep limit.
+Any later cleanup must verify terminal reply/consumption state, preserve the
+original notices and use the task's authorized archive process. Existing
+episodes and old notices are unchanged.

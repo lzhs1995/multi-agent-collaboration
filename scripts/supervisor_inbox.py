@@ -1,7 +1,8 @@
 """Bounded file-request discovery by the existing authenticated supervisor hook.
 
 No terminal input. A discovery record is not native receipt or task acceptance.
-One current request and one discovery cursor per caller keep storage bounded.
+Current requests and cursors remain bounded; emitted request snapshots retain
+the exact bytes until their original reply can be read and consumed.
 """
 import fcntl
 import errno
@@ -18,6 +19,7 @@ import uuid
 import bounded_directory as directory
 import cmux_hook_identity as identity
 import cmux_hook_thread as thread_scope
+import cmux_prompt_reference as references
 import executor_ready as ready
 import executor_reask as reask
 import executor_reply as replies
@@ -104,6 +106,74 @@ def request_bytes(path):
         return None, None
 
 
+def freeze_request(raw):
+    """Publish exact bytes; recover an interrupted own staging name in O(1)."""
+    root = ready.state_root() / 'supervisor-request-snapshots-v1'
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    digest = hashlib.sha256(raw).hexdigest()
+    final = digest + '.txt'
+    temporary = '.staging-' + digest
+    reference = dict(format=references.SINGLE_LINE_FORMAT,
+                     path=str(root / final), sha256=digest, bytes=len(raw))
+    text = raw.decode('utf-8')
+    folder = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    lock = None
+    try:
+        info = os.fstat(folder)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('UNSAFE_REQUEST_SNAPSHOT_DIRECTORY')
+        lock = os.open('.publication.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                       0o600, dir_fd=folder)
+        lock_info = os.fstat(lock)
+        if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1
+                or lock_info.st_uid != os.getuid() or lock_info.st_mode & 0o077):
+            raise ValueError('UNSAFE_REQUEST_SNAPSHOT_LOCK')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # One short publication lock lets a later hook clean this exact staging
+        # name after process death. No directory scan or age-based deletion.
+        try:
+            stale = os.stat(temporary, dir_fd=folder, follow_symlinks=False)
+        except FileNotFoundError:
+            stale = None
+        if stale is not None:
+            if (not stat.S_ISREG(stale.st_mode) or stale.st_uid != os.getuid()
+                    or stale.st_nlink not in (1, 2)):
+                raise ValueError('UNSAFE_REQUEST_STAGING')
+            if stale.st_nlink == 2:
+                final_info = os.stat(final, dir_fd=folder, follow_symlinks=False)
+                if (stale.st_dev, stale.st_ino) != (final_info.st_dev, final_info.st_ino):
+                    raise ValueError('UNSAFE_REQUEST_STAGING_LINK')
+            os.unlink(temporary, dir_fd=folder)
+        try:
+            os.stat(final, dir_fd=folder, follow_symlinks=False)
+        except FileNotFoundError:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=folder)
+            try:
+                with os.fdopen(fd, 'wb') as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fchmod(handle.fileno(), 0o400)
+                    os.fsync(handle.fileno())
+                try:
+                    os.link(temporary, final, src_dir_fd=folder, dst_dir_fd=folder,
+                            follow_symlinks=False)
+                except FileExistsError:
+                    pass  # Never replace a conflicting final name.
+            finally:
+                os.unlink(temporary, dir_fd=folder)
+            os.fsync(folder)
+        current = root.lstat()
+        if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError('REQUEST_SNAPSHOT_DIRECTORY_CHANGED')
+        references.verify(reference, text)
+    finally:
+        if lock is not None:
+            os.close(lock)
+        os.close(folder)
+    return reference
+
+
 def _uuid(value):
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value.lower()
@@ -152,7 +222,7 @@ def answered(body, reply_path, scan=None):
 
 
 def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None):
-    """Read-only unless an emitter succeeds; commit after flushed context output."""
+    """Freeze exact requests before exposure; commit cursors only after flush."""
     if not _uuid(workspace) or not _uuid(supervisor) or not _uuid(thread_id):
         return []
     now = time.time() if now is None else now
@@ -187,6 +257,7 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                 last_emitted = 0.0
             pending.append((last_emitted, str(path), path, seen))
         notices = []
+        snapshot_failures = dict(count=0)
         ordered = sorted(pending, key=lambda item: item[:2])
         frontier['pending'] = []
         for index, (last_emitted, _name, path, seen) in enumerate(ordered):
@@ -219,8 +290,17 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
             if (seen.get('token') == token
                     and now - last_emitted < REMINDER_SECONDS):
                 continue
-            notice = dict(state='REQUEST_DISCOVERED', request=str(path),
-                          request_sha256=hashlib.sha256(raw).hexdigest(), marker=marker,
+            try:
+                frozen = freeze_request(raw)
+            except (OSError, ValueError) as exc:
+                # Do not publish a moving path or overwrite a conflicting
+                # snapshot. Other valid callers can still be discovered.
+                snapshot_failures.update(count=snapshot_failures['count'] + 1,
+                                         last_kind=type(exc).__name__)
+                continue
+            notice = dict(state='REQUEST_DISCOVERED', request=frozen['path'],
+                          source_request=str(path),
+                          request_sha256=frozen['sha256'], marker=marker,
                           caller_surface_uuid=body['caller_surface_uuid'], supervisor_uuid=supervisor,
                           workspace_uuid=workspace, task_id=body.get('task_id', ''),
                           episode_id=body['episode_id'], reply_mailbox=str(reply_path),
@@ -234,8 +314,9 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                 break
         if emit is not None:
             emit(notices)  # exceptions leave all cursors unchanged; no lost notice
+            frontier['snapshot_failures'] = snapshot_failures
             for notice in notices:
-                ready.write_json(cursor / Path(notice['request']).name, notice)
+                ready.write_json(cursor / Path(notice['source_request']).name, notice)
             # Empty/invalid pages also advance, but observation never consumes.
             ready.write_json(frontier_path, frontier)
         return notices

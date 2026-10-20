@@ -1,6 +1,7 @@
 """The installed workflow entrypoints observe every failure without blocking."""
 import contextlib
 import errno
+import hashlib
 import io
 import json
 import os
@@ -184,6 +185,8 @@ class SupervisorInboxAdvisoryTests(unittest.TestCase):
         return out.getvalue()
 
     def test_real_file_request_reaches_supported_context_and_is_deduplicated(self):
+        source = reask.inbox_path(self.state)
+        original = source.read_bytes()
         raw = self.invoke()
         result = json.loads(raw)
         self.assertEqual(set(result), {'hookSpecificOutput'})
@@ -191,9 +194,24 @@ class SupervisorInboxAdvisoryTests(unittest.TestCase):
         self.assertEqual(set(context), {'hookEventName', 'additionalContext'})
         self.assertEqual(context['hookEventName'], 'PostToolUse')
         self.assertIn(self.marker, context['additionalContext'])
-        self.assertIn(str(reask.inbox_path(self.state)), context['additionalContext'])
+        request_line = next(line for line in context['additionalContext'].splitlines()
+                            if line.startswith('REQUEST='))
+        request, fields = request_line.removeprefix('REQUEST=').split(' SHA256=', 1)
+        digest = fields.split(' ', 1)[0]
+        snapshot = Path(request)
+        self.assertNotEqual(snapshot, source)
+        self.assertEqual(snapshot.read_bytes(), original)
+        self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(), digest)
         self.assertIn('File discovery is not native transport', context['additionalContext'])
         self.assertEqual(self.invoke(), '')
+        # The producer may replace CURRENT before the supervisor first reads
+        # the emitted notice. Its immutable request must still match that SHA.
+        result = reask.write_channels(self.state, 'EXECUTOR_READY_rotated',
+                                      'next request', 3.0)
+        self.assertEqual(result['errors'], [])
+        self.assertNotEqual(source.read_bytes(), original)
+        self.assertEqual(snapshot.read_bytes(), original)
+        self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(), digest)
         self.assertFalse((ready.state_root() / 'message-dispatch-v1').exists())
 
     def test_telemetry_failure_does_not_suppress_file_request(self):

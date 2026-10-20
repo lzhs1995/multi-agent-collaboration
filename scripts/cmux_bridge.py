@@ -185,7 +185,7 @@ def pin_successor_pair(artifact, *, expected_caller=None, expected_target=None):
         artifact, expected_caller=expected_caller, expected_target=expected_target)
 
 
-def _run_successor(*args, artifact, check=True, capture=True, receipt_contract=None):
+def _run_successor(*args, artifact, check=True, capture=True, receipt_contract=None, json_output=False):
     """Run only explicit target RPCs under a successor pair proof."""
     from successor_rebind import CODEX_SAME_PANE
     if (artifact.get("transport") == CODEX_SAME_PANE
@@ -193,7 +193,15 @@ def _run_successor(*args, artifact, check=True, capture=True, receipt_contract=N
         raise WorkspaceScopeError("Historical native-only authorization forbids terminal input")
     args = list(args)
     proof = pin_successor_pair(artifact)
-    if args[:2] == ["rpc", "terminal.paste"]:
+    if args[:2] == ['rpc', 'surface.input_state']:
+        if len(args) != 3:
+            raise WorkspaceScopeError('SUCCESSOR_REBIND_DENIED: explicit state target required')
+        params = json.loads(args[2])
+        if (not isinstance(params, dict) or set(params) != {'workspace_id', 'surface_id'}
+                or uuid_value(params['workspace_id']) != uuid_value(proof['target_workspace_uuid'])
+                or uuid_value(params['surface_id']) != uuid_value(proof['target_surface_uuid'])):
+            raise WorkspaceScopeError('SUCCESSOR_REBIND_DENIED: state target override')
+    elif args[:2] == ["rpc", "terminal.paste"]:
         if len(args) != 3:
             raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: explicit paste parameters required")
         try:
@@ -210,7 +218,7 @@ def _run_successor(*args, artifact, check=True, capture=True, receipt_contract=N
             raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: target surface override")
         args[2] = json.dumps(dict(params, workspace_id=proof["target_workspace_uuid"],
                                    surface_id=proof["target_surface_uuid"]), ensure_ascii=False)
-    elif args and args[0] in {"send", "send-key"}:
+    elif args and args[0] in {"send", "send-key", "paste"}:
         if "--surface" not in args:
             raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: explicit surface required")
         i = args.index("--surface") + 1
@@ -224,13 +232,19 @@ def _run_successor(*args, artifact, check=True, capture=True, receipt_contract=N
             args[1:1] = ["--workspace", proof["target_workspace_uuid"]]
     else:
         raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: unsupported route")
-    result = subprocess.run([CMUX] + args, capture_output=capture, text=True)
+    result = subprocess.run([CMUX] + (["--json"] if json_output else []) + args,
+                            capture_output=capture, text=True)
     if check and result.returncode != 0:
+        if args and args[0] == 'paste':
+            from cmux_direct_input import protected_submit_refusal
+            refused = protected_submit_refusal(result, proof['target_surface_uuid'])
+            if refused is not None:
+                raise refused
         raise RuntimeError(f"cmux successor call failed (rc={result.returncode}): {result.stderr.strip()}")
     return result.stdout.strip() if capture else ""
 
 
-def _run(*args, check=True, capture=True):
+def _run(*args, check=True, capture=True, json_output=False):
     """Run cmux with given args, return stdout string."""
     args = list(args)
     if args[:2] == ["rpc", "terminal.paste"]:
@@ -249,7 +263,7 @@ def _run(*args, check=True, capture=True):
             raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: paste workspace changed")
         params.update(workspace_id=proof["workspace_uuid"], surface_id=proof["target_surface_uuid"])
         args[2] = json.dumps(params, ensure_ascii=False)
-    elif args and args[0] in {"send", "send-key"}:
+    elif args and args[0] in {"send", "send-key", "paste"}:
         if "--surface" not in args:
             raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: explicit surface required")
         index = args.index("--surface") + 1
@@ -261,13 +275,18 @@ def _run(*args, check=True, capture=True):
                 raise WorkspaceScopeError("WORKSPACE_SCOPE_DENIED: workspace override")
         else:
             args[1:1] = ["--workspace", proof["workspace_uuid"]]
-    cmd = [CMUX] + args
+    cmd = [CMUX] + (["--json"] if json_output else []) + args
     result = subprocess.run(
         cmd,
         capture_output=capture,
         text=True,
     )
     if check and result.returncode != 0:
+        if args and args[0] == 'paste':
+            from cmux_direct_input import protected_submit_refusal
+            refused = protected_submit_refusal(result, proof['target_surface_uuid'])
+            if refused is not None:
+                raise refused
         raise RuntimeError(
             f"cmux {' '.join(args)} failed (rc={result.returncode}):\n"
             f"{result.stderr.strip()}"
@@ -1669,6 +1688,37 @@ def send_key(surface, key):
     _run("send-key", "--surface", surface, "--", key)
 
 
+def protected_submit_result(raw):
+    from cmux_direct_input import protected_submit_result as parse
+    return parse(raw)
+
+
+def require_prompt_free(surface, *, provider=None):
+    from cmux_direct_input import require_prompt_state
+    proof = pin_workspace(surface)
+    target = proof['target_surface_uuid']
+    workspace = proof['workspace_uuid']
+    return require_prompt_state(_run('rpc', 'surface.input_state', json.dumps(dict(
+        surface_id=target, workspace_id=workspace))), target, workspace,
+        read_claude_screen=(lambda: read_screen(surface)) if provider == 'claude' else None)
+
+
+def submit_text_protected(surface, text):
+    """One draft-protected paste/submit command; never follow failure with a key.
+
+    --force is deliberately absent. The CLI checks the original target prompt;
+    its host handles the literal paste and agent-aware return in one request.
+    Busy work/Goal are not our admission gates. Native observation still decides
+    reception. Historical controllers keep their original send_text path.
+    """
+    if not isinstance(text, str) or not text:
+        raise ValueError("nonempty paste text required")
+    if any(ord(char) < 32 and char not in "\t\r\n" or ord(char) == 127 for char in text):
+        raise ValueError("PASTE_CONTROL_CHARACTER_WOULD_CHANGE: zero input")
+    return protected_submit_result(_run("paste", "--submit", "--surface", surface,
+                                       "--", text, json_output=True))
+
+
 def focus_surface(surface):
     """Focus the pane owning ``surface`` before sending terminal editing keys."""
     pin_workspace(surface)
@@ -1887,8 +1937,10 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
     def terminal():
         from cmux_direct_input import send_once as direct_send
         return direct_send(text, marker,
+            preflight=lambda: require_prompt_free(surface, provider=native_binding.get('provider')),
             recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
             emit=delivery_observer, paste=lambda value: send_text(surface, value),
+            submit=lambda value: submit_text_protected(surface, value),
             key=lambda value: send_key(surface, value),
             observe=lambda: _observe_native(surface, text, native_binding, native_attempt),
             read_screen=lambda: read_screen(surface, lines=confirm_lines), wait_seconds=seconds)

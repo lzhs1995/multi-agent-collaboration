@@ -75,6 +75,119 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(len(self.discover()), 1, self.discovery_trace)
         self.assertEqual(len(list(path.parent.glob('*.json'))), 1)
 
+    def test_notice_snapshot_survives_rotation_before_supervisor_first_read(self):
+        state, current = self.request()
+        original = current.read_bytes()
+        notice = self.discover()[0]
+        reask.write_channels(state, 'EXECUTOR_READY_two', 'new inquiry', 62.0)
+        snapshot = Path(notice['request'])
+        self.assertEqual(snapshot.read_bytes(), original)
+        self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+                         notice['request_sha256'])
+        self.assertFalse(snapshot.stat().st_mode & 0o222)
+        self.assertEqual(notice['source_request'], str(current))
+        body = json.loads(snapshot.read_bytes())
+        self.assertEqual(body['marker'], notice['marker'])
+        self.assertEqual(body['reply_mailbox'], notice['reply_mailbox'])
+
+    def test_same_snapshot_is_reused_without_changing_its_identity(self):
+        _state, _current = self.request()
+        first = self.discover()[0]
+        snapshot = Path(first['request'])
+        before = snapshot.stat()
+        second = self.discover(now=161.)[0]
+        after = Path(second['request']).stat()
+        self.assertEqual(first['request'], second['request'])
+        self.assertEqual((before.st_ino, before.st_mtime_ns),
+                         (after.st_ino, after.st_mtime_ns))
+        self.assertFalse(after.st_mode & 0o222)
+
+    def test_conflicting_snapshot_is_not_overwritten_or_offered(self):
+        _state, _current = self.request()
+        first = self.discover()[0]
+        snapshot = Path(first['request'])
+        snapshot.chmod(0o600)
+        snapshot.write_bytes(b'changed by another writer')
+        other = str(uuid.uuid4())
+        self.request(other)
+        notices = self.discover(now=161.)
+        self.assertEqual([n['caller_surface_uuid'] for n in notices], [other])
+        self.assertEqual(snapshot.read_bytes(), b'changed by another writer')
+
+    def test_snapshot_directory_symlink_cannot_redirect_discovered_body(self):
+        _state, _current = self.request()
+        external = self.home / 'other-owner'
+        external.mkdir()
+        snapshots = ready.state_root() / 'supervisor-request-snapshots-v1'
+        snapshots.symlink_to(external, target_is_directory=True)
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(list(external.iterdir()), [])
+
+    def test_failed_publish_never_leaves_a_partial_final_snapshot(self):
+        _state, current = self.request()
+        with mock.patch.object(inbox.os, 'link', side_effect=OSError('publish interrupted')):
+            self.assertEqual(self.discover(), [])
+        root = ready.state_root() / 'supervisor-request-snapshots-v1'
+        self.assertEqual([p.name for p in root.iterdir()], ['.publication.lock'])
+        frontier = ready.read_json(self.cursor() / 'frontier.json')
+        self.assertEqual(frontier['snapshot_failures'], {'count': 1, 'last_kind': 'OSError'})
+        notice = self.discover(now=161.)[0]
+        self.assertEqual(Path(notice['request']).read_bytes(), current.read_bytes())
+
+    def test_snapshot_is_complete_and_read_only_before_final_name_is_published(self):
+        _state, current = self.request()
+        original = current.read_bytes()
+        link = inbox.os.link
+        def inspect(source, destination, **kwargs):
+            fd = os.open(source, os.O_RDONLY, dir_fd=kwargs['src_dir_fd'])
+            with os.fdopen(fd, 'rb') as stream:
+                self.assertEqual(stream.read(), original)
+                self.assertFalse(os.fstat(stream.fileno()).st_mode & 0o222)
+            return link(source, destination, **kwargs)
+        with mock.patch.object(inbox.os, 'link', side_effect=inspect):
+            self.assertEqual(len(self.discover()), 1)
+
+    def test_postlink_process_death_recovers_exact_staging_without_replacing_final(self):
+        _state, current = self.request()
+        raw = current.read_bytes()
+        first = inbox.freeze_request(raw)
+        final = Path(first['path'])
+        inode = final.stat().st_ino
+        staging = final.parent / ('.staging-' + first['sha256'])
+        os.link(final, staging)
+        self.assertEqual(final.stat().st_nlink, 2)
+        notice = self.discover()[0]
+        self.assertEqual(notice['request'], str(final))
+        self.assertEqual(final.stat().st_ino, inode)
+        self.assertEqual(final.stat().st_nlink, 1)
+        self.assertFalse(staging.exists())
+        self.assertEqual(final.read_bytes(), raw)
+
+    def test_prelink_partial_staging_is_recovered_without_touching_other_names(self):
+        _state, current = self.request()
+        root = ready.state_root() / 'supervisor-request-snapshots-v1'
+        root.mkdir(mode=0o700)
+        digest = hashlib.sha256(current.read_bytes()).hexdigest()
+        (root / ('.staging-' + digest)).write_bytes(b'partial')
+        unrelated = root / '.staging-unrelated'
+        unrelated.write_bytes(b'preserve')
+        notice = self.discover()[0]
+        self.assertEqual(Path(notice['request']).read_bytes(), current.read_bytes())
+        self.assertEqual(unrelated.read_bytes(), b'preserve')
+
+    def test_busy_snapshot_publication_lock_never_waits_or_removes_staging(self):
+        _state, current = self.request()
+        root = ready.state_root() / 'supervisor-request-snapshots-v1'
+        root.mkdir(mode=0o700)
+        temporary = root / ('.staging-' + hashlib.sha256(current.read_bytes()).hexdigest())
+        temporary.write_bytes(b'in progress')
+        with (root / '.publication.lock').open('w') as lock:
+            os.chmod(lock.name, 0o600)
+            inbox.fcntl.flock(lock, inbox.fcntl.LOCK_EX | inbox.fcntl.LOCK_NB)
+            self.assertEqual(self.discover(), [])
+            self.assertEqual(temporary.read_bytes(), b'in progress')
+        self.assertEqual(len(self.discover(now=161.)), 1)
+
     def test_wrong_workspace_supervisor_paths_templates_and_inactive_requests_refused(self):
         _state, path = self.request()
         body = ready.read_json(path)
@@ -417,7 +530,7 @@ class InboxTest(unittest.TestCase):
         for _ in range(15):
             self.request(str(uuid.uuid4()))
         first = self.discover()
-        root = Path(first[0]['request']).parent
+        root = Path(first[0]['source_request']).parent
         archived = root.with_name(root.name + '-previous')
         root.rename(archived)
         root.mkdir()

@@ -79,6 +79,12 @@ class NativeFixture(contextlib.AbstractContextManager):
         # 夹具永远不触达 live surface；测试可替换 side_effect，并检查完整调用次数。
         self.send = self.stack.enter_context(patch.object(bridge, "send_text"))
         self.key = self.stack.enter_context(patch.object(bridge, "send_key"))
+        def protected_submit(surface, text):
+            self.send(surface, text)
+            self.key(surface, 'enter')
+            return {'submitted': True, 'submit_error': None}
+        self.submit = self.stack.enter_context(patch.object(
+            bridge, 'submit_text_protected', side_effect=protected_submit))
         # A new Codex send must explicitly supply a fake RPC client in its
         # test. No historical fixture may reach the user's live daemon.
         self.rpc = self.stack.enter_context(patch(
@@ -133,6 +139,10 @@ class NativeFixture(contextlib.AbstractContextManager):
     def _run(self, *args, **kwargs):
         if args == ("tree", "--all", "--json", "--id-format", "both"):
             return json.dumps(self.tree)
+        if args[:2] == ('rpc', 'surface.input_state'):
+            target = json.loads(args[2])
+            return json.dumps(dict(target, state='empty', agent=True,
+                                   terminal=True, blocks_typing=False))
         raise AssertionError("offline fixture forbids cmux command: " + str(args[0]))
 
     def _process(self, pid, **kwargs):

@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.57.** Ready messages may be sent directly in either direction,
+**Version: 0.4.58.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -17,6 +17,14 @@ original receiver transcript proves reception. Do not repaste an uncertain
 message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
+
+The 0.4.58 terminal route checks the real input area before one protected
+paste/submit request, preserves user drafts and dialogs, and records the host's
+submission result. A recovery key requires the complete original draft, not
+only its marker. Senders share pane/target locks; host checks and input are
+still separate operations, so this is not an atomic guarantee against concurrent
+user typing. Supervisor inquiry notices use immutable exact-byte snapshots
+with bounded crash recovery. See [0.4.58](references/release-0.4.58.md).
 
 The 0.4.55 handshake path resolves UUID selectors to authenticated current
 surface refs. Queued or uncertain direct sends retain the original nonce and
@@ -287,7 +295,8 @@ handoff separately.
 
 0.4.29 also holds the existing pane/target delivery mutex throughout a non-submitting
 handshake probe. Automatic terminal writers use the same lock and recheck the
-receiver identity before every input; current sends do not wait for a composer. See [input collisions](references/input-collisions.md).
+receiver identity before every input; current sends do not wait for an idle turn
+or a stable full screen. Preserve actual user drafts. See [input collisions](references/input-collisions.md).
 
 ## Core Contract
 
@@ -318,7 +327,10 @@ coordinator may use `successor-rebind-v2` for the exact designated cross-workspa
 peer. Do not infer a new task, shared writer or replacement session from permission
 to communicate. Raw terminal communication is allowed with native marker verification.
 
-Claude terminal input never clears existing text and sends without a composer gate.
+Claude terminal input never clears existing text. A strict read-only input-state
+check preserves receiver drafts; normal work, Goal and compaction do not prohibit sending.
+Use the protected paste/submit route and distinguish its submission acknowledgement
+from a native receipt. Never follow a refused or unknown paste with Enter.
 Codex uses native input when available and terminal fallback before input when unavailable.
 Busy work alone blocks neither direction. Send ready messages promptly through
 the supported entrypoint; do not pause native Goal or require an idle turn.
@@ -508,8 +520,8 @@ scope. Use a second executor only for an independent unresolved deliverable.
 Read [receiver input and delivery](references/receiver-input-and-delivery.md)
 when a surface may have returned to a shell or a send is unconfirmed. Current
 input type, submission, consumption, agreement and accepted output are separate
-facts. The bridge authenticates the original live agent process, preserves drafts and
-does not use composer/idle state as an admission gate.
+facts. The bridge authenticates the original live agent process and preserves drafts.
+An occupied or unknown input region prevents pasting; a busy agent turn does not.
 
 - Normal supervision is callback-first: one sentinel per task, 7200-second stable
   cadence, 1800 seconds for medium-risk work, 300-600 only for bounded high-risk

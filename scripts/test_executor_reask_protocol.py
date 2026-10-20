@@ -157,11 +157,28 @@ class ProtocolTests(unittest.TestCase):
                     value['files'].pop(member)
                 self.assert_rejected(bad_state, bad_record)
 
+    def test_0457_issuer_keeps_exact_original_scope(self):
+        name = '0.4.57-e8685485a9c5'
+        allowed = set(protocol.LEGACY_FILE_PROTOCOL[name]['controllers'])
+        self.assertEqual(allowed, set(REVIEWED))
+        self.assertNotIn(name, protocol.LEGACY_FILE_PROTOCOL['0.4.56-bea19f7ff44e']['controllers'])
+        state, record = self.episode(name)
+        state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
+        before = copy.deepcopy((state, record))
+        self.assert_supported(state, record)
+        self.assertEqual((state, record), before)
+        for member in protocol.historical_files(name):
+            with self.subTest(member=member):
+                bad_state, bad_record = copy.deepcopy(before)
+                for value in (bad_state['controller'], bad_state['continuation']['controller'], bad_record['controller']):
+                    value['files'].pop(member)
+                self.assert_rejected(bad_state, bad_record)
+
     def test_0456_original_registration_remains_active_in_new_stop_hook(self):
         import executor_proactive_hook as hook
         import executor_reask as reask
         from unittest.mock import patch
-        for name, expected in (('0.4.56-bea19f7ff44e', True), ('0.4.55-8064e2645b0e', False)):
+        for name, expected in (('0.4.57-e8685485a9c5', True), ('0.4.56-bea19f7ff44e', True), ('0.4.55-8064e2645b0e', False)):
             with self.subTest(name=name):
                 state, record = self.episode(name)
                 state.update(caller_surface_uuid=OWNER, state=reask.WAITING)

@@ -76,7 +76,8 @@ class OfflineRouteCase(unittest.TestCase):
             with self.subTest(forbidden=name):
                 mock.assert_not_called()
         for call in self.fixture.run.call_args_list:
-            self.assertEqual(call.args, ("tree", "--all", "--json", "--id-format", "both"))
+            self.assertTrue(call.args == ("tree", "--all", "--json", "--id-format", "both")
+                            or call.args[:2] == ('rpc', 'surface.input_state'))
 
     def forbid_further_rpc(self):
         self.fixture.rpc.reset_mock()
@@ -298,15 +299,18 @@ class SuccessorCodexRouteTests(OfflineRouteCase):
         self.rpc.thread_changes["canAcceptDirectInput"] = False
         terminal = self.guards.pop("_run_successor")
         def send(*args, **kwargs):
-            if args[0] == 'send-key':
+            if args[:2] == ('rpc', 'surface.input_state'):
+                return json.dumps(dict(json.loads(args[2]), agent=True, terminal=True,
+                                       state='empty', blocks_typing=False))
+            if args[0] == 'paste':
                 self.fixture.append_user('Wrapped notice: ' + self.text)
-            return '{}'
+            return '{"submitted":true}'
         terminal.side_effect = send
         result = self.submit()
         self.assertTrue(result['confirmed'])
         self.assertEqual(result['transport'], 'terminal-direct-marker-v1')
         self.assertEqual(result['input_operations'], 2)
-        self.assertEqual(terminal.call_count, 2)
+        self.assertEqual(terminal.call_count, 2)  # State query plus one protected input.
         self.assertEqual(self.rpc.mutations, [])
         self.assertNotIn("NATIVE_INPUT_INTENT", [event["phase"] for event in self.events()])
 
