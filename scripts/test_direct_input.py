@@ -166,6 +166,19 @@ class DirectInputTests(unittest.TestCase):
         self.assertFalse(direct.residual_marker(self.text + '\n❯ unrelated', self.marker))
         self.assertFalse(direct.residual_marker(self.text, self.marker))
 
+    def test_real_compaction_background_terminal_suffix_preserves_key_budget(self):
+        self.deferred()
+        for suffix in ('1 background terminal running', '2 background terminals running'):
+            screen = ('• Compacting context (37s • esc to interrupt) · ' + suffix
+                      + ' · /ps to view\n› ' + self.text)
+            self.assertTrue(direct.is_compacting(screen))
+            with patch.object(bridge, 'read_screen', return_value=screen):
+                with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
+                    self.send(recover_stranded=True)
+            self.assertEqual(caught.exception.details['extra_enter_deferred'], 'COMPACTION_STILL_ACTIVE')
+        self.f.key.assert_called_once()
+        self.assertFalse(direct.is_compacting('• Compactingly is a quoted word\n› ' + self.text))
+
     def test_consumed_extra_key_never_repeats_on_reconcile_or_resubmit(self):
         with patch.object(bridge, 'read_screen', return_value='> ' + self.text):
             with self.assertRaises(bridge.DispatchUnconfirmed):
