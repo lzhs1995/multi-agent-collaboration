@@ -29,7 +29,7 @@ def is_compacting(screen):
                   if re.match(r"^\s*[•·⏺✻✢✳✶✽◐◑◒◓](?:\s|$)", row)
                   and not re.search(r"Queued follow-up|Messages to be submitted", row, re.I)]
     rows = activities[-1:] if activities else [row.strip() for row in before]
-    return any(re.fullmatch(r"(?:[•·✻✢✳✶✽◐◑◒◓]\s+)?Compacting"
+    return any(re.match(r"(?:[•·✻✢✳✶✽◐◑◒◓]\s+)?Compacting\b"
         r"(?:\s+(?:context|conversation))?(?:…|\.\.\.)?(?:\s*\([^\n]*\))?", row, re.I)
         for row in rows)
 
