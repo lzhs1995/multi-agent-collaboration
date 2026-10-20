@@ -157,6 +157,29 @@ class ProtocolTests(unittest.TestCase):
                     value['files'].pop(member)
                 self.assert_rejected(bad_state, bad_record)
 
+    def test_0456_original_registration_remains_active_in_new_stop_hook(self):
+        import executor_proactive_hook as hook
+        import executor_reask as reask
+        from unittest.mock import patch
+        for name, expected in (('0.4.56-bea19f7ff44e', True), ('0.4.55-8064e2645b0e', False)):
+            with self.subTest(name=name):
+                state, record = self.episode(name)
+                state.update(caller_surface_uuid=OWNER, state=reask.WAITING)
+                state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
+                before = copy.deepcopy(state)
+                with patch.object(hook.lifecycle, 'poll_authorization'), \
+                     patch.object(hook.scheduler, 'registration_observation', return_value='REGISTERED'):
+                    self.assertEqual(hook.active(state, 100.), expected)
+                self.assertEqual(state, before)
+                if expected:
+                    message = hook.instruction(state)
+                    self.assertIn(str(self.releases[name][0] / 'scripts/executor_reask.py'), message)
+                    self.assertNotIn(str(self.current[0]), message)
+                    state['controller']['files']['scripts/executor_proactive_hook.py'] = '0' * 64
+                    with patch.object(hook.lifecycle, 'poll_authorization'), \
+                         patch.object(hook.scheduler, 'registration_observation', return_value='REGISTERED'):
+                        self.assertFalse(hook.active(state, 100.))
+
     def test_coordination_path_pin_keeps_each_original_controller_contract(self):
         member = 'scripts/cmux_coordination_paths.py'
         current, record = self.episode(current=True)
