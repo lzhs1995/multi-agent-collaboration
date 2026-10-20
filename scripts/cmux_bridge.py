@@ -613,6 +613,12 @@ SUBMISSION_STATES = (
 # state means "resend blindly".
 SUBMISSION_STATES_MEANING_WAIT = (DELIVERY_QUEUED_AT_RECEIVER,)
 
+
+def native_submission_state(result):
+    """Classify an original input observation without claiming native receipt."""
+    return (DELIVERY_QUEUED_AT_RECEIVER if result.get("state") == "NATIVE_QUEUED"
+            else DELIVERY_UNVERIFIED_BY_DETECTOR)
+
 # A receiver that queues an inbound message while inside a tool call renders a
 # labelled pending region. The marker sitting there is proof of delivery, not
 # proof of failure.

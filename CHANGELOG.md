@@ -1,3 +1,11 @@
+## 0.4.55
+
+- Resolve authenticated UUID selectors to current refs, retaining providers and rejecting duplicate aliases.
+- Preserve queued/uncertain submission state through the public message journal so handshake ACK waits retain the original nonce.
+- Reconcile late native ACKs in an original partial panel, preserving failed receipts and queued/native reception distinctions.
+- Continue only the never-started second executor under its original controller, reservation and supervisor, with a durable one-use intent.
+- Prevent fresh-handshake replay and require complete gate-member coverage for validation.
+
 ## 0.4.54
 
 - Remove blanket raw cmux communication bans. Ready messages can be sent during

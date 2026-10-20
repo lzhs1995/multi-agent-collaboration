@@ -16,6 +16,7 @@ import sys
 import time
 
 from repair_task_notice import controller_modules
+import handshake_panel as panel
 
 
 def digest(raw):
@@ -48,6 +49,21 @@ def observe(args, modules=None):
     if not isinstance(rows, list):
         raise ValueError('ACK_RECEIPT_EXECUTORS_INVALID')
     matches = [row for row in rows if isinstance(row, dict) and row.get('executor') == target]
+    gate_pin = None
+    gate_path = paths[0].parent / 'identity-gate.json'
+    if not matches:
+        try:
+            gate_pin = evidence.snapshot(gate_path)
+        except OSError as exc:
+            raise ValueError('ACK_RECEIPT_EXECUTOR_NOT_UNIQUE') from exc
+        gate = json.loads(gate_pin[0])
+        peers = [p for p in gate.get('executors', []) if p.get('surface_uuid') == target]
+        if (gate.get('status') != 'PASS' or len(peers) != 1
+                or gate.get('supervisor_surface_uuid') != identity['caller_surface_uuid']
+                or gate.get('workspace_uuid') != identity['workspace_uuid']):
+            raise ValueError('ACK_RECEIPT_EXECUTOR_GATE_CHANGED')
+        matches = [row for row in rows if isinstance(row, dict) and panel.matches(row, peers[0])
+                   and row.get('task_id') == gate.get('task_id')]
     if len(matches) != 1:
         raise ValueError('ACK_RECEIPT_EXECUTOR_NOT_UNIQUE')
     row = matches[0]
@@ -88,6 +104,7 @@ def observe(args, modules=None):
         raise ValueError('ACK_ORIGINAL_PARSER_RESULT_CHANGED')
     native.require_bound(bridge, target, binding, text, read_only=True)
     if (any(evidence.snapshot(path) != pin for path, pin in zip(paths, pins))
+            or (gate_pin is not None and evidence.snapshot(gate_path) != gate_pin)
             or journal.original_body_pin(text, attempt) != body_pin):
         raise ValueError('ACK_ORIGINAL_EVIDENCE_CHANGED_DURING_OBSERVATION')
     if received.get('confirmed') is True and not native.validate_proof(

@@ -3130,14 +3130,16 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                     "window_ref": "window:1"}
         return side
 
-    def _run_gate(self, refs, panes=None, provider="codex", proof_overrides=None):
+    def _run_gate(self, refs, panes=None, provider="codex", proof_overrides=None, aliases=None):
         """cmd_identity_gate with N explicit executor refs."""
-        plain = [r.partition("=")[0] for r in refs]
+        aliases = aliases or {}
+        plain = [aliases.get(r.partition("=")[0], r.partition("=")[0]) for r in refs]
         panes = panes or {r: f"pane:{i + 1}" for i, r in enumerate(plain)}
         uuid_map = {r: {"surface_id": self.uid(r),
                         "workspace_id": self.uid("workspace:10")} for r in plain}
         uuid_map[self.SUP] = {"surface_id": self.uid(self.SUP), "workspace_id": self.uid("workspace:10")}
         def pin(ref, **kwargs):
+            ref = aliases.get(ref, ref)
             proof = dict(workspace_uuid=self.uid("workspace:10"), workspace_ref="workspace:10",
                         caller_surface_uuid=self.uid(self.SUP), caller_surface_ref=self.SUP,
                         caller_pane_uuid=self.uid("pane:0"),
@@ -3153,7 +3155,7 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
                 "window_ref": "window:1", "workspace_id": self.uid("workspace:10"),
                 "surface_id": self.uid(self.SUP)}),
             mock.patch.object(HARNESS.cmux, "identify_surface",
-                              side_effect=self._identify(panes)),
+                              side_effect=lambda ref, **kw: self._identify(panes)(aliases.get(ref, ref), **kw)),
             mock.patch.object(HARNESS.cmux, "surface_uuid_map", return_value=uuid_map),
             mock.patch.object(HARNESS.cmux, "list_surfaces", return_value=[]),
             mock.patch("cmux_hook_scope.bind_participants", side_effect=lambda bridge, workspace, rows: [
@@ -3186,6 +3188,21 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         # branch on its absence.
         self.assertEqual(len(g["executors"]), 1)
         self.assertEqual(g["executors"][0]["surface_ref"], "surface:2")
+
+    def test_uuid_selectors_resolve_to_canonical_refs_and_keep_provider(self):
+        uid = self.uid("surface:2")
+        gate = self._run_gate([uid + "=claude", "surface:3=codex"], aliases={uid: "surface:2"})
+        self.assertEqual(gate["executor"], "surface:2")
+        self.assertEqual(gate["executor_surface_uuid"], uid)
+        self.assertEqual(gate["executor_provider"], "claude")
+        self.assertEqual(set(gate["workspace_proofs"]), {"surface:2", "surface:3"})
+        self.assertTrue(gate["terminal_channels"]["pass"])
+
+    def test_uuid_and_ref_alias_cannot_count_as_two_executors(self):
+        uid = self.uid("surface:2")
+        with self.assertRaises(SystemExit):
+            self._run_gate([uid, "surface:2"], aliases={uid: "surface:2"})
+        self.assertFalse(list((self.root / "_active").glob("**/*.json")))
 
     def test_two_executors_are_both_armed_in_one_marker(self):
         g = self._run_gate(["surface:2", "surface:3"])

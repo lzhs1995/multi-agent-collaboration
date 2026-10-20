@@ -22,6 +22,7 @@ import time
 from types import SimpleNamespace
 
 import observe_handshake_ack as observation
+import handshake_panel as panel
 
 
 def original_modules(controller):
@@ -220,19 +221,8 @@ def reconciled_row(row, ack, observed, archive, now):
     return result
 
 
-def aggregate_rows(rows):
-    """Supported C31 panel shape, checked against the original writer on publish."""
-    receipt = dict(rows[0], executors=rows, executor_count=len(rows))
-    receipt['all_executors_acked'] = all(r.get('executor_ack') is True for r in rows)
-    if not receipt['all_executors_acked']:
-        receipt['executor_ack'] = False
-        receipt['unproven_executors'] = [r['executor'] for r in rows if r.get('executor_ack') is not True]
-        failed = next(r for r in rows if r.get('executor_ack') is not True)
-        receipt.update(status='FAIL', lifecycle=failed['lifecycle'],
-                       terminal_error_at=failed.get('terminal_error_at'),
-                       error=f"handshake incomplete — terminal or invalid state for "
-                             f"{failed['executor']}: {failed.get('error', 'see executor record')}")
-    return receipt
+def aggregate_rows(rows, members=None):
+    return panel.aggregate(rows, members)
 
 
 STRANDED_DRAFT_ERROR = 'DRAFT_NOT_READY: original paste preserved; no submission key sent'
@@ -247,12 +237,39 @@ def is_stranded_draft_row(row):
             and row['dispatch_submitted_at'] is None)
 
 
+def is_direct_pending_row(row):
+    details = row.get('dispatch_error_details') or {}
+    return (row.get('lifecycle') == 'REJECTED'
+            and row.get('submission_state') == 'SUPERVISOR_DID_NOT_SUBMIT'
+            and row.get('error') == row.get('dispatch_error') == 'MESSAGE_NOT_CONFIRMED'
+            and details.get('confirmed') is False
+            and details.get('state') in ('NATIVE_QUEUED', 'NATIVE_PENDING')
+            and details.get('transport') == 'terminal-direct-marker-v1'
+            and details.get('submission_key') == 'enter'
+            and type(details.get('extra_enter')) is int and details['extra_enter'] in (0, 1)
+            and details.get('input_operations') == 2 + details['extra_enter'])
+
+
 def require_stranded_draft_attempt(row, attempt):
     if row.get('lifecycle') != 'REJECTED':
         return
     events = attempt.get('events')
     phases = ([event.get('phase') if isinstance(event, dict) else None
                for event in events] if isinstance(events, list) else [])
+    if is_direct_pending_row(row):
+        binding = attempt.get('native_binding', {})
+        inputs = [p for p in phases if p in ('PASTE_INTENT', 'PASTED', 'ENTER_INTENT',
+                  'ENTER_SENT', 'EXTRA_ENTER_INTENT', 'EXTRA_ENTER_SENT', 'NATIVE_INPUT_INTENT')
+                  or 'TAB' in str(p)]
+        wanted = ['PASTE_INTENT', 'PASTED', 'ENTER_INTENT', 'ENTER_SENT']
+        if row['dispatch_error_details']['extra_enter']:
+            wanted += ['EXTRA_ENTER_INTENT', 'EXTRA_ENTER_SENT']
+        if (inputs != wanted or binding.get('receipt_contract') != 'native-user-marker-v1'
+                or binding.get('receipt_marker') != row.get('ack_nonce')
+                or attempt.get('error') != 'MESSAGE_NOT_CONFIRMED'
+                or attempt.get('error_details') != row.get('dispatch_error_details')):
+            raise ValueError('ACK_ORIGINAL_DIRECT_INPUT_HISTORY_REQUIRED')
+        return
     if (not is_stranded_draft_row(row)
             or attempt.get('phase') != 'DRAFT_OBSERVATION'
             or attempt.get('error') != STRANDED_DRAFT_ERROR
@@ -266,13 +283,13 @@ def validate_panel(harness, native, receipt, gate, binding):
     rows = receipt.get('executors')
     members = harness._gate_executors(gate)
     if (gate.get('status') != 'PASS' or not isinstance(rows, list) or not rows
-            or len(rows) != len(members)
+            or not len(rows) <= len(members)
             or gate.get('supervisor_surface_uuid') != binding['identity']['caller_surface_uuid']
             or gate.get('workspace_uuid') != binding['identity']['workspace_uuid']):
         raise ValueError('ACK_ORIGINAL_PANEL_OR_GATE_CHANGED')
     seen = set()
     for row, member in zip(rows, members):
-        if (not isinstance(row, dict) or row.get('executor') != member.get('surface_uuid')
+        if (not isinstance(row, dict) or not panel.matches(row, member)
                 or row.get('executor') in seen or type(row.get('ordinal')) is not int
                 or row['ordinal'] != member['ordinal'] or row.get('task_id') != gate.get('task_id')
                 or row.get('supervisor') != gate.get('supervisor')
@@ -292,16 +309,18 @@ def validate_panel(harness, native, receipt, gate, binding):
                     or row.get('ack_response_marker') is not True):
                 raise ValueError('ACK_ORIGINAL_PANEL_ACK_INVALID')
         elif (row.get('executor_ack') is not False or row.get('status') != 'FAIL'
-              or not (row.get('lifecycle') == 'EXPIRED' or is_stranded_draft_row(row))
+              or not (row.get('lifecycle') == 'EXPIRED' or is_stranded_draft_row(row)
+                      or is_direct_pending_row(row))
               or native._timestamp(row.get('terminal_error_at')) is None):
             raise ValueError('ACK_RECONCILE_REQUIRES_COMPLETE_TERMINAL_PANEL')
-    if receipt != aggregate_rows(rows):
+    if receipt not in (aggregate_rows(rows), aggregate_rows(rows, members)):
         raise ValueError('ACK_UNSUPPORTED_OR_CHANGED_AGGREGATE')
-    selected = [r for r in rows if r['executor'] == binding['identity']['target_surface_uuid']]
+    selected = [r for r, m in zip(rows, members)
+                if m['surface_uuid'] == binding['identity']['target_surface_uuid']]
     if len(selected) != 1:
         raise ValueError('ACK_ORIGINAL_EXECUTOR_NOT_UNIQUE')
     participants = gate.get('native_participants', [])
-    target = [p for p in participants if p.get('surface_uuid') == selected[0]['executor']]
+    target = [p for p in participants if p.get('surface_uuid') == binding['identity']['target_surface_uuid']]
     if (len(target) != 1 or target[0].get('native_session_id') != binding['session_id']
             or target[0].get('provider') != binding['provider']):
         raise ValueError('ACK_ORIGINAL_EXECUTOR_SESSION_CHANGED')
@@ -734,11 +753,17 @@ def reconcile(args, modules=None):
                     result['receipt_write_attempts'] += 1
                     result['heartbeat_touch_possible_calls'] += 1
                     try:
-                        harness._write_handshake_receipt(root, updated)
+                        if len(updated) < len(harness._gate_executors(gate)):
+                            # The old writer credits only present rows. Publish an explicitly
+                            # incomplete panel through its original file writer, never a
+                            # transient PASS for the first of two executors.
+                            harness._write(receipt_path, aggregate_rows(updated, harness._gate_executors(gate)))
+                        else:
+                            harness._write_handshake_receipt(root, updated)
                     finally:
                         refresh_effects()
                     published_pin = evidence.snapshot(receipt_path)
-                    if json.loads(published_pin[0]) != aggregate_rows(updated):
+                    if json.loads(published_pin[0]) != aggregate_rows(updated, harness._gate_executors(gate)):
                         raise ValueError('ACK_ORIGINAL_WRITER_SHAPE_CHANGED')
                     recheck(ignore=(receipt_path,))
                     if result.get('heartbeat_observation_error'):
