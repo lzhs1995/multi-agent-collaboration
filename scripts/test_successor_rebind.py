@@ -266,11 +266,14 @@ class NativeSamePaneTests(MaintenanceRebindTests):
             for args in [('rpc', 'terminal.paste', json.dumps(params)),
                          ('send', '--surface', TARGET, 'STATUS: ORIGINAL_PAIR'),
                          ('send-key', '--surface', TARGET, 'enter')]:
-                bridge._run_successor(*args, artifact=self.artifact)
+                bridge._run_successor(*args, artifact=self.artifact, receipt_contract="native-user-marker-v1")
             self.assertEqual(run.call_count, 3)
             with self.assertRaisesRegex(Exception, 'target surface override'):
                 bridge._run_successor('send-key', '--surface', OLD_SUP, 'enter',
-                                      artifact=self.artifact)
+                                      artifact=self.artifact, receipt_contract="native-user-marker-v1")
+            self.assertEqual(run.call_count, 3)
+            with self.assertRaisesRegex(Exception, 'Historical native-only'):
+                bridge._run_successor('send-key', '--surface', TARGET, 'enter', artifact=self.artifact)
             self.assertEqual(run.call_count, 3)
 
     def test_actual_caller_foreground_thread_required(self):

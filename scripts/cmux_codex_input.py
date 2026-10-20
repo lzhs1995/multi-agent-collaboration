@@ -63,7 +63,7 @@ def _metadata_client():
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
             raise annotate_error(exc, transport=TRANSPORT, input_operations=0,
                 terminal_input_operations=0, native_metadata=dict(
-                    metadata_rpc_status="UNAVAILABLE",
+                    metadata_rpc_status="UNAVAILABLE", metadata_phase="CONNECT",
                     metadata_rpc_error=rpc_error_details(exc)))
         yield client
 
@@ -241,9 +241,10 @@ def send_once(binding, text, *, recheck, emit, observe, wait_seconds=None, fallb
                                  observe=observe, wait_seconds=wait_seconds)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
         import errno
-        unavailable = (isinstance(exc, OSError) and exc.errno in
-                       (errno.ENOENT, errno.ECONNREFUSED))
         metadata = getattr(exc, "details", {}).get("native_metadata", {})
+        unavailable = (isinstance(exc, OSError) and exc.errno in
+                       (errno.ENOENT, errno.ECONNREFUSED)
+                       and metadata.get("metadata_phase") == "CONNECT")
         unavailable = unavailable or (metadata.get("metadata_rpc_status") == "AVAILABLE"
             and metadata.get("available_input_method") is None)
         if fallback is None or intended or not unavailable:

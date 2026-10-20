@@ -426,9 +426,11 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                     paste=lambda value: bridge._run_successor("rpc", "terminal.paste", json.dumps({
                         "text": value, "submit_key": "none",
                         "workspace_id": binding["identity"]["target_workspace_uuid"],
-                        "surface_id": binding["identity"]["target_surface_uuid"]}, ensure_ascii=False), artifact=artifact),
+                        "surface_id": binding["identity"]["target_surface_uuid"]}, ensure_ascii=False), artifact=artifact,
+                        receipt_contract=binding.get("receipt_contract")),
                     key=lambda value: bridge._run_successor("send-key", "--surface",
-                        binding["identity"]["target_surface_uuid"], "--", value, artifact=artifact),
+                        binding["identity"]["target_surface_uuid"], "--", value, artifact=artifact,
+                        receipt_contract=binding.get("receipt_contract")),
                     observe=lambda: _observe(bridge, journal, artifact, text, marker),
                     read_screen=lambda: bridge.read_screen_successor(artifact), wait_seconds=seconds)
             if binding["provider"] == "codex":

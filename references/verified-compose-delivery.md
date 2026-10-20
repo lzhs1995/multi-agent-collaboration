@@ -11,7 +11,9 @@
 在原 attempt 中持久化 payload、身份和输入前 EOF fence。当前新 attempt 固定
 `receipt_contract=native-user-marker-v1` 与原 marker，旧 attempt 不改合同。
 只有目标原转录在原 fence 后新增**含该 marker 的 user 消息**证明送达。
-客户端包装、附加上下文或空白变化不再使已到达消息失败；assistant、tool、
+客户端包装、附加上下文或空白变化不再使已到达消息失败。由于不检查 composer，
+接收端原有未提交文字可能与通知合并；保留原文并由接收 agent 协调，marker 回执
+不证明业务正文被独立执行。assistant、tool、
 Hook、历史记录和 Claude queued_command 不证明收到。读取完整正文、ACK、
 callback 业务核收与资源释放分别记录。短通知送达不等于其 SHA 正文已读。
 
@@ -22,7 +24,8 @@ Codex bridge 优先调用已绑定原线程的 turn/steer 或 turn/start；contr
 
 终端一次原文粘贴后立即 Enter；不以忙碌或 composer 判读拦截。默认有界观察
 30 秒（显式0–60秒）。未见 marker user 且原生状态仍为 pending 时，若屏幕
-显示本次 marker 残留或压缩，先再核一次转录，然后最多补一个 Enter。
+显示压缩时在有限预算内等压缩结束，未结束则保留补键预算并返回 pending；
+见本次 marker 残留且已不在压缩时，先再核一次转录，然后最多补一个 Enter。
 补键意图先落盘；不再次粘贴，不因崩溃、重试或换版重置预算。已入原生队列
 先观察，不补键。超出本轮观察窗不等于丢失；使用原参数 --reconcile-only。
 

@@ -36,17 +36,43 @@ class DirectInputTests(unittest.TestCase):
             self.send(reconcile_only=True)
         self.assertEqual(before, self.f.send.call_count)
 
-    def test_one_extra_enter_after_compaction_without_second_paste(self):
+    def test_existing_draft_does_not_gate_or_get_cleared(self):
+        original_draft = 'Unsubmitted receiver note. '
+        self.f.key.side_effect = self.f.receipt_on_key(original_draft + self.text)
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('no composer admission')):
+            result = self.send()
+        self.assertTrue(result['confirmed'])
+        self.f.send.assert_called_once_with('target', self.text)
+        self.f.key.assert_called_once_with('target', 'enter')
+        self.assertIn(original_draft, self.f.transcript.read_text())
+
+    def test_one_extra_enter_after_compaction_ends_without_second_paste(self):
         def key(surface, value):
             if self.f.key.call_count == 2:
                 self.f.append_user(self.text)
         self.f.key.side_effect = key
-        with patch.object(bridge, 'read_screen', return_value='Compacting context'):
-            result = self.send()
+        with patch.object(bridge, 'read_screen', side_effect=['Compacting context', self.text]):
+            result = bridge.submit_text('target', self.text, marker=self.marker, wait_seconds=1)
         self.assertTrue(result['confirmed'])
         self.assertEqual(result['extra_enter'], 1)
         self.assertEqual(self.f.key.call_count, 2)
         self.f.send.assert_called_once()
+
+    def test_active_compaction_preserves_extra_enter_budget(self):
+        with patch.object(bridge, 'read_screen', return_value='Compacting context'):
+            with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
+                self.send()
+        self.f.send.assert_called_once()
+        self.f.key.assert_called_once()
+        self.assertNotIn('EXTRA_ENTER_INTENT',
+            [e['phase'] for e in json.loads(next(self.f.home.rglob('attempt-0001.json')).read_text())['events']])
+
+    def test_non_socket_enoent_never_causes_fallback(self):
+        with patch('cmux_codex_input._send_native_once', side_effect=FileNotFoundError(errno.ENOENT, 'transcript gone')):
+            with self.assertRaises(FileNotFoundError):
+                self.send()
+        self.f.send.assert_not_called()
+        self.f.key.assert_not_called()
 
     def test_consumed_extra_key_never_repeats_on_reconcile_or_resubmit(self):
         with patch.object(bridge, 'read_screen', return_value=self.text):

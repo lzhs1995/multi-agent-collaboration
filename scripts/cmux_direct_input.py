@@ -4,6 +4,7 @@ The caller owns the original journal and input lock. Busy work and compaction
 are not admission gates. No draft is cleared or pasted twice. A single extra
 Enter is permitted only after a pending receipt and visible residual/compaction.
 """
+import math
 import time
 
 from cmux_confirmation import annotate_error, observe_receipt, wait_budget
@@ -39,7 +40,24 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
             # initial admission. A queue already accepted input needs no key.
             screen = read_screen()
             emit("DIRECT_RECOVERY_OBSERVATION", screen)
-            if marker in screen or "compacting" in screen.lower():
+            recovery_started = time.monotonic()
+            # Initial sending never waits for compaction. Only the single
+            # recovery key waits: pressing it during compaction can swallow it.
+            for index in range(math.ceil(seconds) + 1):
+                if "compacting" not in screen.lower():
+                    break
+                result = observe()
+                if result.get("confirmed") or result.get("state") != "NATIVE_PENDING":
+                    break
+                left = seconds - (time.monotonic() - recovery_started)
+                if left <= 0 or index == math.ceil(seconds):
+                    break
+                time.sleep(min(1.0, left))
+                screen = read_screen()
+                emit("DIRECT_RECOVERY_OBSERVATION", screen)
+            if "compacting" in screen.lower():
+                result = dict(result, extra_enter_deferred="COMPACTION_STILL_ACTIVE")
+            elif marker in screen:
                 result = observe()  # close the receipt race before one extra key
                 if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
                     emit("EXTRA_ENTER_INTENT", screen)

@@ -5,7 +5,7 @@ compaction. Raw cmux send/send-key/paste is allowed. The optional bridge uses
 native Codex input when available and falls back to a single terminal paste and
 Enter only before any native input intent. Confirm a new user message containing
 the unique marker in the original receiver transcript. Never repaste an uncertain
-message; at most one recorded extra Enter may recover residual input.
+message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md).
 
 ## Earlier release notes (historical behavior, not new-message admission rules)

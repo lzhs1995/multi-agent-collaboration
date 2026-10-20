@@ -71,7 +71,7 @@ class FakeTerminal:
     def _queued_or_active_input(self, screen):
         return False
 
-    def _run_successor(self, *args, artifact):
+    def _run_successor(self, *args, artifact, receipt_contract=None):
         # Observe actual durable bytes at the terminal side-effect boundary.
         journal = self.owner.journal()
         attempt = json.loads((journal / "attempt.json").read_text())

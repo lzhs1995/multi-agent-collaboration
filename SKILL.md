@@ -14,7 +14,7 @@ including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
 original receiver transcript proves reception. Do not repaste an uncertain
-message; at most one recorded extra Enter may recover residual input.
+message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
 
