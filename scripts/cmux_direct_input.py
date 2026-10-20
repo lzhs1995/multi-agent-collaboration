@@ -14,6 +14,25 @@ from cmux_confirmation import annotate_error, observe_receipt, wait_budget
 TRANSPORT = "terminal-direct-marker-v1"
 
 
+class ProtectedSubmitRefused(RuntimeError):
+    """The CLI's exact pre-paste draft/dialog refusal, not arbitrary rc=1."""
+
+
+def protected_submit_refusal(result, surface):
+    if result.returncode != 1 or (result.stdout or '').strip():
+        return None
+    message = (result.stderr or '').strip()
+    if message.startswith('Error: '):
+        message = message[len('Error: '):]
+    endings = (
+        f'paste: the agent prompt in {surface} holds text someone is typing, so nothing was sent. Retry when the prompt is clear, or pass --force to send anyway.',
+        f'paste: {surface} is waiting on a question or dialog, so nothing was sent. Retry once it is answered, or pass --force to send anyway.',
+    )
+    if message not in endings:
+        return None  # Localized/unknown diagnostics stay uncertain.
+    return ProtectedSubmitRefused('PROTECTED_SUBMIT_REFUSED: zero input; preserve draft/dialog')
+
+
 def protected_submit_result(raw):
     """A host acknowledgement is never a receiver user-message receipt."""
     value = json.loads(raw)
@@ -181,6 +200,7 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
     operations = 0
     extra = False
     host_queued = False
+    refused = False
     try:
         recheck()
         if preflight is not None:
@@ -195,7 +215,15 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
             emit("ENTER_INTENT", "")
             recheck()
             operations += 2
-            acknowledgement = submit(text)
+            try:
+                acknowledgement = submit(text)
+            except ProtectedSubmitRefused:
+                # Preserve both intent records. This terminal event describes
+                # the exact CLI pre-paste refusal, not permission to retry.
+                emit('PROTECTED_SUBMIT_REFUSED')
+                operations = 0
+                refused = True
+                raise
             if (not isinstance(acknowledgement, dict)
                     or type(acknowledgement.get("submitted")) is not bool):
                 raise RuntimeError("PROTECTED_SUBMIT_OUTCOME_UNKNOWN: observe original")
@@ -267,4 +295,8 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
     except BaseException as exc:
         raise annotate_error(exc, transport=TRANSPORT,
             input_operations=operations, terminal_input_operations=operations,
+            input_operation_semantics='confirmed_zero' if refused else 'intent_budget',
+            input_intents_recorded=2 if refused else operations,
+            actual_input_operations=0 if refused or operations == 0 else None,
+            input_outcome='REFUSED_BEFORE_PASTE' if refused else ('NO_INPUT' if operations == 0 else 'UNKNOWN'),
             extra_enter=int(extra), no_repaste=True)

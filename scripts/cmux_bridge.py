@@ -235,6 +235,11 @@ def _run_successor(*args, artifact, check=True, capture=True, receipt_contract=N
     result = subprocess.run([CMUX] + (["--json"] if json_output else []) + args,
                             capture_output=capture, text=True)
     if check and result.returncode != 0:
+        if args and args[0] == 'paste':
+            from cmux_direct_input import protected_submit_refusal
+            refused = protected_submit_refusal(result, proof['target_surface_uuid'])
+            if refused is not None:
+                raise refused
         raise RuntimeError(f"cmux successor call failed (rc={result.returncode}): {result.stderr.strip()}")
     return result.stdout.strip() if capture else ""
 
@@ -277,6 +282,11 @@ def _run(*args, check=True, capture=True, json_output=False):
         text=True,
     )
     if check and result.returncode != 0:
+        if args and args[0] == 'paste':
+            from cmux_direct_input import protected_submit_refusal
+            refused = protected_submit_refusal(result, proof['target_surface_uuid'])
+            if refused is not None:
+                raise refused
         raise RuntimeError(
             f"cmux {' '.join(args)} failed (rc={result.returncode}):\n"
             f"{result.stderr.strip()}"

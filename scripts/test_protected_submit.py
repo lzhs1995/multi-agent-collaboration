@@ -2,6 +2,7 @@
 import json
 import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import cmux_bridge as bridge
@@ -19,6 +20,7 @@ class ProtectedSubmitTests(unittest.TestCase):
             agent=True, terminal=True, state='empty', blocks_typing=False,
             lifecycle='running')
         self.rc = 0
+        self.stderr = 'refused draft'
         self.pin = patch.object(bridge, 'pin_workspace', return_value=self.proof)
         self.pin.start(); self.addCleanup(self.pin.stop)
         self.run = patch.object(bridge.subprocess, 'run', side_effect=self.process).start()
@@ -27,7 +29,7 @@ class ProtectedSubmitTests(unittest.TestCase):
     def process(self, argv, **kwargs):
         if 'surface.input_state' in argv:
             return subprocess.CompletedProcess(argv, 0, json.dumps(self.input_state), '')
-        return subprocess.CompletedProcess(argv, self.rc, json.dumps(self.ack), 'refused draft')
+        return subprocess.CompletedProcess(argv, self.rc, json.dumps(self.ack) if self.ack is not None else '', self.stderr)
 
     def send(self, screen='Compacting context'):
         return direct.send_once(self.text, self.marker, recheck=lambda: None,
@@ -53,6 +55,48 @@ class ProtectedSubmitTests(unittest.TestCase):
             self.send()
         self.assertEqual(self.keys, [])
         self.assertNotIn('PASTED', [e['phase'] for e in self.events])
+
+    def test_exact_cli_prepaste_refusal_has_zero_actual_input_and_keeps_intents(self):
+        self.rc, self.ack = 1, None
+        self.stderr = 'Error: paste: the agent prompt in TARGET holds text someone is typing, so nothing was sent. Retry when the prompt is clear, or pass --force to send anyway.'
+        with self.assertRaises(direct.ProtectedSubmitRefused) as caught:
+            self.send()
+        details = caught.exception.details
+        self.assertEqual(details['input_operations'], 0)
+        self.assertEqual(details['actual_input_operations'], 0)
+        self.assertEqual(details['input_intents_recorded'], 2)
+        self.assertEqual(details['input_outcome'], 'REFUSED_BEFORE_PASTE')
+        self.assertEqual([e['phase'] for e in self.events],
+                         ['PASTE_INTENT', 'ENTER_INTENT', 'PROTECTED_SUBMIT_REFUSED'])
+        self.assertTrue(details['no_repaste'])
+        self.assertEqual(self.keys, [])
+        original = {'native_binding': {'receipt_contract': 'native-user-marker-v1',
+                    'receipt_marker': self.marker}, 'events': self.events}
+        with self.assertRaisesRegex(ValueError, 'BUDGET_UNAVAILABLE'):
+            direct.recover_once(self.text, self.marker, original=original,
+                recheck=lambda: None, emit=Mock(), key=Mock(), observe=Mock(), read_screen=Mock())
+
+    def test_generic_nonzero_or_mismatched_refusal_stays_unknown(self):
+        self.rc, self.ack = 1, None
+        for stderr in ('draft', 'timeout after paste',
+                       'paste: the agent prompt in OTHER holds text someone is typing, so nothing was sent. Retry when the prompt is clear, or pass --force to send anyway.'):
+            self.stderr = stderr
+            with self.assertRaises(RuntimeError) as caught:
+                self.send()
+            self.assertNotIsInstance(caught.exception, direct.ProtectedSubmitRefused)
+            self.assertEqual(caught.exception.details['input_operations'], 2)
+            self.assertEqual(caught.exception.details['input_outcome'], 'UNKNOWN')
+            self.assertIsNone(caught.exception.details['actual_input_operations'])
+            self.assertEqual(self.keys, [])
+
+    def test_refusal_classifier_requires_exact_diagnostic_status_and_empty_stdout(self):
+        text = 'paste: TARGET is waiting on a question or dialog, so nothing was sent. Retry once it is answered, or pass --force to send anyway.'
+        self.assertIsInstance(direct.protected_submit_refusal(
+            subprocess.CompletedProcess([], 1, '', text), 'TARGET'), direct.ProtectedSubmitRefused)
+        for rc, out, err in ((-9, '', text), (2, '', text), (1, '{}', text),
+                              (1, '', text + '\nlate failure')):
+            self.assertIsNone(direct.protected_submit_refusal(
+                subprocess.CompletedProcess([], rc, out, err), 'TARGET'))
 
     def test_query_failure_or_unknown_fields_precede_all_input_intents(self):
         for state in ({}, dict(self.input_state, blocks_typing=None),
@@ -163,6 +207,24 @@ class ProtectedSubmitTests(unittest.TestCase):
                                              read_claude_screen=lambda: screen)
         with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
             direct.require_prompt_state(state, 'TARGET', 'WORKSPACE')
+
+
+    def test_measured_claude303_frame_has_positive_and_negative_draft_controls(self):
+        template = (Path(__file__).parent / 'fixtures/claude303-reviewer-input.txt').read_text()
+        rows = template.splitlines()
+        prompt = next(i for i, row in enumerate(rows) if row.lstrip().startswith('❯'))
+        def frame(body):
+            value = list(rows)
+            value[prompt] = '❯ ' + body
+            return '\n'.join(value)
+        self.assertTrue(direct.empty_claude_input(frame('')))
+        self.assertFalse(direct.owned_draft(frame(''), self.text))
+        self.assertTrue(direct.owned_draft(frame(self.text), self.text))
+        for body in ('user half question', '[Pasted text #1 +3 lines]',
+                     self.text + ' extra user text', 'user prefix ' + self.text):
+            with self.subTest(body=body):
+                self.assertFalse(direct.empty_claude_input(frame(body)))
+                self.assertFalse(direct.owned_draft(frame(body), self.text))
 
 
 if __name__ == '__main__':
