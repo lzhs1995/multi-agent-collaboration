@@ -132,16 +132,30 @@ class ProtocolTests(unittest.TestCase):
                     state['continuation']['reservation_inquiries'] = value
                     self.assert_rejected(state, record)
 
-    def test_proactive_capability_is_boolean_explicit_and_never_inherited_by_old_controllers(self):
+    def test_proactive_capability_is_boolean_and_preserves_only_original_grants(self):
         for name in (None, *REVIEWED):
             for flag in (True, False, 'true', 1):
                 with self.subTest(release=name, flag=flag):
                     state, record = self.episode(name, current=name is None)
                     state['continuation'].update(reservation_inquiries=True, proactive_hook=flag)
-                    if name is None and type(flag) is bool:
+                    if (name is None or protocol.LEGACY_CAPABILITIES.get(name, {}).get('proactive_hook')) and type(flag) is bool:
                         self.assert_supported(state, record)
                     else:
                         self.assert_rejected(state, record)
+
+    def test_0456_proactive_contract_survives_upgrade_without_reenrollment(self):
+        name = '0.4.56-bea19f7ff44e'
+        state, record = self.episode(name)
+        state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
+        before = copy.deepcopy((state, record))
+        self.assert_supported(state, record)
+        self.assertEqual((state, record), before)
+        for member in ('scripts/executor_proactive_hook.py', 'scripts/native_user_record.py'):
+            with self.subTest(member=member):
+                bad_state, bad_record = copy.deepcopy(before)
+                for value in (bad_state['controller'], bad_state['continuation']['controller'], bad_record['controller']):
+                    value['files'].pop(member)
+                self.assert_rejected(bad_state, bad_record)
 
     def test_coordination_path_pin_keeps_each_original_controller_contract(self):
         member = 'scripts/cmux_coordination_paths.py'

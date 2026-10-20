@@ -1,3 +1,9 @@
+## 0.4.57
+
+- Write task-continuation and fail-open classifications through the audit writer's supported advisory mode; keep distinct scope_status values and private exceptions out of receipts.
+- Preserve the complete reviewed 0.4.56 controller, including its original proactive-hook authority and issuer scope. No registration migration or transport behavior change.
+- Test the actual wrapper and audit-file writer together, plus cross-release proactive enrollment preservation and malformed-pin rejection.
+
 ## 0.4.56
 
 - Explicit new task registration can enforce original Claude Stop continuation; the foreground runner asks every60seconds and preserves exact reply consumption.
