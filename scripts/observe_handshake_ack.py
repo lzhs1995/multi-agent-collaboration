@@ -17,6 +17,7 @@ import time
 
 from repair_task_notice import controller_modules
 import handshake_panel as panel
+from native_user_record import generated_user_record
 
 
 def digest(raw):
@@ -29,6 +30,34 @@ def original_modules(controller):
     if Path(journal.__file__).resolve().parent != Path(controller) / 'scripts':
         raise ValueError('ACK_OBSERVATION_MIXED_CONTROLLER')
     return bridge, native, evidence, journal
+
+
+def exclude_generated_receipt(native, binding, text, received, intent_at, fence):
+    """Narrow negative check over old proof bytes; never change its controller.
+
+    Historical controllers remain responsible for identity, intent and proof
+    validation. This current observer can reject a known summary false positive,
+    but cannot manufacture a receipt or rewrite the original attempt.
+    """
+    if received.get('confirmed') is not True:
+        return received
+    proof = received['native_proof']
+    fenced = native._fenced_binding(binding, text, fence, intent_at)
+    pin = fenced['transcript']
+    with native._open(pin['path']) as stream:
+        native._check_file(stream, binding)
+        native._check_file(stream, fenced)
+        stream.seek(proof['offset'])
+        raw = stream.read(proof['length'])
+        if digest(raw) != proof['sha256'] or not raw.endswith(b'\n'):
+            raise ValueError('ACK_NATIVE_PROOF_CHANGED')
+        record = json.loads(raw)
+        native._check_file(stream, fenced)
+    if generated_user_record(record):
+        return dict(confirmed=False, state='NATIVE_GENERATED_SUMMARY_EXCLUDED',
+                    excluded_proof=proof, original_observation=received,
+                    next_offset=received.get('next_offset'), input_operations=0)
+    return received
 
 
 def observe(args, modules=None):
@@ -110,6 +139,7 @@ def observe(args, modules=None):
     if received.get('confirmed') is True and not native.validate_proof(
             binding, text, received.get('native_proof'), not_before=intent_at, paste_fence=fence):
         raise ValueError('ACK_NATIVE_PROOF_CHANGED')
+    received = exclude_generated_receipt(native, binding, text, received, intent_at, fence)
     return dict(
         schema='original-handshake-observation-v1', status='OBSERVED',
         observed_at_epoch=time.time(), controller=str(args.controller),

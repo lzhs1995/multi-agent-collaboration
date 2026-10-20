@@ -50,7 +50,13 @@ class HandshakeObservationTests(unittest.TestCase):
         self.b.wait_for_ack.return_value = self.expected
         self.n = mock.Mock(MAX_SCAN=4 * 1024 * 1024)
         self.n._original_intent.return_value = (1.0, {'schema': 'original-fence'})
-        self.n.probe.return_value = dict(confirmed=True, state='NATIVE_RECEIVED', native_proof={'sha256': 'original'})
+        self.native_path = self.root / 'native.jsonl'
+        raw = (json.dumps(dict(type='user', message=dict(role='user', content=self.text))) + '\n').encode()
+        self.native_path.write_bytes(raw)
+        self.n._fenced_binding.return_value = dict(transcript=dict(path=str(self.native_path)))
+        self.n._open.side_effect = lambda path: open(path, 'rb')
+        self.n.probe.return_value = dict(confirmed=True, state='NATIVE_RECEIVED',
+            native_proof=dict(offset=0, length=len(raw), sha256=observer.digest(raw)))
         self.n.validate_proof.return_value = True
         self.j = mock.Mock()
         self.j.original_body_pin.return_value = None
@@ -95,6 +101,21 @@ class HandshakeObservationTests(unittest.TestCase):
                 self.assertTrue(result['ack']['observed'])
                 self.assertFalse(result['native_message']['confirmed'])
                 self.assertEqual(result['native_message']['state'], state)
+
+    def test_original_observer_summary_receipt_is_excluded_without_losing_ack(self):
+        raw = (json.dumps(dict(type='user', isCompactSummary=True,
+                isVisibleInTranscriptOnly=True, message=dict(role='user', content=self.text))) + '\n').encode()
+        self.native_path.write_bytes(raw)
+        proof = dict(offset=0, length=len(raw), sha256=observer.digest(raw))
+        self.n.probe.return_value = dict(confirmed=True, state='NATIVE_RECEIVED', native_proof=proof)
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        result = self.run_observation()
+        self.assertTrue(result['ack']['observed'])
+        self.assertFalse(result['native_message']['confirmed'])
+        self.assertEqual(result['native_message']['state'], 'NATIVE_GENERATED_SUMMARY_EXCLUDED')
+        self.assertEqual(result['native_message']['excluded_proof'], proof)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        self.b.submit_text.assert_not_called()
 
     def test_native_received_does_not_promote_missing_ack(self):
         self.b.wait_for_ack.side_effect = TimeoutError('not visible')

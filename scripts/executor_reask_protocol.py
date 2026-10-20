@@ -22,7 +22,8 @@ FILES = LEGACY_FILES + ('scripts/executor_reask_identity.py',
                        'scripts/cmux_workspace_guard.py',
                        'scripts/cmux_daemon_identity.py',
                        'scripts/cmux_foreground_thread.py',
-                       'scripts/cmux_coordination_paths.py')
+                       'scripts/cmux_coordination_paths.py',
+                       'scripts/executor_proactive_hook.py', 'scripts/native_user_record.py')
 SCHEDULER = 'scripts/executor_reask_scheduler.py'
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
@@ -30,6 +31,8 @@ MAX_RELEASE_FILES = 2048
 # Raw immutable manifests reviewed with LEGACY; never learn trust from a record
 # or from a manifest's self-reported version/tree hash.
 LEGACY_MANIFESTS = {
+    '0.4.54-f86a9efcf10f': '5ba32999d417a9c97bbbcc8bfe4bddf9c347ca5a6526576c3c5b91e25d601f8b',
+ '0.4.55-8064e2645b0e': '954513900d3c19d8bd8698d5741db865d1e005baa2d3ac65927e45199dc00e63',
     '0.4.53-568efc13c7ae': 'b28ca93e025a9e0fe01fc2da2d21d10661f08a7a4f3341e592378a38958bab16',
     '0.4.52-0ca4d8002da7': '7fd8aae48af521d103525807c27e066fa0c761c40b430e2682d2b604d08b4fee',
     '0.4.51-587295817cef': 'eaa374d774766d606753a748c40dd3460dd518be09c9a2fc7ce80928014445a3',
@@ -54,6 +57,36 @@ LEGACY_MANIFESTS = {
 # These COMPLETE combinations were reviewed together. A version string or one
 # matching file is not a compatibility grant.
 LEGACY = {
+    '0.4.54-f86a9efcf10f': {'VERSION': '6b100b495c461298b554555dfea9ac13368acba909261f7b2e6ce84c8ec693bd',
+                         'scripts/executor_reask.py': '5273009e2c225081457c6594cc9fadfea077217376c5afc7ed2da694462c3bbb',
+                         'scripts/executor_ready.py': '1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79',
+                         'scripts/cmux_bridge.py': 'b2b9e39b62523502714191ed6c5e43a2897442a2a161932e144894e5212c1bee',
+                         'scripts/executor_reply.py': '160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312',
+                         'scripts/executor_reask_lifecycle.py': '9a93b642cf78f45eaaa713affaf0d5a9640faabc65970f474b1d5be11228fd09',
+                         'scripts/executor_reask_identity.py': 'c9a8542bb91d872bab910498083f478b6fded4c0dd867a208bc105acad7696a2',
+                         'scripts/executor_reask_protocol.py': 'afc5ffb563aed7afde9740355d7ef6351c950ac66bb82e3ddece0882b18f1c3b',
+                         'scripts/executor_reply_advisory.py': 'e2c76da58cf5b970d37627d57e984940776976cc6529bb553a9d1f841be822bb',
+                         'scripts/cmux_native_delivery.py': 'e20465a6809ab195c2a2743b6b8789243b6d0430c82fddf9809108e7d7ef9698',
+                         'scripts/cmux_workspace_guard.py': '43f652737f458cf8b007672d58b817e58782321baef1f0ab97605b77925fc46f',
+                         'scripts/cmux_daemon_identity.py': '25e84742779316635d0e840d92b0213c903f46a3c96e5877eae087462745fdfb',
+                         'scripts/cmux_foreground_thread.py': '892cd5f401703e8b7f833cc1dd3a2aba2886fc1859b56b7bed681f5fd92b39b3',
+                         'scripts/cmux_coordination_paths.py': 'f8399aec9644a95bb05bd8b74048782c3e14b70dc9333aee9ca901cea94e8f32',
+                         'scripts/executor_reask_scheduler.py': 'bfdf1ec0d29515d5f5455045a4f728d3bb58d2c5d8ec8c03fc8388d8f3bb6524'},
+ '0.4.55-8064e2645b0e': {'VERSION': '07d6c12306b34e5e81c44a255d4f31f8ee96be4fbcccee2789cc4c03b6a2db0b',
+                         'scripts/executor_reask.py': '5273009e2c225081457c6594cc9fadfea077217376c5afc7ed2da694462c3bbb',
+                         'scripts/executor_ready.py': '1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79',
+                         'scripts/cmux_bridge.py': '20cd5c34015b7abde4cad718e2dccf6a0ca44ba0a5e7e19406b589f0962acff4',
+                         'scripts/executor_reply.py': '160f9115be184fb2cd332558c40839db5a61a5ea0cb5e29016740bc488ad6312',
+                         'scripts/executor_reask_lifecycle.py': '9a93b642cf78f45eaaa713affaf0d5a9640faabc65970f474b1d5be11228fd09',
+                         'scripts/executor_reask_identity.py': 'c9a8542bb91d872bab910498083f478b6fded4c0dd867a208bc105acad7696a2',
+                         'scripts/executor_reask_protocol.py': 'afc5ffb563aed7afde9740355d7ef6351c950ac66bb82e3ddece0882b18f1c3b',
+                         'scripts/executor_reply_advisory.py': 'e2c76da58cf5b970d37627d57e984940776976cc6529bb553a9d1f841be822bb',
+                         'scripts/cmux_native_delivery.py': 'e20465a6809ab195c2a2743b6b8789243b6d0430c82fddf9809108e7d7ef9698',
+                         'scripts/cmux_workspace_guard.py': '43f652737f458cf8b007672d58b817e58782321baef1f0ab97605b77925fc46f',
+                         'scripts/cmux_daemon_identity.py': '25e84742779316635d0e840d92b0213c903f46a3c96e5877eae087462745fdfb',
+                         'scripts/cmux_foreground_thread.py': '892cd5f401703e8b7f833cc1dd3a2aba2886fc1859b56b7bed681f5fd92b39b3',
+                         'scripts/cmux_coordination_paths.py': 'f8399aec9644a95bb05bd8b74048782c3e14b70dc9333aee9ca901cea94e8f32',
+                         'scripts/executor_reask_scheduler.py': 'bfdf1ec0d29515d5f5455045a4f728d3bb58d2c5d8ec8c03fc8388d8f3bb6524'},
     '0.4.53-568efc13c7ae': {'VERSION': '738fe1d0848e080d87a857cf54d0ad017a0a7ed260ed3c3f5ab4e376319849cb',
                              'scripts/executor_reask.py': '5273009e2c225081457c6594cc9fadfea077217376c5afc7ed2da694462c3bbb',
                              'scripts/executor_ready.py': '1eba550c7c8c58a633d77f642d4195699876ff3ecdcec5bacfadf411687f9a79',
@@ -340,6 +373,52 @@ LEGACY = {
 # A historical issuer can only have enrolled controllers supported when it ran;
 # it cannot claim to have enrolled a future CURRENT or a subsequently added release.
 LEGACY_FILE_PROTOCOL = {
+    '0.4.54-f86a9efcf10f': {'descriptor': {'id': 'executor-reask-file-v1',
+                                        'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+                         'controllers': ('0.4.53-568efc13c7ae',
+                                         '0.4.52-0ca4d8002da7',
+                                         '0.4.51-587295817cef',
+                                         '0.4.50-3dd2945b5069',
+                                         '0.4.49-689dda6455be',
+                                         '0.4.48-3b4304d24f90',
+                                         '0.4.47-46395e3b21e5',
+                                         '0.4.46-37e945dea2e3',
+                                         '0.4.44-2b9bce3b41eb',
+                                         '0.4.42-5947b2d1f8aa',
+                                         '0.4.41-28b36490b149',
+                                         '0.4.37-c7258c383218',
+                                         '0.4.36-8ab59dbb5a5a',
+                                         '0.4.35-e62f35828c7a',
+                                         '0.4.30-ff75100795a9',
+                                         '0.4.31-79ae83e9d5da',
+                                         '0.4.28-ae66245771d0',
+                                         '0.4.32-c7338a400bf4',
+                                         '0.4.33-09de16ceb823',
+                                         '0.4.34-d333557fb498',
+                                         '0.4.54-f86a9efcf10f')},
+ '0.4.55-8064e2645b0e': {'descriptor': {'id': 'executor-reask-file-v1',
+                                        'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
+                         'controllers': ('0.4.53-568efc13c7ae',
+                                         '0.4.52-0ca4d8002da7',
+                                         '0.4.51-587295817cef',
+                                         '0.4.50-3dd2945b5069',
+                                         '0.4.49-689dda6455be',
+                                         '0.4.48-3b4304d24f90',
+                                         '0.4.47-46395e3b21e5',
+                                         '0.4.46-37e945dea2e3',
+                                         '0.4.44-2b9bce3b41eb',
+                                         '0.4.42-5947b2d1f8aa',
+                                         '0.4.41-28b36490b149',
+                                         '0.4.37-c7258c383218',
+                                         '0.4.36-8ab59dbb5a5a',
+                                         '0.4.35-e62f35828c7a',
+                                         '0.4.30-ff75100795a9',
+                                         '0.4.31-79ae83e9d5da',
+                                         '0.4.28-ae66245771d0',
+                                         '0.4.32-c7338a400bf4',
+                                         '0.4.33-09de16ceb823',
+                                         '0.4.34-d333557fb498',
+                                         '0.4.55-8064e2645b0e')},
     '0.4.53-568efc13c7ae': {'descriptor': {'id': 'executor-reask-file-v1',
                                             'sha256': 'af1edf631c48edfe62cfd6a1beeab6c03d8ffe5189f4f49f6c5689dd666be647'},
                              'controllers': ('0.4.52-0ca4d8002da7',
@@ -606,6 +685,36 @@ LEGACY_FILE_PROTOCOL = {
 }
 # Historical abilities are explicit and never inherit future FILES changes.
 LEGACY_CAPABILITIES = {
+    '0.4.54-f86a9efcf10f': {'controller_files': ('VERSION',
+                                              'scripts/executor_reask.py',
+                                              'scripts/executor_ready.py',
+                                              'scripts/cmux_bridge.py',
+                                              'scripts/executor_reply.py',
+                                              'scripts/executor_reask_lifecycle.py',
+                                              'scripts/executor_reask_identity.py',
+                                              'scripts/executor_reask_protocol.py',
+                                              'scripts/executor_reply_advisory.py',
+                                              'scripts/cmux_native_delivery.py',
+                                              'scripts/cmux_workspace_guard.py',
+                                              'scripts/cmux_daemon_identity.py',
+                                              'scripts/cmux_foreground_thread.py',
+                                              'scripts/cmux_coordination_paths.py'),
+                         'reservation_inquiries': True},
+ '0.4.55-8064e2645b0e': {'controller_files': ('VERSION',
+                                              'scripts/executor_reask.py',
+                                              'scripts/executor_ready.py',
+                                              'scripts/cmux_bridge.py',
+                                              'scripts/executor_reply.py',
+                                              'scripts/executor_reask_lifecycle.py',
+                                              'scripts/executor_reask_identity.py',
+                                              'scripts/executor_reask_protocol.py',
+                                              'scripts/executor_reply_advisory.py',
+                                              'scripts/cmux_native_delivery.py',
+                                              'scripts/cmux_workspace_guard.py',
+                                              'scripts/cmux_daemon_identity.py',
+                                              'scripts/cmux_foreground_thread.py',
+                                              'scripts/cmux_coordination_paths.py'),
+                         'reservation_inquiries': True},
     '0.4.53-568efc13c7ae': {'controller_files': ('VERSION',
                                                   'scripts/executor_reask.py',
                                                   'scripts/executor_ready.py',
@@ -948,6 +1057,10 @@ def continuation_shape(value, state):
         return (value.get('enabled') is True and text(value.get('id'), 128)
                 and ('reservation_inquiries' not in value
                      or type(value['reservation_inquiries']) is bool)
+                and ('proactive_hook' not in value
+                     or type(value['proactive_hook']) is bool)
+                and (value.get('proactive_hook') is not True
+                     or value.get('reservation_inquiries') is True)
                 and text(value.get('overall_task'), 4096) and text(value.get('status'), 128)
                 and text(value.get('owner'), 128) and value['owner'] == state.get('supervisor')
                 and finite(authorized) and (until is None or finite(until) and until > authorized)
@@ -1182,6 +1295,9 @@ def _supported_state(state, record, checked):
     if value is None or type(state.get('version')) is not int or state['version'] not in (2, 3):
         return False
     release = _controller_release(value, checked)
+    if ('proactive_hook' in (state.get('continuation') or {})
+            and release['kind'] != 'current'):
+        return False  # a historical controller never granted this capability
     if ('reservation_inquiries' in (state.get('continuation') or {})
             and release['kind'] != 'current'
             and not LEGACY_CAPABILITIES.get(release['name'], {}).get('reservation_inquiries')):

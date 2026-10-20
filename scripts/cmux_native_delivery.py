@@ -432,6 +432,9 @@ def _fenced_binding(binding, text, fence, not_before):
 
 
 def _inbound(r, b, text, not_before=None, *, fenced=False):
+    from native_user_record import generated_user_record
+    if generated_user_record(r):
+        return None
     stamp = _timestamp(r.get("timestamp"))
     earliest = max(b["bound_at_epoch"], not_before or b["bound_at_epoch"])
     # 原生日志可能截断到毫秒。只在新鲜 EOF fence 后允许相同精度区间，

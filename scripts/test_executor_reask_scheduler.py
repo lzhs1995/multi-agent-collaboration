@@ -70,6 +70,8 @@ class SchedulerTests(unittest.TestCase):
         send = lambda *_: dict(outcome='SKIPPED_UNVERIFIED', terminal=False)
         state = reask.run(CALLER, 5, send=send, clock=lambda: clock[0], sleep=sleep)
         self.assertEqual((state['state'], state['ask_count']), (reask.WAITING, 1))
+        self.assertIsNone(state['continuation'])
+        self.assertEqual(state['wait_boundary']['next_action'], 'END_WAITING_TURN_NORMALLY')
         self.assertEqual(scheduler.sweep(now=1060.)['file_posts'], 0)
         self.assertEqual(scheduler.sweep(now=1061.)['file_posts'], 1)
         self.assertEqual(scheduler.sweep(now=2000.)['file_posts'], 1)
@@ -77,6 +79,15 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual((state['ask_count'], state['next_due_epoch']), (3, 2060.))
         self.assertEqual(state['asks'][-1]['outcome'], 'FILE_ONLY_SCHEDULED')
         self.transport.assert_not_called()
+
+    def test_legacy_null_continuation_returns_during_formal_reservation(self):
+        state = dict(state=reask.WAITING, continuation=None, paused_tasks=['original-task'])
+        with patch.object(reask, 'tick', return_value=state), patch('time.sleep') as sleep:
+            result = reask.run(CALLER, 5, sleep=sleep)
+        self.assertEqual(result['run_return_reason'], 'FORMAL_RESERVATION_WAIT')
+        self.assertEqual(result['wait_boundary']['next_action'], 'END_WAITING_TURN_NORMALLY')
+        self.assertIsNone(result['continuation'])
+        sleep.assert_not_called()
 
     def test_eight_enrollments_share_verification_only_within_each_sweep(self):
         for index in range(8):
