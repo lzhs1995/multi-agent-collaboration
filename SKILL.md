@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.56.** Ready messages may be sent directly in either direction,
+**Version: 0.4.57.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -45,6 +45,10 @@ their original controller; installation alone never enrolls them. An explicit
 user stop/revocation or task completion ends the obligation. Global hooks for
 unrelated tasks remain advisory. These current task-scoped rules supersede the
 historical “Stop only observes” guidance below for enrolled new episodes.
+
+The 0.4.57 audit fix preserves task-continuation and fail-open outcome receipts.
+It retains original 0.4.56 proactive registrations without re-enrollment; no
+legacy registration gains new authority. See [0.4.57](references/release-0.4.57.md).
 
 ## Historical release notes and original-attempt compatibility
 

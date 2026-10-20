@@ -1,6 +1,6 @@
 """Task-scoped Claude Stop continuation; no input or implicit enrollment.
 
-Only an original, explicitly authorized current-release inquiry participates.
+Only an original, explicitly authorized and fully verified inquiry participates.
 The foreground runner owns transport and its one-attempt journal. This hook
 keeps the executor working until a real reply is read or authority ends.
 """
@@ -38,7 +38,7 @@ def active(state, now):
             or value.get('reservation_inquiries') is not True
             or state.get('state') not in (reask.WAITING, reask.ANSWERED)
             or reask.stop_file(state['caller_surface_uuid']).exists()
-            or protocol.state_controller(state) != reask.controller()):
+            or not protocol.supports_state(state)):
         return False
     preview = copy.deepcopy(state)
     lifecycle.poll_authorization(preview, now, publish=False)

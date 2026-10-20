@@ -132,16 +132,53 @@ class ProtocolTests(unittest.TestCase):
                     state['continuation']['reservation_inquiries'] = value
                     self.assert_rejected(state, record)
 
-    def test_proactive_capability_is_boolean_explicit_and_never_inherited_by_old_controllers(self):
+    def test_proactive_capability_is_boolean_and_preserves_only_original_grants(self):
         for name in (None, *REVIEWED):
             for flag in (True, False, 'true', 1):
                 with self.subTest(release=name, flag=flag):
                     state, record = self.episode(name, current=name is None)
                     state['continuation'].update(reservation_inquiries=True, proactive_hook=flag)
-                    if name is None and type(flag) is bool:
+                    if (name is None or protocol.LEGACY_CAPABILITIES.get(name, {}).get('proactive_hook')) and type(flag) is bool:
                         self.assert_supported(state, record)
                     else:
                         self.assert_rejected(state, record)
+
+    def test_0456_proactive_contract_survives_upgrade_without_reenrollment(self):
+        name = '0.4.56-bea19f7ff44e'
+        state, record = self.episode(name)
+        state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
+        before = copy.deepcopy((state, record))
+        self.assert_supported(state, record)
+        self.assertEqual((state, record), before)
+        for member in ('scripts/executor_proactive_hook.py', 'scripts/native_user_record.py'):
+            with self.subTest(member=member):
+                bad_state, bad_record = copy.deepcopy(before)
+                for value in (bad_state['controller'], bad_state['continuation']['controller'], bad_record['controller']):
+                    value['files'].pop(member)
+                self.assert_rejected(bad_state, bad_record)
+
+    def test_0456_original_registration_remains_active_in_new_stop_hook(self):
+        import executor_proactive_hook as hook
+        import executor_reask as reask
+        from unittest.mock import patch
+        for name, expected in (('0.4.56-bea19f7ff44e', True), ('0.4.55-8064e2645b0e', False)):
+            with self.subTest(name=name):
+                state, record = self.episode(name)
+                state.update(caller_surface_uuid=OWNER, state=reask.WAITING)
+                state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
+                before = copy.deepcopy(state)
+                with patch.object(hook.lifecycle, 'poll_authorization'), \
+                     patch.object(hook.scheduler, 'registration_observation', return_value='REGISTERED'):
+                    self.assertEqual(hook.active(state, 100.), expected)
+                self.assertEqual(state, before)
+                if expected:
+                    message = hook.instruction(state)
+                    self.assertIn(str(self.releases[name][0] / 'scripts/executor_reask.py'), message)
+                    self.assertNotIn(str(self.current[0]), message)
+                    state['controller']['files']['scripts/executor_proactive_hook.py'] = '0' * 64
+                    with patch.object(hook.lifecycle, 'poll_authorization'), \
+                         patch.object(hook.scheduler, 'registration_observation', return_value='REGISTERED'):
+                        self.assertFalse(hook.active(state, 100.))
 
     def test_coordination_path_pin_keeps_each_original_controller_contract(self):
         member = 'scripts/cmux_coordination_paths.py'

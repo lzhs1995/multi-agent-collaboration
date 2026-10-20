@@ -76,7 +76,7 @@ def main() -> int:
                 print(json.dumps(result, ensure_ascii=False), flush=True)
                 try:
                     runtime_audit.record(payload, 'TASK_CONTINUATION_REQUIRED',
-                                         original_hook=hook, mode='task-scoped-proactive')
+                                         original_hook=hook, mode='advisory')
                 except Exception:
                     pass
         except Exception as exc:
@@ -87,7 +87,7 @@ def main() -> int:
                           else 'TASK_CONTINUATION_CADENCE_ACTIVE' if isinstance(exc, executor_proactive_hook.CadenceActive)
                           else 'TASK_CONTINUATION_UNAVAILABLE')
                 runtime_audit.record(payload, status,
-                                     original_hook=hook, mode='fail-open:' + type(exc).__name__)
+                                     original_hook=hook, mode='advisory')
             except Exception:
                 pass
 
