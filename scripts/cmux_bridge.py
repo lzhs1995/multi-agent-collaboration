@@ -1683,13 +1683,14 @@ def protected_submit_result(raw):
     return parse(raw)
 
 
-def require_prompt_free(surface):
+def require_prompt_free(surface, *, provider=None):
     from cmux_direct_input import require_prompt_state
     proof = pin_workspace(surface)
     target = proof['target_surface_uuid']
     workspace = proof['workspace_uuid']
     return require_prompt_state(_run('rpc', 'surface.input_state', json.dumps(dict(
-        surface_id=target, workspace_id=workspace))), target, workspace)
+        surface_id=target, workspace_id=workspace))), target, workspace,
+        read_claude_screen=(lambda: read_screen(surface)) if provider == 'claude' else None)
 
 
 def submit_text_protected(surface, text):
@@ -1926,7 +1927,7 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
     def terminal():
         from cmux_direct_input import send_once as direct_send
         return direct_send(text, marker,
-            preflight=lambda: require_prompt_free(surface),
+            preflight=lambda: require_prompt_free(surface, provider=native_binding.get('provider')),
             recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
             emit=delivery_observer, paste=lambda value: send_text(surface, value),
             submit=lambda value: submit_text_protected(surface, value),

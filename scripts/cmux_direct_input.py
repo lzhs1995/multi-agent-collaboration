@@ -27,19 +27,43 @@ def protected_submit_result(raw):
                 submit_error=value.get('submit_error'))
 
 
-def require_prompt_state(raw, surface, workspace):
+def empty_claude_input(screen):
+    """Only a complete, empty Claude input frame; no activity/footer gate."""
+    rows = screen.splitlines()
+    prompts = [i for i, row in enumerate(rows) if re.match(r'^\s*❯(?:\s|$)', row)]
+    if not prompts:
+        return False
+    start = prompts[-1]
+    if start == 0 or not re.fullmatch(r'─{8,}', rows[start - 1].strip()):
+        return False
+    border = rows[start - 1].strip()
+    end = next((i for i in range(start + 1, len(rows)) if rows[i].strip() == border), None)
+    if end is None:
+        return False
+    body = [re.sub(r'^\s*❯[ \u00a0]?', '', rows[start], count=1), *rows[start + 1:end]]
+    return not '\n'.join(body).strip(' \t\r\n')
+
+
+def require_prompt_state(raw, surface, workspace, *, read_claude_screen=None):
     """Do not inherit the CLI's fail-open behavior on an unavailable query."""
     value = json.loads(raw)
     if isinstance(value, dict) and isinstance(value.get('result'), dict):
         value = value['result']
     if (not isinstance(value, dict) or value.get('surface_id') != surface
             or value.get('workspace_id') != workspace
-            or value.get('agent') is not True or value.get('terminal') is not True
+            or type(value.get('agent')) is not bool or value.get('terminal') is not True
             or type(value.get('blocks_typing')) is not bool
             or not isinstance(value.get('state'), str)):
         raise RuntimeError('PROMPT_STATE_UNKNOWN: zero text input')
     if value['blocks_typing'] or value['state'] != 'empty':
         raise RuntimeError('PROMPT_NOT_EMPTY: zero text input; preserve receiver draft')
+    if value['agent'] is False:
+        # Live Claude 2.1.303 can be absent from cmux's agent registry while our
+        # independent native process/session binding is valid. The app then
+        # returns an uninformative empty default, so require the real frame.
+        if read_claude_screen is None or not empty_claude_input(read_claude_screen()):
+            raise RuntimeError('PROMPT_STATE_UNKNOWN: zero text input')
+        value = dict(value, draft_check_source='authenticated_claude_empty_frame')
     return value
 
 

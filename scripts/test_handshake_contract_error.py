@@ -64,7 +64,7 @@ class HandshakeContractRegression(unittest.TestCase):
     def invoke(self):
         return h._handshake_one(self.args, self.root, self.gate, self.item, self.rows)
 
-    def assert_settled(self):
+    def assert_settled(self, *, host_submissions=0):
         saved = json.loads((self.root / 'handshake-receipt.json').read_text())
         for row in (saved, saved['executors'][0]):
             self.assertEqual((row['status'], row['lifecycle']), ('FAIL','REJECTED'))
@@ -81,7 +81,7 @@ class HandshakeContractRegression(unittest.TestCase):
         self.assertEqual(self.nonce.call_count, 1)
         self.sender.assert_called_once()
         self.ack.assert_not_called()
-        self.native.key.assert_not_called()
+        self.assertEqual(self.native.key.call_count, host_submissions)
         self.native.rpc.assert_not_called()
         self.assertEqual(saved['ack_nonce'], 'abcdef01')
         self.assertEqual(saved['dispatch_payload_sha256'], hashlib.sha256(saved['dispatch_payload'].encode()).hexdigest())
@@ -120,15 +120,17 @@ class HandshakeContractRegression(unittest.TestCase):
         self.details_mode = mode
         self.native.send.side_effect = self.mutate_after_paste
         self.assertFalse(self.invoke())
-        saved = self.assert_settled()
+        # The single host paste/submit request may finish before identity drift
+        # is visible to us. It earns no receipt and no second command/key.
+        saved = self.assert_settled(host_submissions=1)
         self.native.send.assert_called_once()
         self.assertIn('MESSAGE_IDENTITY_CHANGED', saved['dispatch_error'])
         self.assertEqual(len(self.before_harness), 1)
         path, raw = next(iter(self.before_harness.items()))
         self.assertEqual(path.read_bytes(), raw)
         attempt = json.loads(raw)
-        self.assertEqual(attempt['phase'], 'PASTE_INTENT')
-        self.assertEqual([e['phase'] for e in attempt['events']], ['PASTE_INTENT'])
+        self.assertEqual(attempt['phase'], 'ENTER_INTENT')
+        self.assertEqual([e['phase'] for e in attempt['events']], ['PASTE_INTENT', 'ENTER_INTENT'])
         self.assertIn('native_paste_fence', attempt['events'][0])
         self.assertEqual(attempt['native_binding']['provider'], 'claude')
         if mode is None:
@@ -213,14 +215,14 @@ class HandshakeContractRegression(unittest.TestCase):
         self.assertEqual(self.sender.call_count, 2)
         self.ack.assert_called_once()
         self.assertEqual(self.nonce.call_count, 2)
-        self.native.key.assert_not_called()
+        self.assertEqual(self.native.key.call_count, 1 if after_paste else 0)
         self.native.rpc.assert_not_called()
         if after_paste:
             self.native.send.assert_called_once()
             self.assertEqual(len(self.before_harness), 1)
             path, raw = next(iter(self.before_harness.items()))
             self.assertEqual(path.read_bytes(), raw)
-            self.assertEqual(json.loads(raw)["phase"], "PASTE_INTENT")
+            self.assertEqual(json.loads(raw)["phase"], "ENTER_INTENT")
             self.assertEqual(failed["dispatch_attempt"]["sha256"],
                              hashlib.sha256(raw).hexdigest())
         else:

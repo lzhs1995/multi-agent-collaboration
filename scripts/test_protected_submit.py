@@ -149,6 +149,21 @@ class ProtectedSubmitTests(unittest.TestCase):
                     artifact={}, receipt_contract='native-user-marker-v1')
             self.run.assert_not_called()
 
+    def test_untracked_native_claude_requires_complete_empty_frame(self):
+        state = json.dumps(dict(self.input_state, agent=False, lifecycle='unknown'))
+        empty = '✽ Flowing…\n◎ /goal active (3h)\n' + '─' * 20 + '\n❯\u00a0 \n' + '─' * 20
+        result = direct.require_prompt_state(state, 'TARGET', 'WORKSPACE',
+                                              read_claude_screen=lambda: empty)
+        self.assertEqual(result['draft_check_source'], 'authenticated_claude_empty_frame')
+        for screen in (empty.replace('❯\u00a0 ', '❯ user half question'),
+                       empty.rsplit('\n', 1)[0], '❯ ',
+                       empty.replace('❯\u00a0 ', '❯\u00a0 \nuser continuation')):
+            with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
+                direct.require_prompt_state(state, 'TARGET', 'WORKSPACE',
+                                             read_claude_screen=lambda: screen)
+        with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
+            direct.require_prompt_state(state, 'TARGET', 'WORKSPACE')
+
 
 if __name__ == '__main__':
     unittest.main()

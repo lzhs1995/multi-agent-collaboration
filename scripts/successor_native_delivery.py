@@ -462,7 +462,9 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                     raw = bridge._run_successor('rpc', 'surface.input_state',
                         json.dumps(dict(surface_id=target, workspace_id=workspace)),
                         artifact=artifact, receipt_contract=binding.get('receipt_contract'))
-                    return require_prompt_state(raw, target, workspace)
+                    return require_prompt_state(raw, target, workspace,
+                        read_claude_screen=(lambda: bridge.read_screen_successor(artifact))
+                            if binding['provider'] == 'claude' else None)
                 return direct_send(wire, marker, recheck=recheck, emit=emit,
                     preflight=prompt_preflight,
                     submit=lambda value: protected_submit_result(bridge._run_successor(
