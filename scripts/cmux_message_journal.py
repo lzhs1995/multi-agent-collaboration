@@ -276,7 +276,8 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
             observation = journal / ('observation-' + str(time.time_ns()) + '.json')
             write_json(observation, dict(result, input_operations=0, at_epoch=time.time()))
             if result.get('confirmed') is not True:
-                raise bridge.DispatchUnconfirmed('MESSAGE_NOT_YET_CONFIRMED: no resend', details=result)
+                raise bridge.DispatchUnconfirmed('MESSAGE_NOT_YET_CONFIRMED: no resend',
+                    state=bridge.native_submission_state(result), details=result)
             attempt_path = attempts[-1]
             result = dict(result, reconciled_read_only=True, observation=str(observation))
         else:
@@ -324,7 +325,8 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
                     native_binding=attempt['native_binding'], native_attempt=attempt_path,
                     wait_seconds=seconds)
                 if result.get('confirmed') is not True:
-                    raise bridge.DispatchUnconfirmed('MESSAGE_NOT_CONFIRMED', details=result)
+                    raise bridge.DispatchUnconfirmed('MESSAGE_NOT_CONFIRMED',
+                        state=bridge.native_submission_state(result), details=result)
             except BaseException as exc:
                 if attempt['phase'] == 'PREPARED':
                     attempt['phase'] = 'NO_INPUT'
@@ -339,7 +341,8 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
         original = json.loads(read_bytes(attempt_path))
         result = attempt_details(result, attempt_path, original, reconcile_only=reconcile_only)
         if not native.receipt_evidence(bridge, surface, text, original, result):
-            raise bridge.DispatchUnconfirmed('MESSAGE_NATIVE_PROOF_REQUIRED', details=result)
+            raise bridge.DispatchUnconfirmed('MESSAGE_NATIVE_PROOF_REQUIRED',
+                state=bridge.native_submission_state(result), details=result)
         recheck()
         result = dict(result, binding=binding, attempt=str(attempt_path), at_epoch=time.time())
         if body_reference is not None:

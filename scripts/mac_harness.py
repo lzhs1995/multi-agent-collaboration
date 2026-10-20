@@ -1033,20 +1033,34 @@ def cmd_identity_gate(args):
     # so a partially-validated set can never be armed.
     identities = {}
     workspace_proofs = {}
-    for ref in executor_refs:
+    canonical_refs = []
+    canonical_providers = {}
+    target_uuids = set()
+    for index, ref in enumerate(executor_refs):
         try:
             expected_targets = getattr(args, "expected_executor_uuid", []) or []
             if expected_targets and len(expected_targets) != len(executor_refs):
                 raise RuntimeError("WORKSPACE_SCOPE_DENIED: one expected UUID per executor required")
-            workspace_proofs[ref] = cmux.pin_workspace(
+            proof = cmux.pin_workspace(
                 ref, workspace_uuid=getattr(args, "expected_workspace_uuid", None),
-                target_uuid=(expected_targets[executor_refs.index(ref)] if expected_targets else None),
+                target_uuid=(expected_targets[index] if expected_targets else None),
             )
-            identities[ref] = cmux.identify_surface(
+            identity = cmux.identify_surface(
                 ref,
                 workspace=me.get("workspace_ref") or None,
                 window=me.get("window_ref") or None,
             )
+            canonical = proof["target_surface_ref"]
+            if (not re.fullmatch(r"surface:[0-9]+", canonical)
+                    or identity.get("surface_ref") != canonical
+                    or canonical in canonical_refs
+                    or proof["target_surface_uuid"] in target_uuids):
+                raise RuntimeError("EXECUTOR_SELECTOR_ALIAS_OR_IDENTITY_CHANGED")
+            canonical_refs.append(canonical)
+            target_uuids.add(proof["target_surface_uuid"])
+            canonical_providers[canonical] = provider_overrides.get(ref, executor_provider)
+            workspace_proofs[canonical] = proof
+            identities[canonical] = identity
         except Exception as e:
             gate = {
                 "task_id": args.task_id,
@@ -1064,6 +1078,9 @@ def cmd_identity_gate(args):
             _fail(f"EXECUTOR_IDENTITY_UNAVAILABLE — cannot authenticate terminal {ref}")
             sys.exit(1)
 
+    executor_refs = canonical_refs
+    executor_ref = executor_refs[0]
+    provider_overrides = canonical_providers
     executor_identity = identities[executor_ref]
     uuid_map = cmux.surface_uuid_map()
     supervisor_uuid = workspace_proofs[executor_ref]["caller_surface_uuid"]
@@ -1715,9 +1732,8 @@ def _recovered_bridge_clear(args, root, gate):
 
 def cmd_handshake(args):
     root = _artifact_root(args)
-    if (getattr(args, "bridge_clear_recovery", None) and
-            any((root / name).exists() for name in ("handshake-receipt.json", "task-pack.json"))):
-        _fail("original handshake already started; use its existing receipt, not clear recovery")
+    if any(os.path.lexists(root / name) for name in ("handshake-receipt.json", "task-pack.json")):
+        _fail("original handshake already started; reconcile its original ACK or use continue_handshake.py; no replay")
         sys.exit(1)
     gate = _read(root / "identity-gate.json")
     if not gate or gate.get("status") != "PASS":
@@ -1757,41 +1773,10 @@ def _write_handshake_receipt(root, per_executor):
     a marker naming three reviewers would clear the gate on one reviewer's ACK.
     So a single unproven executor downgrades the top-level verdict.
     """
-    receipt = dict(per_executor[0])
-    receipt["executors"] = per_executor
-    receipt["executor_count"] = len(per_executor)
-    all_acked = all(r.get("executor_ack") is True for r in per_executor)
-    receipt["all_executors_acked"] = all_acked
-    if not all_acked:
-        unproven = [
-            r.get("executor") for r in per_executor
-            if r.get("executor_ack") is not True
-        ]
-        receipt["executor_ack"] = False
-        receipt["unproven_executors"] = unproven
-        pending = all(
-            r.get("lifecycle") == "PENDING" and r.get("status") != "FAIL"
-            for r in per_executor if r.get("executor_ack") is not True
-        )
-        if pending:
-            receipt["status"] = "AWAITING_EXECUTOR_ACK"
-            receipt["lifecycle"] = "PENDING"
-            receipt["terminal_error_at"] = None
-            receipt.pop("error", None)
-        else:
-            receipt["status"] = "FAIL"
-            failed = next(r for r in per_executor
-                          if r.get("executor_ack") is not True
-                          and (r.get("lifecycle") != "PENDING" or r.get("status") == "FAIL"))
-            receipt["lifecycle"] = failed.get("lifecycle", "UNKNOWN")
-            receipt["terminal_error_at"] = failed.get("terminal_error_at")
-            # Preserve per-executor attribution; an input rejection is not
-            # proof that the executor was silent.
-            receipt["error"] = (
-                f"handshake incomplete — terminal or invalid state for "
-                f"{failed.get('executor')}: {failed.get('error', 'see executor record')}"
-            )
-    _write(root / "handshake-receipt.json", receipt)
+    from handshake_panel import aggregate
+    gate = _read(root / "identity-gate.json")
+    members = _gate_executors(gate) if gate else None
+    _write(root / "handshake-receipt.json", aggregate(per_executor, members))
 
 
 def handshake_without_probe(receipt, *, bridge_evidence_present):
@@ -2100,6 +2085,15 @@ def cmd_validate(args):
     }
 
     gate_data = _read(root / "identity-gate.json") or {}
+    from handshake_panel import matches
+    gate_members = _gate_executors(gate_data)
+    panel_rows = handshake_data.get("executors", [handshake_data])
+    panel_complete = (isinstance(panel_rows, list) and len(panel_rows) == len(gate_members)
+                      and all(isinstance(row, dict) and matches(row, member)
+                              and row.get("executor_ack") is True
+                              for row, member in zip(panel_rows, gate_members)))
+    checks["handshake_panel"] = {"pass": panel_complete,
+        "status": "PASS" if panel_complete else "FAIL", "expected_executor_count": len(gate_members)}
     # Retain the actual pane layout as a diagnostic. New gates independently
     # prove distinct terminal identities; sharing a pane does not deny messages.
     sup_pane = gate_data.get("supervisor_pane_ref", "")
@@ -2141,7 +2135,7 @@ def cmd_validate(args):
 
     gate_pass      = checks.get("identity_gate", {}).get("pass", False)
     naming_pass    = checks.get("naming_proof",  {}).get("pass", False)
-    handshake_pass = checks.get("handshake",     {}).get("pass", False) and handshake_strict_ok
+    handshake_pass = checks.get("handshake",     {}).get("pass", False) and handshake_strict_ok and panel_complete
 
     overall = "PASS" if (gate_pass and naming_pass and handshake_pass and channel_ok) else "FAIL"
 
@@ -3779,6 +3773,10 @@ def cmd_disarm(args):
 # ---------------------------------------------------------------------------
 
 def cmd_preflight(args):
+    root = _artifact_root(args)
+    if any(os.path.lexists(root / name) for name in ("handshake-receipt.json", "task-pack.json")):
+        _fail("original handshake already started; preserve its identity gate and use original recovery; no replay")
+        sys.exit(1)
     print("=== PREFLIGHT (full acceptance sequence) ===")
     cmd_setup_check(args)
     # Runs first because it is cheap, read-only, and gates the thing every later
