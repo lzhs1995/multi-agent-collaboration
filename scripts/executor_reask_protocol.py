@@ -22,7 +22,8 @@ FILES = LEGACY_FILES + ('scripts/executor_reask_identity.py',
                        'scripts/cmux_workspace_guard.py',
                        'scripts/cmux_daemon_identity.py',
                        'scripts/cmux_foreground_thread.py',
-                       'scripts/cmux_coordination_paths.py')
+                       'scripts/cmux_coordination_paths.py',
+                       'scripts/executor_proactive_hook.py')
 SCHEDULER = 'scripts/executor_reask_scheduler.py'
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_RELEASE_BYTES = 64 * 1024 * 1024

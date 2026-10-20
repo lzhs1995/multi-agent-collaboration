@@ -887,9 +887,11 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
         from executor_reask_lifecycle import reservation_inquiries_allowed
         if not reservation_inquiries_allowed(state, verification=verification):
             return state
-        # All foreground and scheduler entrypoints use this same restriction.
-        # No transport, pending reconciliation or new terminal intent is allowed.
-        file_only = True
+        # Historical registration remains file-only. New explicit proactive
+        # authority permits foreground status communication during reservations;
+        # the scheduler still always calls with file_only=True.
+        if not state['continuation'].get('proactive_hook', False):
+            file_only = True
     last = state['asks'][-1] if state['asks'] else None
     due = float(state.get('next_due_epoch', float(last['at_epoch']) + INTERVAL if last else now))
     if now < due:
@@ -953,7 +955,8 @@ def run(caller, max_seconds=MAX_RUN_SECONDS, poll=POLL, send=default_send,
     deadline = clock() + max(1.0, min(float(max_seconds), MAX_RUN_SECONDS))
     state = tick(caller, clock(), send)
     while (state.get('state') == WAITING and not state.get('outcome')
-           and not state.get('paused_tasks')
+           and (not state.get('paused_tasks')
+                or state.get('continuation', {}).get('proactive_hook') is True)
            and not state.get('registration_observation') and clock() + poll < deadline):
         sleep(poll)
         state = tick(caller, clock(), send)
@@ -963,12 +966,16 @@ def run(caller, max_seconds=MAX_RUN_SECONDS, poll=POLL, send=default_send,
     # This is not an assertion that the terminal is idle or a task is accepted.
     reason = ('REPLY_REQUIRES_ORIGINAL_CONSUME' if state.get('state') == ANSWERED
               else 'FORMAL_RESERVATION_WAIT' if state.get('paused_tasks')
+              and state.get('continuation', {}).get('proactive_hook') is not True
               else 'OBSERVATION_DEADLINE' if state.get('state') == WAITING
               and not state.get('outcome') and not state.get('registration_observation')
               else 'EPISODE_RETURNED')
     return dict(state, runner_returned=True, run_return_reason=reason,
                 wait_boundary=dict(when='ONLY_SUPERVISOR_ACTION_REMAINS',
-                                   next_action='END_WAITING_TURN_NORMALLY',
+                                   next_action=('CONTINUE_AUTHORIZED_TASK_OR_BOUNDED_REASK'
+                                       if state.get('continuation', {}).get('proactive_hook') is True
+                                       and state.get('state') == WAITING
+                                       else 'END_WAITING_TURN_NORMALLY'),
                                    idle_observed=False, goal_state_changed=False,
                                    fresh_preflight_required=True))
 
@@ -1023,6 +1030,8 @@ def main(argv=None):
     s.add_argument('--continuing', action='store_true', help='explicitly authorized ongoing file inquiries')
     s.add_argument('--reservation-inquiries', action='store_true',
                    help='explicit authorization for file status inquiries during formal reservations; requires --continuing')
+    s.add_argument('--proactive-hook', action='store_true',
+                   help='enforce task-scoped Stop continuation and foreground status during reservations; requires continuing authorization')
     s.add_argument('--overall-task', default='')
     s.add_argument('--authorization-file', type=Path)
     s.add_argument('--authorization-until', type=float)
@@ -1048,6 +1057,8 @@ def main(argv=None):
         parser.error('--caller-uuid or CMUX_SURFACE_ID required')
     caller = args.caller_uuid
     if args.cmd == 'start':
+        if args.proactive_hook and not (args.continuing and args.reservation_inquiries):
+            parser.error('--proactive-hook requires --continuing --reservation-inquiries')
         if args.reservation_inquiries and not args.continuing:
             parser.error('--reservation-inquiries requires --continuing and its authorization file')
         if args.file_only and args.transcript:
@@ -1065,7 +1076,8 @@ def main(argv=None):
             continuation = dict(enabled=True, overall_task=args.overall_task,
                                 authorization_file=str(args.authorization_file or ''),
                                 owner=supervisor, until_epoch=args.authorization_until,
-                                reservation_inquiries=args.reservation_inquiries)
+                                reservation_inquiries=args.reservation_inquiries,
+                                proactive_hook=args.proactive_hook)
         import executor_reask_scheduler as scheduler
         state = scheduler.start(live, task_id=args.task, transcript=args.transcript,
                                 authenticate_executor=True,

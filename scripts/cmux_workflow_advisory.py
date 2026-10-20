@@ -64,6 +64,31 @@ def main() -> int:
         # own strict checks and receipts.
         pass
 
+    # Explicitly enrolled task participants asked for active continuation. This
+    # one existing Stop registration enforces it; other/global workflow hooks
+    # stay advisory. Never revive a legacy episode or add another sender here.
+    if (hook == 'cmux_executor_idle_guard.py'
+            and payload.get('hook_event_name') == 'Stop'):
+        try:
+            import executor_proactive_hook
+            result = executor_proactive_hook.decide(payload)
+            if result:
+                print(json.dumps(result, ensure_ascii=False), flush=True)
+                try:
+                    runtime_audit.record(payload, 'TASK_CONTINUATION_REQUIRED',
+                                         original_hook=hook, mode='task-scoped-proactive')
+                except Exception:
+                    pass
+        except Exception as exc:
+            # An invalid binding cannot own the session, but diagnostics must
+            # distinguish no enrollment from a configured hook that failed.
+            try:
+                runtime_audit.record(payload, 'TASK_CONTINUATION_UNAVAILABLE',
+                                     original_hook=hook, mode='fail-open',
+                                     error_type=type(exc).__name__)
+            except Exception:
+                pass
+
     # File fallback must have a reader. Keep discovery independent of telemetry
     # so a failed audit write cannot hide a valid request. Only this registered
     # event authenticates the current supervisor and offers bounded, deduplicated

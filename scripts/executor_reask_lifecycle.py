@@ -57,12 +57,19 @@ def validate_authorization(value, controller, now):
     reservation_inquiries = value.get('reservation_inquiries', False)
     if type(reservation_inquiries) is not bool:
         raise ValueError('reservation inquiries require an explicit boolean authorization')
+    proactive_hook = value.get('proactive_hook', False)
+    if type(proactive_hook) is not bool:
+        raise ValueError('proactive hook requires an explicit boolean authorization')
+    if proactive_hook and not reservation_inquiries:
+        raise ValueError('proactive hook requires reservation inquiries')
     pin = authorization_pin(value.get('authorization_file', ''))
     result = dict(enabled=True, id=secrets.token_hex(16), status='ACTIVE',
                   overall_task=task, owner=value['owner'], authorization=pin,
                   authorized_epoch=now, until_epoch=until, controller=controller)
     if reservation_inquiries:
         result['reservation_inquiries'] = True
+    if proactive_hook:
+        result['proactive_hook'] = True
     return result
 
 
@@ -76,6 +83,8 @@ def binding(value):
     # capability while comparing or enrolling an existing episode.
     if 'reservation_inquiries' in value:
         keys += ('reservation_inquiries',)
+    if 'proactive_hook' in value:
+        keys += ('proactive_hook',)
     return {key: copy.deepcopy(value[key]) for key in keys}
 
 
