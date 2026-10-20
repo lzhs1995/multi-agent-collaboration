@@ -1,4 +1,6 @@
-"""Synthetic copies of the measured 2026-10-13 frame; no live input."""
+"""Historical composer compatibility; current direct input has separate fixtures.
+
+Synthetic copies of the measured 2026-10-13 frame; no live input."""
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
@@ -10,7 +12,7 @@ from unittest.mock import patch
 
 import cmux_bridge as b
 import mac_harness as h
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import with_draft
 from test_r3_hardening import OfflineWorkspaceFixture, gate
 
@@ -66,7 +68,7 @@ class MonitorGoalTests(unittest.TestCase):
             with self.subTest(status=status):
                 value = screen(status=status)
                 self.assertTrue(b.compose_block_is_empty(value))
-                with NativeFixture(provider='claude') as native:
+                with LegacyTerminalFixture(provider='claude') as native:
                     with self.assertRaisesRegex(b.DispatchUnconfirmed, 'COMPOSE_OCCUPIED'):
                         b.require_clearable_agent_input(value, 'offline-peer')
                     native.send.assert_not_called()
@@ -136,7 +138,7 @@ class MonitorGoalTests(unittest.TestCase):
                 self.assertIsNone(b.compose_rendered_text(value))
                 self.assertFalse(b.compose_block_is_empty(value))
                 self.assertFalse(b._queued_or_active_input(value))
-                with NativeFixture(provider="claude") as native, patch.object(
+                with LegacyTerminalFixture(provider="claude") as native, patch.object(
                         b, "read_screen", return_value=value):
                     with self.assertRaisesRegex(b.DispatchUnconfirmed, "COMPOSE_UNPARSED"):
                         b.submit_text("offline-peer", "STATUS: MONITOR0435", marker="MONITOR0435")
@@ -194,7 +196,7 @@ class MonitorGoalTests(unittest.TestCase):
         for footer in (MONITOR, SHELL):
             before = screen(status=SUMMARY, footer=footer)
             text = "STATUS: MONITOR0435"
-            with self.subTest(footer=footer), NativeFixture(provider="claude") as native, patch.object(
+            with self.subTest(footer=footer), LegacyTerminalFixture(provider="claude") as native, patch.object(
                     b, "read_screen", side_effect=native.ready_screens(before, with_draft(before, text))):
                 native.key.side_effect = native.receipt_on_key(text)
                 result = b.submit_text("offline-peer", text, marker="MONITOR0435")
@@ -206,7 +208,7 @@ class MonitorGoalTests(unittest.TestCase):
         for status in IDLE_PROSE:
             before = screen(status=status)
             text = 'STATUS: IDLE_PROSE0435'
-            with self.subTest(status=status), NativeFixture(provider='claude') as native, patch.object(
+            with self.subTest(status=status), LegacyTerminalFixture(provider='claude') as native, patch.object(
                     b, 'read_screen', side_effect=native.ready_screens(before, with_draft(before, text))):
                 native.key.side_effect = native.receipt_on_key(text)
                 result = b.submit_text('offline-peer', text, marker='IDLE_PROSE0435')

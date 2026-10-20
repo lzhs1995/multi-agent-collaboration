@@ -1,9 +1,11 @@
-"""Synthetic B0023/B0024 footer shapes; never send input to live clients."""
+"""Historical composer compatibility; current direct input has separate fixtures.
+
+Synthetic B0023/B0024 footer shapes; never send input to live clients."""
 import unittest
 from unittest.mock import patch
 
 import cmux_bridge as b
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 from test_claude_footer_parser_20261008 import with_draft
 
 
@@ -31,7 +33,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
         self.assertIsNone(b.compose_rendered_text(value))
         self.assertFalse(b.compose_block_is_empty(value))
         self.assertEqual(b.receiver_input_kind(value), "UNKNOWN")
-        with NativeFixture(provider="claude") as native:
+        with LegacyTerminalFixture(provider="claude") as native:
             with self.assertRaises(b.DispatchUnconfirmed):
                 b.require_clearable_agent_input(value, "offline-peer")
             native.send.assert_not_called()
@@ -56,7 +58,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
                     value = with_draft(frame(goal_position=position), draft)
                     self.assertEqual(b.compose_block_text(value), draft)
                     self.assertFalse(b.compose_block_is_empty(value))
-                    with NativeFixture(provider="claude"), \
+                    with LegacyTerminalFixture(provider="claude"), \
                             patch.object(b, "read_screen", return_value=value), \
                             patch.object(b, "send_text") as paste, \
                             patch.object(b, "send_key") as key:
@@ -67,7 +69,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
 
     def test_new_message_reaches_busy_goal_without_pausing_or_clearing(self):
         for position in ("inline", "final"):
-            with self.subTest(position=position), NativeFixture(provider="claude") as native:
+            with self.subTest(position=position), LegacyTerminalFixture(provider="claude") as native:
                 before = frame(goal_position=position, tool=True)
                 self.assertTrue(b._queued_or_active_input(before))
                 text = "STATUS: busy-goal-new-message"
@@ -94,7 +96,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
                 self.assertEqual(current["screen"], before)
 
     def test_busy_goal_queue_is_pending_and_original_attempt_is_not_resent(self):
-        with NativeFixture(provider="claude") as native:
+        with LegacyTerminalFixture(provider="claude") as native:
             before = frame(tool=True)
             text = "STATUS: busy-goal-queue-message"
             current = {"screen": before}
@@ -128,7 +130,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
                     value = frame(goal_position=position, status=status, tool=tool)
                     self.assertTrue(b.compose_block_is_empty(value))
                     self.assertTrue(b._queued_or_active_input(value))
-                    with NativeFixture(provider="claude") as native:
+                    with LegacyTerminalFixture(provider="claude") as native:
                         with self.assertRaises(b.DispatchUnconfirmed):
                             b.require_clearable_agent_input(value, "offline-peer")
                         native.send.assert_not_called()

@@ -211,9 +211,9 @@ class ScopeTests(unittest.TestCase):
     def test_hook_payload_variants_and_non_shell_edits(self):
         command = 'cmux send-key --surface surface:2 enter'
         cases = [
-            ({'toolName': 'Bash', 'toolInput': {'command': command}}, 2),
-            ({'name': 'exec_command', 'input': {'cmd': command}}, 2),
-            ({'tool_name': 'exec_command', 'cmd': command}, 2),
+            ({'toolName': 'Bash', 'toolInput': {'command': command}}, 0),
+            ({'name': 'exec_command', 'input': {'cmd': command}}, 0),
+            ({'tool_name': 'exec_command', 'cmd': command}, 0),
             ({'tool_name': 'Edit', 'tool_input': {'command': command}}, 0),
             ({'toolName': 'Write', 'input': {'cmd': command}}, 0),
         ]
@@ -226,7 +226,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_real_hook_entrypoints(self):
         scripts = Path(__file__).parent
-        bad = ['cmux send --surface surface:2 -- hello',
+        direct_commands = ['cmux send --surface surface:2 -- hello',
                'rtk cmux-agent ask surface:2 "STATUS: hello"',
                'cmux --help; cmux send-key --surface surface:2 enter',
                'CMUX_WORKSPACE_ID=forged cmux send --surface surface:2 hello',
@@ -236,13 +236,13 @@ class ScopeTests(unittest.TestCase):
                'sh -c "cmux send --surface surface:2 hello"',
                'cmux send --surface surface:2 -- "claude --resume old"']
         for script in ['cmux_workspace_guard.py', 'cmux_agent_panel_guard.py']:
-            for command in bad:
+            for command in direct_commands:
                 for client in ['Bash', 'exec_command']:
                     result = subprocess.run([sys.executable, '-B', str(scripts / script)],
                         input=json.dumps({'tool_name': client, 'tool_input': {'command': command}}),
                         text=True, capture_output=True)
-                    self.assertEqual(result.returncode, 2, (script, command, result.stderr))
-                    self.assertIn('WORKSPACE_SCOPE_DENIED', result.stderr)
+                    expected = 2 if script == 'cmux_agent_panel_guard.py' and 'claude --resume old' in command else 0
+                    self.assertEqual(result.returncode, expected, (script, command, result.stderr))
 
     def test_harness_rejects_legacy_gate_before_any_input(self):
         with tempfile.TemporaryDirectory() as tmp:

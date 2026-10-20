@@ -1,4 +1,4 @@
-# 0.4.54: Existing terminals may share a pane
+# 0.4.54: Immediate bidirectional delivery and existing terminal tabs
 
 Ordinary messages, broadcast discovery, exact maintenance contact and formal
 preflight admit distinct existing terminal surfaces in one pane. The new gate
@@ -18,6 +18,12 @@ The original 20-controller issuer scope and explicit reservation-inquiry
 capability remain unchanged; earlier issuers receive no future authority.
 Existing .52 episodes keep their registration and consumption identity.
 
-Source tests, publication, installation, actual automatic hooks and native
-receipt remain separate evidence. This release does not repair a missing
-Codex control endpoint or prove a business task completed.
+Raw cmux communication is allowed. Native Codex transport unavailable before
+input falls back to one terminal paste and Enter. Claude sends immediately;
+work, Goal, compaction and composer layout are not admission gates. A fresh user
+message containing the original marker confirms delivery. One recorded extra
+Enter may recover residual input; never paste twice or fall back after an
+uncertain native mutation. Existing attempts keep their original contract.
+
+Publication, installation, actual hooks, native receipt and business acceptance
+remain separate evidence. The fallback does not create or repair a control socket.

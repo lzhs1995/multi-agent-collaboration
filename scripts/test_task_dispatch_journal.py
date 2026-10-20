@@ -1,4 +1,6 @@
-"""Restart/uncertainty regression tests for supervisor-to-executor dispatch."""
+"""Historical pre-0.4.54 terminal admission/reconciliation fixtures.
+
+Restart/uncertainty regression tests for supervisor-to-executor dispatch."""
 import fcntl
 import json
 import tempfile
@@ -8,7 +10,7 @@ from unittest.mock import patch
 import cmux_bridge as b
 import cmux_task_journal as j
 import cmux_submit_confirmation_guard as guard
-from native_test_support import NativeFixture
+from native_test_support import LegacyTerminalFixture
 
 IDLE = '❯ \n[claude-opus-5]'
 TEXT = 'STATUS: task-journal-test run original task'
@@ -32,7 +34,7 @@ class TaskDispatchJournalTests(unittest.TestCase):
                      patch.object(b.time, 'sleep')):
             item.start()
             self.addCleanup(item.stop)
-        self.native = NativeFixture.attach(self, home=self.home, identity=self.proof, provider='claude')
+        self.native = LegacyTerminalFixture.attach(self, home=self.home, identity=self.proof, provider='claude')
 
     def call(self, **kw):
         return b.submit_task_pack('peer', TEXT, str(self.path), **kw)

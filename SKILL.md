@@ -9,11 +9,20 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.54.** Existing terminal tabs in the same pane can exchange
-ready messages and complete formal preflight. Each participant retains its
-authenticated surface identity; pane/target input locks still serialize writes.
-Historical attempts and working registrations keep their original controllers.
-See the [0.4.54 contract](references/release-0.4.54.md).
+**Version: 0.4.54.** Ready messages may be sent directly in either direction,
+including during work, Goal and compaction. Raw cmux communication is allowed.
+The bridge falls back to terminal input when the native transport is unavailable
+before any input intent. A new user message containing the unique marker in the
+original receiver transcript proves reception. Do not repaste an uncertain
+message; at most one recorded extra Enter may recover residual input.
+See [direct delivery](references/verified-compose-delivery.md) and
+[existing terminal tabs](references/existing-terminal-tabs.md).
+
+## Historical release notes and original-attempt compatibility
+
+The notes in this section describe prior releases. Their composer gates and
+native-only routes apply only to original historical attempts, never to new
+0.4.54 messages. The current direct-delivery contract above takes precedence.
 
 The 0.4.53 renderer: Claude Code 2.1.303 reference notices now accept the
 measured 180-column 12/13-cell padding layouts while preserving exact payload
@@ -245,8 +254,8 @@ its context. Contact it as soon as it responds; coordinate any shared write
 handoff separately.
 
 0.4.29 also holds the existing pane/target delivery mutex throughout a non-submitting
-handshake probe. Automatic terminal writers must use the same lock and recheck the
-whole composer before every submit. See [input collisions](references/input-collisions.md).
+handshake probe. Automatic terminal writers use the same lock and recheck the
+receiver identity before every input; current sends do not wait for a composer. See [input collisions](references/input-collisions.md).
 
 ## Core Contract
 
@@ -275,10 +284,10 @@ both endpoints in the current tree. Ordinary messages address distinct terminal
 surfaces in the same workspace, including existing tabs in one pane. An explicitly authorized successor or maintenance
 coordinator may use `successor-rebind-v2` for the exact designated cross-workspace
 peer. Do not infer a new task, shared writer or replacement session from permission
-to communicate. Raw terminal writes remain outside the supported sender.
+to communicate. Raw terminal communication is allowed with native marker verification.
 
-Claude terminal input preserves occupied or unknown drafts. New Codex native
-input does not inspect or modify the composer and can steer its active turn.
+Claude terminal input never clears existing text and sends without a composer gate.
+Codex uses native input when available and terminal fallback before input when unavailable.
 Busy work alone blocks neither direction. Send ready messages promptly through
 the supported entrypoint; do not pause native Goal or require an idle turn.
 The conversation and unrelated authorized work continue. Identity, send, native
@@ -382,15 +391,10 @@ for timestamp boundaries and the limits of detected-to-consumed observations.
 - Match the observation budget to the harness phase minimum. A shorter local
   observation is a supervisor budget limitation, not executor silence. Recover a
   late genuine ACK against the original task/provider/nonce without resending.
-- **Keys and queue entries do not prove reception.** Bind the exact receiver
-  process/session/transcript and a fresh EOF fence at the original input intent.
-  Only a new whole native user record after that fence, exactly equal to the
-  payload including whitespace, yields NATIVE_RECEIVED. Claude queued_command
-  remains pending. New Codex input uses `NATIVE_INPUT_INTENT` and native
-  steer/start, never the follow-up queue. Claude-bound terminal input retains
-  `PASTE_INTENT`, one paste and one key after the complete draft is stable.
-  Historical terminal recovery shares at most one additional key under its
-  original controller; a native input has no key or resend recovery budget.
+- **Keys and queue entries do not prove reception.** Current attempts bind the
+  unique marker, original receiver and input-intent EOF fence. Only a newly
+  appended native user message containing that marker confirms reception.
+  See the current direct-delivery contract for the single extra-Enter budget.
 - `submit_completion_callback` writes an exclusive attempt journal before
   input, binding task pack SHA, report SHA, nonce and live workspace identities.
   A submitted attempt refuses repeat delivery; `--reconcile-only` is the explicit
@@ -472,7 +476,8 @@ scope. Use a second executor only for an independent unresolved deliverable.
 Read [receiver input and delivery](references/receiver-input-and-delivery.md)
 when a surface may have returned to a shell or a send is unconfirmed. Current
 input type, submission, consumption, agreement and accepted output are separate
-facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts.
+facts. The bridge authenticates the original live agent process, preserves drafts and
+does not use composer/idle state as an admission gate.
 
 - Normal supervision is callback-first: one sentinel per task, 7200-second stable
   cadence, 1800 seconds for medium-risk work, 300-600 only for bounded high-risk
@@ -496,21 +501,16 @@ facts. The bridge refuses SHELL/UNKNOWN before sending and preserves user drafts
   for the evidence rule, v2 initialization, v1 migration and resource leases.
 - On uncertain delivery, inspect the original native evidence without resending.
   Missing original binding/fence cannot be backfilled. Screen activity, ACK,
-  empty compose and marker absence never substitute for exact native reception.
-- Claude footer fields are recognized only below matching full composer borders.
-  The observed optional numeric `规则` field is accepted only between `CLAUDE.md`
-  and `MCPs`; footer-like draft text and unknown layouts remain protected.
-  An empty composer does not authorize clearing an active turn or prove delivery.
-- Confirmed product virtual suggestions are not actual compose input. The bridge
-  tests exact known shapes in both directions. Unknown text stays occupied.
-  Public default is **no force-compose**. Only explicit operator permission may
-  enable `--force-compose`; active/queued work still cannot be overwritten.
+  empty compose and marker absence never substitute for a fresh marker-bearing user record.
+- Historical composer parsers remain available to reconcile original attempts.
+  New messages do not use footer parsing, virtual suggestions, force-compose,
+  idle state or raw draft stability as admission gates. Never clear existing text.
 - Preserve the current model. An optional `MULTI_AGENT_EXECUTOR_MODEL` records
   the task's requested model; it does not silently issue a model-switch command.
 - `scripts/render_cmux_agent.py` renders the helper from a pinned baseline.
   Installation must verify the whole helper and same-release adapter with
   `helper-parity`; a matching path or a successful exit is insufficient. Ordinary
-  messages use its sole guarded bridge route. Formal task packs and completion
+  messages may also be sent directly with native marker verification. Formal task packs and completion
   callbacks retain their dedicated task-bound bridge entrypoints.
 
 ## Enforcement And Evidence
@@ -536,7 +536,7 @@ client is separate from a manual script test and from native delivery evidence.
   semantics before declaring a defect. Record mutation hit counts in test probes.
 - Cross-workspace resource coordination uses file/queue receipts. User-authorized
   successor communication with a specified existing executor uses `successor-rebind-v2`;
-  it does not transfer another task's shared write scope or permit raw terminal input.
+  it does not transfer another task's shared write scope ; direct terminal communication is also allowed.
   Word/Zotero share one serial resource; NotebookLM sharing is account-wide.
   A lease, an actual OS lock and a task-bound drain receipt are distinct facts.
   Unknown Word document counts and unknown remote query outcomes prevent release.
@@ -550,7 +550,10 @@ client is separate from a manual script test and from native delivery evidence.
 
 ## 双向投递与高效协作维护
 
-执行[原生投递与有界等待](references/verified-compose-delivery.md)：新 Codex 输入经原会话的 native steer/start，先落 NATIVE_INPUT_INTENT 及新鲜 EOF fence，不操作 composer、不入 Tab 队列。原 fence 后完整 native user 才确认收到；RPC 接受与业务接受分列。未知结果只读核原次，历史排队 callback 不转发重放。Claude 终端与旧次保留原控制器。idle Stop 仅观察；主动求派依原授权显式运行。
+执行[直接通信与原生核验](references/verified-compose-delivery.md)：双方随时发送，
+不暂停 Goal、不等空闲或 composer 稳定。socket 不可用且零输入时 bridge 降级直发；
+原转录新增含唯一 marker 的 user 消息确认送达。已输入的未知 RPC 只核原次，
+不追加粘贴；正文读取、业务接受和自动 hook 分列。
 
 ### Stop hook reentry
 
@@ -600,7 +603,7 @@ Legacy V1 four-line notices are readable only for original-attempt reconciliatio
 No new representation can be used to replay a previous attempt.
 
 Claude may fold a multiline paste or expand a tab even when Enter returns success.
-Keep full stable-draft matching and exact new native user proof; never infer
+Verify a new native user message containing the unique marker; never infer
 delivery from keys, partial text, queue banners or composer clearing. Live
 acceptance records the callback and automatic hook invocation in the actual
 client; running a hook manually proves only the invoked test.

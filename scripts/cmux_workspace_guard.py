@@ -297,77 +297,13 @@ def _command_head(words):
 
 
 def validate_command(command, *, _allow_helper=True, _guard_entrypoint=None):
-    """Block raw outbound paths; reads remain available across workspaces.
+    """Communication is allowed at any time; runtime identity checks remain.
 
-    Input is sent only through cmux_bridge, whose runtime rechecks every send and
-    key and addresses both workspace and surface by UUID. No message-prefix,
-    --help, recovery authorization, or shell environment exemption.
+    Raw cmux send/send-key/paste and optional bridge/helper routes are allowed.
+    A shell command return is not a receipt: inspect the original receiver's
+    newly appended user message containing the unique marker.
     """
-    command = str(command).replace("\\\n", "")
-    helper = (helper_command_diagnostic(command, guard_entrypoint=_guard_entrypoint)
-              if _allow_helper else None)
-    if helper and helper['verified']:
-        return True, "verified same-release helper; bridge rechecks every input"
-    if "<<" in command:
-        # Reuse the panel guard's bounded AST classification of literal Python
-        # document strings. Heredoc data is not a sequence of shell commands.
-        # Executing/unknown Python, shell heredocs and adjacent commands retain
-        # their original text. Import lazily to avoid the module import cycle.
-        from cmux_agent_panel_guard import _python_document_data
-        command = _python_document_data(command)
-    # Tokenize shell syntax so a quoted search pattern is not an invocation.
-    # Inspect nested shell -c separately; --help never exempts a compound write.
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()\n")
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
-    tokens = []
-    try:
-        for token in lexer:
-            tokens.append(token)
-    except ValueError:
-        # A shell lexer is not a Python/document parser. Parse failure alone
-        # cannot put an ordinary tool under terminal-transport jurisdiction.
-        # Preserve the already parsed invocation, including a partial final
-        # word, so `cmux send ... "unterminated` still rejects before input.
-        if tokens and tokens[-1] in ("-c", "-lc", "-ic"):
-            tokens.append(lexer.token)
-        else:
-            tokens.extend(lexer.token.split())
-    blocked = False
-    segments, current = [], []
-    for token in tokens:
-        if token and all(c in ";&|()\n" for c in token):
-            segments.append(current)
-            current = []
-        else:
-            current.append(token)
-    segments.append(current)
-    for segment in segments:
-        words = _command_head(segment)
-        if not words:
-            continue
-        name, arguments = Path(words[0]).name, words[1:]
-        if name in ("cmux", "cmux-agent"):
-            for arg in arguments:
-                if arg in ("send", "send-key", "send-text", "paste", "ask", "broadcast"):
-                    blocked = True
-                    break
-                if re.fullmatch(r"(?:surface|terminal)\.(?:send|send_text|send_key|write|paste)", arg):
-                    blocked = True
-                    break
-        if name in ("sh", "bash", "zsh") and len(arguments) >= 2:
-            if arguments[0] in ("-c", "-lc", "-ic"):
-                ok, _ = validate_command(arguments[1], _allow_helper=False,
-                                         _guard_entrypoint=_guard_entrypoint)
-                blocked = blocked or not ok
-    if blocked:
-        if helper and any(Path(token).name == 'cmux-agent' for token in tokens):
-            return False, 'WORKSPACE_SCOPE_DENIED: HELPER_ROUTE_REJECTED ' + json.dumps(
-                helper, ensure_ascii=False, sort_keys=True)
-        return False, ("WORKSPACE_SCOPE_DENIED: raw terminal input bypasses UUID binding; "
-                       "use the installed cmux_bridge transport. No cross-workspace handshake, "
-                       "legacy target fallback, broadcast, or force override.")
-    return True, "no raw outbound terminal input"
+    return True, "direct terminal communication allowed; verify native user marker"
 
 
 def extract_command(payload):

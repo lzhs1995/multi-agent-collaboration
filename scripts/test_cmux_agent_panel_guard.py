@@ -27,22 +27,22 @@ class PanelGuardTests(unittest.TestCase):
         ok, message = GUARD.validate_command(command)
         self.assertFalse(ok, message)
 
-    def test_raw_coordination_is_blocked_but_reads_are_allowed(self) -> None:
-        self.assert_blocked(
+    def test_raw_coordination_and_reads_are_allowed(self) -> None:
+        self.assert_allowed(
             'rtk cmux-agent ask surface:36 "STATUS: continue the existing task with Claude"'
         )
         self.assert_allowed("rtk cmux-agent read surface:36 120")
 
-    def test_raw_task_dispatch_without_finalized_pack_entry_is_blocked(self) -> None:
-        self.assert_blocked(
+    def test_raw_task_text_is_communication_not_business_acceptance(self) -> None:
+        self.assert_allowed(
             'rtk cmux-agent ask surface:36 "TASK:\\nreview this implementation"'
         )
-        self.assert_blocked(
+        self.assert_allowed(
             'rtk cmux send --surface surface:36 -- "TASK:\\nrun the task"'
         )
 
-    def test_raw_callback_is_blocked_and_guarded_task_entry_is_allowed(self) -> None:
-        self.assert_blocked(
+    def test_raw_callback_and_guarded_task_entry_are_allowed(self) -> None:
+        self.assert_allowed(
             'rtk cmux-agent ask surface:164 "DONE|task|nonce|REPORT=/tmp/report.md"'
         )
         self.assert_allowed(
@@ -82,7 +82,7 @@ class PanelGuardTests(unittest.TestCase):
                 f"claude --resume {session_id}"
             )
             self.assert_allowed(command)
-            self.assert_blocked(
+            self.assert_allowed(
                 f"rtk cmux send --surface surface:172 {command!r}"
             )
             self.assert_blocked(
@@ -102,7 +102,7 @@ class PanelGuardTests(unittest.TestCase):
         self.assert_blocked('rtk cmux-agent send surface:170 "claude"')
 
     def test_mentions_of_claude_are_not_launches(self) -> None:
-        self.assert_blocked(
+        self.assert_allowed(
             'rtk cmux-agent ask surface:36 "Continue with Claude on the existing surface"'
         )
         self.assert_allowed("rtk rg -n Claude README.md")

@@ -165,7 +165,7 @@ class QuotedLaunchTests(unittest.TestCase):
             self.assertIn("; Codex alone", command)
             self.check_entrypoints(command, True)
             self.check_entrypoints(command + "; codex resume deadbeef", False,
-                                   rejection="HELPER_COMPOUND_OR_REDIRECT_REFUSED")
+                                   rejection="direct agent CLI launch")
             self.assertEqual(helper.read_bytes(), raw)
 
 

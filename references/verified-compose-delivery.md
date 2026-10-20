@@ -1,156 +1,39 @@
-# 原生投递、原次恢复与有界等待
+# 直接通信与原生送达核验（0.4.54）
 
-本页是 prompt、任务包、callback、封口及 idle 等待的统一操作合同。
-新的普通长消息及握手/复审提示按[短通知与固定正文](long-prompt-delivery.md)
-先固定全文再投递短通知；原生回执只证明通知收到，不证明正文已读或任务已接受。
-`SKILL.md` 和各客户端适配层引用本页；旧屏幕判据与独立 Enter/Tab
-预算不再使用。用户明确授权的每60秒新 marker 求派保留在下述可选入口，
-不与默认有界 persist 混为一谈。执行使用原任务固定的完整控制器；
-文档更新不迁移在途任务，不证明已安装或已在真实客户端通过。
+双方 prompt 就绪即可发送，包括忙碌、原生 Goal 续轮与压缩期间。
+允许直接 cmux send/send-key/paste；bridge 是可选的绑定与回执入口，不是通信许可。
+不为通信暂停 Goal，不要求空闲窗口或完整稳定 composer。原会话不替换，
+不清空草稿，不把通信当成共享写入归属或业务接受。
 
-## 只有原接收端新增的完整 user 记录能确认收到
+## 发送与唯一送达标准
 
-输入前，原 controller 必须把以下信息固定到原 attempt，并在输入和核收时复核：
+使用唯一 marker，固定目标 surface UUID 和原生 session/transcript；bridge
+在原 attempt 中持久化 payload、身份和输入前 EOF fence。当前新 attempt 固定
+`receipt_contract=native-user-marker-v1` 与原 marker，旧 attempt 不改合同。
+只有目标原转录在原 fence 后新增**含该 marker 的 user 消息**证明送达。
+客户端包装、附加上下文或空白变化不再使已到达消息失败；assistant、tool、
+Hook、历史记录和 Claude queued_command 不证明收到。读取完整正文、ACK、
+callback 业务核收与资源释放分别记录。短通知送达不等于其 SHA 正文已读。
 
-- 真实 caller 与接收方的同 workspace、surface/pane UUID、TTY，以及原生
-  进程 PID、出生身份和可执行文件身份。焦点、标题、继承环境不代替身份。
-- 接收方原生 session 与对应 transcript 的确定路径、device/inode、已有
-  字节和边界哈希。只能从目标进程/会话绑定该文件，不能按日期、mtime
-  或全局 marker 搜索选择一个看似匹配的会话。
-- 完整 payload 及其 SHA、原 task/nonce、任务包和报告等适用 pins。
-  新 Codex 输入的 `NATIVE_INPUT_INTENT`、Claude 终端输入的 `PASTE_INTENT`
-  必须在真实输入前持久化，并固定当时新鲜 EOF fence。
+Codex bridge 优先调用已绑定原线程的 turn/steer 或 turn/start；control socket
+缺失/拒绝连接，或原线程元数据明确不能提供输入方法、且尚未产生输入意图时，
+自动转终端直发。身份不符不是降级理由。RPC 输入意图一旦落盘，超时和
+未知结果只能核原次，不再转终端，避免双送。Claude 默认直接终端发送。
 
-只有**同一 workspace/surface/process/session/transcript，在原输入意图的
-新鲜 EOF fence 之后新增、全文完全相等的 native user**
-才为 `NATIVE_RECEIVED`。保留空格、制表符、空行、换行和字面转义；
-不得 trim、拼接多个记录、只查子串/nonce 或用引用替代完整入站记录。
-assistant、tool、hook 输出和用户引用旧消息都不是本次入站证据。
+终端一次原文粘贴后立即 Enter；不以忙碌或 composer 判读拦截。默认有界观察
+30 秒（显式0–60秒）。未见 marker user 且原生状态仍为 pending 时，若屏幕
+显示本次 marker 残留或压缩，先再核一次转录，然后最多补一个 Enter。
+补键意图先落盘；不再次粘贴，不因崩溃、重试或换版重置预算。已入原生队列
+先观察，不补键。超出本轮观察窗不等于丢失；使用原参数 --reconcile-only。
 
-| 证据 | 可以报告的事实 |
-| --- | --- |
-| 原生 RPC 返回接受或 turn id | 请求已被 API 接受；不能单独确认原生收到、消费或 callback 核收 |
-| 粘贴、Enter/Tab、exit 0、空 composer、屏幕活动或 ACK | 仅对应动作或观察；不能确认收到 |
-| Claude `queued_command` 或 UI queue | `NATIVE_QUEUED`/pending；不能确认收到 |
-| 原绑定及原 fence 后新增的完整 native user | `NATIVE_RECEIVED`；只证明接收 |
-| 原 controller 核证据后发布正式 receipt | 原次传输已核收；不授业务接受 |
-| 主管独立审读报告及原件并裁定 | 对应业务范围已接受；资源释放另验 |
+原 pane/target 输入锁及逐操作身份核验仍保留。直接 raw cmux 返回成功只证明
+操作返回；操作者必须记录并核目标原转录，不能把 Enter 当送达。
 
-缺绑定、旧 fence、文件被替换/截断、正文被改写或证据不可读，均保留未确认。
-旧尝试缺少输入前 binding/fence 时，拒绝追补；不重发、不把当前 EOF
-冒充过去的输入边界。报告被发现、被读取与消息被收到是不同事实。
+## 历史原次
 
-## 新 Codex 输入直接进入原会话（0.4.26）
-
-新普通消息、握手、正式任务、callback 和获授权继任消息统一经同版共享入口。
-接收端为 Codex 时，使用既有 control socket，校验 socket 的属主、0600 权限、
-device/inode 和实际 peer UID；不启动另一 daemon、不恢复另一会话、不改设置。
-只读查询原 thread 元数据与最新一轮的元数据，必须对应绑定 transcript，且
-`canAcceptDirectInput=true`。不读完整历史来推断路由。
-
-- 原轮正在运行：一次 `turn/steer`，固定刚核得的 `expectedTurnId`。
-- 原会话空闲：一次 `turn/start`，只传原 threadId 和完整 text input。
-- 状态矛盾或不可用：该次不输入；保留证据和已配置文件通道，独立工作继续。
-
-唯一输入前持久化 `NATIVE_INPUT_INTENT`、精确请求及新鲜 EOF fence。
-新 Codex 输入不读、不粘贴、不修改 composer，也不发 Enter/Tab，不进入
-`queued follow-up inputs`。这条路径适用于 executor 回 supervisor 的新 callback。
-RPC timeout、异常、回执未知或记录写入失败都不能授权第二次输入；只观察
-原绑定日志。不得降级为终端排队、换 nonce 或重开一次发送。
-原生收到后，正文消费、ACK、正式 callback receipt、自动 hook 与业务接受另验。
-
-历史 queued callback、PASTE_INTENT 和冻结包保持原控制器，仅按原证据核收；
-绝不把旧队列消息再经 native 路径发送。新 native attempt 不具有补键预算。
-
-## 0.4.35 的原次确认窗口
-
-新提交默认观察原生收件30秒；`--wait-seconds` 只接受有限的0至60秒，
-在输入前校验。`--reconcile-only` 默认0秒，即一次只读观察。间隔1秒，
-同时受时间和 `ceil(seconds)+1` 次数上限约束；同步 I/O 可能延长实际耗时，
-不能据此承诺端到端延迟。
-
-exit75保留原RPC结果、原controller来源及同参数 `--reconcile-only` 指引。
-旧attempt缺控制器时保持 `UNKNOWN_LEGACY_CONTROLLER`，不能补CURRENT。
-turn abort是诊断事实，不证明消息丢失。等待耗尽仅允许观察原次，
-不增加输入、重贴或补键预算；原controller不会因文档更新改变默认行为。
-
-实测Monitor/Goal与路径续行padding只按已覆盖的完整结构识别，不对真实正文
-作全局strip/rstrip，不清草稿。原探针恢复提案未纳入本版。
-完整行为与验收边界见[0.4.35说明](release-0.4.35.md)。
-
-## Claude 终端首次输入只有一次粘贴和一次提交键
-
-复用受保护 bridge。首次输入前确认 agent TUI 和空 composer；SHELL、
-UNKNOWN、压缩、重连、外来草稿或未识别结构不得输入。原 attempt 只粘贴
-一次，再有界只读等待**完整且稳定的原草稿**。等待耗尽就保留原次，不按键。
-
-清晰且受支持的 Claude 提交状态使用 `enter`，不另造 Ctrl+Enter 或裸键绕路。
-旧 Codex terminal attempt 中的 Tab 仅是历史待核证据，不再是新输入操作规则；
-队列仍为 pending，不能据此宣称原生收到。
-
-每次粘贴/按键前都重核身份，按键意图在动作前持久化。折叠粘贴摘要、残缺
-首帧和未知 footer 不能证明完整草稿。已测显示等价只用于草稿保护，
-不能降低原生全文比较的严格程度。未知状态不清空，不重复粘贴。
-
-Claude 状态栏的识别只在完整匹配边框之外进行。已测可选计数行
-`CLAUDE.md | 规则 | MCPs | 钩子` 中的规则数不能误算为草稿；相同文字
-出现在输入框内仍是原文。未知字段或残缺边框保留 UNKNOWN，禁止清空绕过。
-空输入与空闲回合分别核验，识别修复不改变完整草稿及原生接收门禁。
-完整边框外的同行时间字段可带精确提示 `new task? /clear to save N tokens`（N 仅为 ASCII 整数，或整数/一位小数加小写 `k`）；正文同字仍是草稿，未知提示及折叠草稿仍不授权输入。
-
-## 历史终端原次恢复共用最多一次补键
-
-本节只适用于带原 PASTE_INTENT 的终端尝试。新 NATIVE_INPUT_INTENT
-只能只读核收；不能补键、重试 RPC 或转成终端发送。
-
-### Current status and nested hook identity
-
-同一 hook evaluation 内，外层身份解析与内层 bridge 核收使用同一原生 caller
-采集来源；每次边界仍重新核进程与 cmux 树，不缓存身份、不改写 daemon 环境。
-否则外层识别正确、内层退回继承的 workspace 会错误阻止合法核收。
-
-完整 Claude 边框成立时，只从最新顶格 activity 行判断当前压缩或重连；
-完成报告及 recap 内引用的历史状态不参与。Codex 的 steer queue 标题不属于
-当前状态行；独立 warnings footer 由已测规则识别。真正的 Compacting context、
-Compacting conversation、Reconnecting 以及未知界面仍不准输入。
-这些兼容规则不改变草稿逐字匹配和原 fence 后完整 native user 的验收标准。
-
-先通过**原 sender/controller** 对原 attempt 做零输入核收，检查迟到的
-完整 native user。已收到或已排队时不补键。只有同时满足下列条件，原
-controller 支持的恢复入口才可在同一 attempt 内补一个现场支持的 Enter
-或 Tab：
-
-- 原报告、任务包、payload、nonce、双方身份及原生 binding/fence 不变；
-- 当前完整未改草稿仍属于原次，结构稳定，原持久锁及 inode 可核；
-- 原历史及当前观察中没有 UNKNOWN、compaction、queue、重连、结构变化
-  或用户编辑等失去草稿所有权的证据；
-- 原 controller 能证明这一个共享补键预算尚未消耗。
-
-自动路径与显式恢复**共享最多一次补键**，不能分别建 Enter、Tab 预算。
-补键意图落盘即消耗，动作失败、进程中断、重启或未确认均不重置。
-诊断工具不能授予补键；手动见到草稿不构成授权。原版本不支持恢复时交主管，
-不把新模块单独覆盖到旧 runtime。预算耗尽仍可有界零输入核收。
-
-普通消息、任务派单和 callback 各用自己的原 journal 与原 controller。
-`--reconcile-only` 是零输入核收。当前 CLI 的 `--recover-stranded`
-只属于 `submit-text`：原次须为 `NATIVE_PENDING`、原记录为
-`PASTE_INTENT`/`ENTER_SENT`，并通过上述全部门禁及未用补键预算。
-`submit-task-pack` 和 `submit-completion-callback` 仅核原次，不能追加
-该选项。callback 的旧 queue-only Python 接口不提供额外 Tab 配额。不能改 nonce、换会话、删 journal
-或重写旧 attempt 来取得新发送槽。
-
-原 callback 的发送者与已认证原接收者都可以通过原 controller 显式
-`--reconcile-only` 核收。主管观察收到的原回调时，hook 按原 journal 的
-反向端点认证，不把主管误判成一次向自己的新发送。此例外只接受真实布尔
-只读参数；动态值、展开参数、重复选项及与 queue-resume 混用均不接受。
-原 executor、workspace、pane、接收进程、原始 EOF fence、完整消息和
-报告/任务包一致性仍逐项核验；普通发送不享有反向端点例外。
-
-hook 的 callback 核收提示只能采用冻结包中一致的 `required_skill` 与
-`completion_command_argv` / `callback_command`，保留原 Python 和原
-controller，追加 `--reconcile-only`。原命令缺失或冲突时明确报不可用，
-不得猜测当前安装路径；已有真实原生接收证据仍保留。hook 仅作只读观察，
-正式 receipt 仍由原控制器发布。
+历史原 controller、payload、nonce、binding/fence 与预算保留，按其原规则核收。
+新规则不授权对历史已粘贴、排队或结果未知的消息重新粘贴或重发。
+缺原绑定不补造成功证据；已收到消息不因 receipt 文件缺失重新发送。
 
 ## 封口、Stop 与主管报告发现
 
@@ -241,7 +124,7 @@ terminal_pending、原 binding 和 fence；历史完整原生收件可独核，�
 
 新求派使用同版 executor_ready、正文存储和 bridge。超过700 UTF-8字节或
 带尾换行时固定完整正文再发送短通知，返回的通知 receipt 不证明正文已读。
-新 Codex 求派同样直接走原生 steer/start，不因忙碌或用户草稿而改走 Tab。
+新 Codex 求派优先原生 steer/start；原生方法不可用且零输入时终端直发，不等空闲。
 原未确认请求只读核收；已有不确定输入时后继请求仍使用已配置文件通道，
 不重放原次。原生入口不可用或不适合 Claude 终端输入时使用文件通道；每轮记录实际写入或错误，
 空 channels、轮数增长和历史 marker 均不证明送达。历史 marker 无原次
@@ -250,14 +133,14 @@ receipt 时只保留 UNVERIFIED；真实队列由同版 bridge 的实际结构�
 这个兼容更新不宣告其他未完成的 reask 生命周期方案已上线。安装须保存原
 active episode、旧控制器与未决证据，不把默认 idle hook 全局改成无限续轮。
 
-## helper 只保留一个受保护发送入口
+## 可选 helper 与直接发送
 
-普通消息的 helper 必须由 `scripts/render_cmux_agent.py` 从固定基线渲染。
-只有绝对可执行路径、完整渲染字节、同一 release 的 adapter 与相同 Python
-全部通过守卫，直接 `ask/send/broadcast/reconcile` 才准入；可加 `rtk` 或
-`rtk proxy` 前缀。shell/env 包装、嵌套、重定向、裸 cmux 和替代发送器拒绝。
-helper 仍调用唯一 guarded bridge；正式 task/callback 保留专用入口。
-reconcile 须绑定原 intent，零输入；缺证明只保留 pending，不报收到。
+安装器通过 `scripts/render_cmux_agent.py` 从固定基线渲染 helper，并核验完整
+字节及同版 adapter。该核验用于安装一致性，不是通信许可。直接 cmux、
+shell 包装与替代发送入口不再因本技能而被禁止；实际命令错误由运行时报告。
+helper 调用 bridge 以保留绑定、原次与回执；操作者也可直接发送并独立核目标
+转录。正式 task/callback 的 helper 保留任务绑定入口。reconcile 保留原 intent
+且零输入，缺证明只报 pending，不报收到。
 
 ## 一致版本与证据边界
 
@@ -265,7 +148,7 @@ reconcile 须绑定原 intent，零输入；缺证明只保留 pending，不报�
 必须来自相容的完整固定版本。实际 sender 与原 receipt validator 核当前
 投递及其原 attempt；未确认不能报成功，普通工具不扫旧账。
 `cmux_native_delivery_guard.py` 的全局注册同样经过 advisory 观察器，旧 checker
-仅供显式诊断；这不降低 sender 的端点、草稿、去重及原生证据要求。
+仅供显式诊断；sender 仍核端点、原次去重及原生 marker 证据，不要求 composer 准入。
 旧屏幕/send-proof hook 的退役由受支持安装器限定本包注册，保留其他任务及 foreign 配置。
 
 配置落盘、完整版本安装、新进程导入、真实 hook 执行、当前客户端加载、

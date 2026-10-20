@@ -317,6 +317,7 @@ def deliver(bridge, surface, text, marker, confirm_lines=200, *, reconcile_only=
 
             try:
                 attempt['native_binding'] = native.bind_target(bridge, surface, text)
+                attempt['native_binding'] = native.marker_binding(attempt['native_binding'], text, marker)
                 write_json(attempt_path, attempt)
                 result = bridge._submit_text_once(surface, text, marker=marker,
                     confirm_lines=confirm_lines, force_compose=False, delivery_observer=observe,

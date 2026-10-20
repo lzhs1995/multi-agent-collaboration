@@ -140,9 +140,9 @@ class HelperGuardCases(unittest.TestCase):
         self.assertEqual(self.invoke()[0], 75)
         self.assertEqual(self.guard()["action"], "block")
 
-    def test_altered_native_payload_cannot_confirm(self):
+    def test_native_user_without_original_marker_cannot_confirm(self):
         def altered(key, count):
-            self.append_native(text=self.payload + "\n")
+            self.append_native(text="Unrelated user input without the original marker")
             self.view = self.compose("")
         self.on_key = altered
         self.assertEqual(self.invoke()[0], 75)

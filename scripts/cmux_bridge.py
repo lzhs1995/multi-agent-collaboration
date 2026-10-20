@@ -187,9 +187,6 @@ def pin_successor_pair(artifact, *, expected_caller=None, expected_target=None):
 
 def _run_successor(*args, artifact, check=True, capture=True):
     """Run only explicit target RPCs under a successor pair proof."""
-    from successor_rebind import CODEX_SAME_PANE
-    if artifact.get("transport") == CODEX_SAME_PANE:
-        raise WorkspaceScopeError("SUCCESSOR_REBIND_DENIED: native-only authorization forbids terminal input")
     args = list(args)
     proof = pin_successor_pair(artifact)
     if args[:2] == ["rpc", "terminal.paste"]:
@@ -1877,13 +1874,24 @@ def _submit_text_once(surface, text, marker=None, confirm_lines=200, task_pack_p
     seconds = wait_budget(wait_seconds)
     _validate_submission(surface, text, task_pack_path, force_compose,
                          delivery_observer, native_binding, native_attempt)
+    def terminal():
+        from cmux_direct_input import send_once as direct_send
+        return direct_send(text, marker,
+            recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
+            emit=delivery_observer, paste=lambda value: send_text(surface, value),
+            key=lambda value: send_key(surface, value),
+            observe=lambda: _observe_native(surface, text, native_binding, native_attempt),
+            read_screen=lambda: read_screen(surface, lines=confirm_lines), wait_seconds=seconds)
+    current = native_binding.get("receipt_contract") == "native-user-marker-v1"
     if native_binding["provider"] == "codex":
         from cmux_codex_input import send_once
         return send_once(native_binding, text,
             recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
             emit=delivery_observer,
             observe=lambda: _observe_native(surface, text, native_binding, native_attempt),
-            wait_seconds=seconds)
+            wait_seconds=seconds, **({"fallback": terminal} if current else {}))
+    if current:
+        return terminal()
     return _submit_terminal_once(surface, text, marker, confirm_lines, task_pack_path,
         force_compose, delivery_observer, native_binding=native_binding,
         native_attempt=native_attempt, wait_seconds=seconds)
