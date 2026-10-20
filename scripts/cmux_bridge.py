@@ -1977,6 +1977,17 @@ def recover_stranded_once(surface, text, marker, before, confirm_lines=200,
     if native_attempt is None or delivery_observer is None:
         raise TaskPackContractError("ORIGINAL_NATIVE_JOURNAL_REQUIRED")
     original = json.loads(Path(native_attempt).read_text())
+    if (native_binding or {}).get("receipt_contract") == "native-user-marker-v1":
+        from cmux_direct_input import recover_once
+        result = recover_once(text, marker, original=original,
+            recheck=lambda: require_bound(sys.modules[__name__], surface, native_binding, text),
+            emit=delivery_observer, key=lambda value: send_key(surface, value),
+            observe=lambda: _observe_native(surface, text, native_binding, native_attempt),
+            read_screen=lambda: read_screen(surface, lines=confirm_lines), wait_seconds=seconds)
+        if result.get("confirmed") is not True:
+            raise DispatchUnconfirmed("DIRECT_RECOVERY_PENDING: observe original; never repaste",
+                                      details=result)
+        return result
     result = _observe_native(surface, text, native_binding, native_attempt)
     if result.get("confirmed") is True:
         return dict(result, retries=0, recovered="already_consumed")
@@ -2006,12 +2017,12 @@ def recover_stranded_once(surface, text, marker, before, confirm_lines=200,
 
 
 def submit_task_pack(surface, text, task_pack_path, marker=None, confirm_lines=200,
-                     force_compose=False, *, reconcile_only=False, wait_seconds=None):
+                     force_compose=False, *, reconcile_only=False, wait_seconds=None, recover_stranded=False):
     """Durable task dispatch; ambiguous attempts are observed, never repasted."""
     from cmux_task_journal import deliver
     return deliver(sys.modules[__name__], surface, text, task_pack_path, marker,
                    confirm_lines, force_compose, reconcile_only=reconcile_only,
-                   wait_seconds=wait_seconds)
+                   wait_seconds=wait_seconds, **({"recover_stranded": True} if recover_stranded else {}))
 
 
 def _sha256_file(path):
@@ -2023,12 +2034,12 @@ def _sha256_file(path):
 
 
 def submit_completion_callback(task_pack_path, confirm_lines=200, *, reconcile_only=False,
-                               resume_queue_only=False, wait_seconds=None):
+                               resume_queue_only=False, wait_seconds=None, recover_stranded=False):
     """Report-bound delivery with durable attempts and zero-input reconciliation."""
     from cmux_callback_journal import deliver
     return deliver(sys.modules[__name__], task_pack_path, confirm_lines,
                    reconcile_only=reconcile_only, resume_queue_only=resume_queue_only,
-                   wait_seconds=wait_seconds)
+                   wait_seconds=wait_seconds, **({"recover_stranded": True} if recover_stranded else {}))
 
 
 def read_screen(surface, lines=200):
@@ -2298,6 +2309,9 @@ def _cli_main(argv=None):
     completion.add_argument("--reconcile-only", action="store_true",
                             help="verify an existing callback attempt without sending input")
 
+    for sender in (pack, completion):
+        sender.add_argument("--recover-stranded", action="store_true",
+            help="current marker attempt only: spend its unused extra Enter; never repaste")
     for sender in (submit, pack, completion):
         sender.add_argument("--wait-seconds", type=float, default=None,
             help="native observation budget 0–60 seconds; default 30 for new input, "
@@ -2344,6 +2358,7 @@ def _cli_main(argv=None):
                 force_compose=args.force_compose,
                 reconcile_only=args.reconcile_only,
                 wait_seconds=args.wait_seconds,
+                **({"recover_stranded": True} if args.recover_stranded else {}),
             )
             result = {
                 "command": "submit_task_pack",
@@ -2357,7 +2372,8 @@ def _cli_main(argv=None):
         }:
             result = submit_completion_callback(
                 args.task_pack, confirm_lines=args.confirm_lines,
-                reconcile_only=args.reconcile_only, wait_seconds=args.wait_seconds
+                reconcile_only=args.reconcile_only, wait_seconds=args.wait_seconds,
+                **({"recover_stranded": True} if args.recover_stranded else {})
             )
             result = {"command": "submit_completion_callback", **result}
         else:  # pragma: no cover - argparse makes this unreachable

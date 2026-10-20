@@ -74,6 +74,59 @@ class DirectInputTests(unittest.TestCase):
         self.f.send.assert_not_called()
         self.f.key.assert_not_called()
 
+    def deferred(self):
+        with patch.object(bridge, 'read_screen', return_value='Compacting context'):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.send()
+
+    def test_deferred_then_public_recovery_confirms_once(self):
+        self.deferred()
+        self.f.key.side_effect = self.f.receipt_on_key(self.text)
+        with patch.object(bridge, 'read_screen', return_value='> receiver note ' + self.text):
+            self.assertTrue(self.send(recover_stranded=True)['confirmed'])
+            with self.assertRaisesRegex(bridge.TaskPackContractError, 'RECEIPT_EXISTS'):
+                self.send(recover_stranded=True)
+        self.f.send.assert_called_once()
+        self.assertEqual(self.f.key.call_count, 2)
+
+    def test_deferred_still_compacting_or_marker_absent_spends_no_key(self):
+        self.deferred()
+        for screen in ('Compacting context ' + self.text, 'different text'):
+            with patch.object(bridge, 'read_screen', return_value=screen):
+                with self.assertRaises(bridge.DispatchUnconfirmed):
+                    self.send(recover_stranded=True)
+        self.f.key.assert_called_once()
+        self.f.key.side_effect = self.f.receipt_on_key(self.text)
+        with patch.object(bridge, 'read_screen', return_value=self.text):
+            self.assertTrue(self.send(recover_stranded=True)['confirmed'])
+        self.assertEqual(self.f.key.call_count, 2)
+        self.f.send.assert_called_once()
+
+    def test_deferred_recovery_key_failure_does_not_replenish_budget(self):
+        self.deferred()
+        self.f.key.side_effect = TimeoutError('uncertain extra key')
+        with patch.object(bridge, 'read_screen', return_value=self.text):
+            with self.assertRaises(TimeoutError):
+                self.send(recover_stranded=True)
+            with self.assertRaisesRegex(bridge.TaskPackContractError, 'ALREADY_USED'):
+                self.send(recover_stranded=True)
+        self.assertEqual(self.f.key.call_count, 2)
+        self.f.send.assert_called_once()
+
+    def test_deferred_receipt_before_recovery_needs_no_key(self):
+        self.deferred()
+        self.f.append_user(self.text)
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('already received')):
+            self.assertTrue(self.send(recover_stranded=True)['confirmed'])
+        self.f.key.assert_called_once()
+
+    def test_deferred_receiver_change_gets_no_recovery_key(self):
+        self.deferred()
+        self.f.process_state['birth'] = 'changed'
+        with self.assertRaises(native.NativeDeliveryError):
+            self.send(recover_stranded=True)
+        self.f.key.assert_called_once()
+
     def test_consumed_extra_key_never_repeats_on_reconcile_or_resubmit(self):
         with patch.object(bridge, 'read_screen', return_value=self.text):
             with self.assertRaises(bridge.DispatchUnconfirmed):
@@ -202,6 +255,28 @@ class DirectFormalDeliveryTests(unittest.TestCase):
         self.assertTrue(self.call(reconcile_only=True)['confirmed'])
         self.f.key.assert_called_once()
         self.f.send.assert_called_once()
+
+    def deferred_recovery(self, callback):
+        self.prepare('codex' if callback else 'claude', callback)
+        with patch.object(bridge, 'read_screen', return_value='Compacting context'):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.call()
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.call(recover_stranded=True)
+        self.f.key.assert_called_once()
+        self.f.key.side_effect = self.f.receipt_on_key(self.text)
+        with patch.object(bridge, 'read_screen', return_value=self.text):
+            self.assertTrue(self.call(recover_stranded=True)['confirmed'])
+            with self.assertRaises(bridge.TaskPackContractError):
+                self.call(recover_stranded=True)
+        self.assertEqual(self.f.key.call_count, 2)
+        self.f.send.assert_called_once()
+
+    def test_task_deferred_recovery_uses_original_attempt(self):
+        self.deferred_recovery(False)
+
+    def test_callback_deferred_recovery_uses_original_attempt(self):
+        self.deferred_recovery(True)
 
 
 if __name__ == '__main__':

@@ -198,7 +198,7 @@ def execute(args):
     if args.now is not None:
         raise ValueError("--now is only a validation/append diagnostic; live transport uses real time")
     if args.text_file is None or not args.marker:
-        raise ValueError("--text-file and --marker required for submit/reconcile")
+        raise ValueError("--text-file and --marker required for submit/reconcile/recover")
     import cmux_bridge
     import successor_native_delivery as delivery
     text = read_bytes(args.text_file, limit=1024 * 1024).decode("utf-8")
@@ -225,7 +225,8 @@ def execute(args):
             exc.details = dict(getattr(exc, 'details', {}), input_operations=0,
                                stage='MAINTENANCE_ENROLLMENT_PRECHECK')
             raise
-    operation = delivery.submit if args.command == "submit" else delivery.reconcile
+    operation = {"submit": delivery.submit, "reconcile": delivery.reconcile,
+                 "recover": delivery.recover}[args.command]
     result = operation(cmux_bridge, value, text, marker=args.marker, wait_seconds=args.wait_seconds)
     return result if reply is None else enroll_result(result, args, reply)
 
@@ -244,7 +245,7 @@ def encoded(result):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate", "append", "submit", "reconcile"))
+    parser.add_argument("command", choices=("validate", "append", "submit", "reconcile", "recover"))
     parser.add_argument("--artifact", required=True, type=Path)
     parser.add_argument("--output", type=Path,
                         help="append: new create-only receipt; other commands: new JSON result file")

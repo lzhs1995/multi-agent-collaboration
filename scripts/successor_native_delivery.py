@@ -368,6 +368,39 @@ def reconcile(bridge, artifact, text, *, marker, state_root=None, wait_seconds=N
         return _publish_observation(bridge, journal, artifact, text, marker, result)
 
 
+def recover(bridge, artifact, text, *, marker, state_root=None, wait_seconds=None):
+    """One unused direct extra Enter; retain the frozen attempt and original fence."""
+    from cmux_direct_input import recover_once
+    seconds = wait_budget(wait_seconds)
+    successor_rebind.validate_artifact(artifact)
+    root, journal = _paths(artifact, marker, state_root)
+    with _locked(root, journal, artifact):
+        attempt, _, _ = _original(journal, artifact, text, marker)
+        binding, wire = attempt['native_binding'], attempt['wire']
+        def recheck():
+            _original(journal, artifact, text, marker)
+            require_bound(bridge, artifact, binding, wire)
+        def emit(phase, screen=None):
+            recheck()
+            fields = dict(recovery='direct_marker')
+            if screen is not None:
+                fields.update(screen=screen, screen_sha256=_hash(screen.encode()))
+            _event(journal, phase, **fields)
+        try:
+            result = recover_once(wire, marker, original=_attempt_evidence(journal, attempt),
+                recheck=recheck, emit=emit,
+                key=lambda value: bridge._run_successor('send-key', '--surface',
+                    binding['identity']['target_surface_uuid'], '--', value, artifact=artifact,
+                    receipt_contract=binding.get('receipt_contract')),
+                observe=lambda: _observe(bridge, journal, artifact, text, marker),
+                read_screen=lambda: bridge.read_screen_successor(artifact), wait_seconds=seconds)
+            result['reconciled_read_only'] = result['input_operations'] == 0
+            return _publish_observation(bridge, journal, artifact, text, marker, result)
+        except BaseException as exc:
+            annotate_attempt_error(exc, journal / 'attempt.json', _attempt_evidence(journal, attempt))
+            raise
+
+
 def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wait_seconds=None):
     """Persist one native input (Codex) or paste (Claude); later calls reconcile.
 
