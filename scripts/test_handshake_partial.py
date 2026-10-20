@@ -5,6 +5,7 @@ import io
 import contextlib
 import json
 import time
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -21,6 +22,22 @@ from test_handshake_reconciliation import HandshakeReconciliationTests as Helper
 
 
 class CurrentMessageTests(unittest.TestCase):
+    def test_preflight_cannot_rewrite_existing_gate_before_refusing_replay(self):
+        for started in ('handshake-receipt.json', 'task-pack.json'):
+            with self.subTest(started=started), tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+                root = Path(tmp)
+                (root / started).write_text('original')
+                (root / 'identity-gate.json').write_text('original gate')
+                stack.enter_context(mock.patch.object(harness, '_artifact_root', return_value=root))
+                calls = [stack.enter_context(mock.patch.object(harness, name)) for name in (
+                    'cmd_setup_check', 'cmd_helper_parity', 'cmd_identity_gate', 'cmd_name_surfaces',
+                    'cmd_handshake', 'cmd_validate')]
+                with self.assertRaises(SystemExit):
+                    harness.cmd_preflight(SimpleNamespace())
+                for call in calls:
+                    call.assert_not_called()
+                self.assertEqual((root / 'identity-gate.json').read_text(), 'original gate')
+
     def test_real_direct_queue_exception_has_wait_state_and_never_claims_receipt(self):
         fixture = NativeFixture.attach(self, provider='claude')
         text = 'STATUS: queued-handshake-marker'

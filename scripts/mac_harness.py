@@ -3773,6 +3773,10 @@ def cmd_disarm(args):
 # ---------------------------------------------------------------------------
 
 def cmd_preflight(args):
+    root = _artifact_root(args)
+    if any(os.path.lexists(root / name) for name in ("handshake-receipt.json", "task-pack.json")):
+        _fail("original handshake already started; preserve its identity gate and use original recovery; no replay")
+        sys.exit(1)
     print("=== PREFLIGHT (full acceptance sequence) ===")
     cmd_setup_check(args)
     # Runs first because it is cheap, read-only, and gates the thing every later
