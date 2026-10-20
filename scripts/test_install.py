@@ -68,6 +68,14 @@ assert not (Path.home() / '.local/state/multi-agent-collaboration').exists()
         self.assertEqual(removed["custom"], old["custom"])
         self.assertEqual(removed["hooks"]["Stop"], old["hooks"]["Stop"])
 
+    def test_task_continuation_timeout_is_explicit_and_idempotent(self):
+        value = m.transform({})
+        hooks = [h for entry in value['hooks']['Stop'] for h in entry['hooks']
+                 if 'cmux_executor_idle_guard.py' in h['command']]
+        self.assertEqual(len(hooks), 1)
+        self.assertEqual(hooks[0]['timeout'], 75)
+        self.assertEqual(m.transform(value), value)
+
     def test_sandbox_install_doctor_uninstall(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)

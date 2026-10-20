@@ -151,7 +151,10 @@ def transform(doc, uninstall=False, *, home=None, executor_reask=False):
             raise ValueError("hook event must be a list")
         cmd = command(name)
         if not uninstall:
-            entries.append({"matcher": "*", "hooks": [{"type": "command", "command": cmd}]})
+            item = {"type": "command", "command": cmd}
+            if name == 'cmux_executor_idle_guard':
+                item['timeout'] = 75  # task-scoped empty Stop reentry waits at most60s
+            entries.append({"matcher": "*", "hooks": [item]})
     return result
 
 

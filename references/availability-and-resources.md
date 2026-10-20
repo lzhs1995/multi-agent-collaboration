@@ -4,57 +4,30 @@ Use one task identity through dual, solo and recovered-dual work. The user must
 authorize automatic takeover; that authorization persists, so it need not be
 requested again after every failure. A peer's assertion is not authorization.
 
-## Retryable Claude API failures: evidence before takeover
+## Bounded failure episodes and continuous execution
 
-For retryable failures such as a confirmed 502/504/524, retain the original
-session and use a finite retry episode. Record its observation/attempt budget
-before retrying; allow time for a completed observation at or beyond the
-300-second minimum. Retry only after the preceding attempt has actually ended,
-with at least 60 seconds between attempts, respecting a longer provider retry
-delay. Internal client retry counters are not supervisor attempts. Never resend
-an accepted or uncertain task nonce or add another call behind an in-flight one.
+Use [task continuity](task-continuity.md) for the current three-mode policy.
+A verified terminal retryable API failure starts a bounded episode: at most
+three distinct original attempts, at least60seconds apart and respecting a
+longer Retry-After. API success resets the episode. Internal client retries,
+silence, busy turns, queued input, an old error reread and unknown outcomes are
+not additional failures. Continue independent authorized work throughout; there
+is no mandatory300-second idle period. Authentication/billing failures use their
+actual category and do not cause a blind retry loop.
 
-Start the consecutive-failure clock at the first actual API failure, not at task
-dispatch, a silent screen or the start of a local wait. Bind the evidence to the
-same task and executor: first/last failure times, last actual success time
-(unknown if not observed), actual attempts and outcomes, request/error IDs when
-available, and the original logs. Every observed API outcome in that episode
-must be a retryable failure; any actual API success
-resets the clock. Success here means an actual successful API response, not a
-local helper's exit code, and does not by itself prove task completion.
+After bounded genuine failures, use the original available participants:
+Codex alone, Codex plus one Claude, or the original Claude peers while Codex is
+unavailable. Preserve the original task, sessions, pending nonces and all
+resource outcomes. Shared files still need their existing owner or an explicit
+single-writer handoff; use separate candidate files while that boundary remains
+unknown. Recovery returns a checkpoint to the original supervisor. API recovery
+is not acceptance of the deliverables or permission to overwrite solo work.
 
-Declare this executor temporarily unavailable for retryable API failure only
-when a fresh failed attempt establishes `last_failure - first_failure >= 300s`,
-no intervening API success exists, and the current attempt is terminal. Re-reading
-an old error after five minutes does not qualify. A static screen, queued input,
-unknown delivery/outcome, a short supervisor budget, or three retries cannot
-establish continuous API failure. When an outcome or observation gap is unknown,
-retain that uncertainty rather than count it as failure; resume a verifiable
-failure episode from new evidence, without stitching short observations or
-unknown periods together. Reaching a finite episode limit without the
-required evidence leaves unavailability unproven, not permission to switch SOLO.
-Continue independent authorized work while resolving the original attempt.
-
-After the threshold is met, preserve the checkpoint, freeze executor dispatch
-and writes, stop and verify the task sentinel, reconcile pending nonces and
-shared operations, and verify the single-writer boundary. Only then use existing
-user authorization for SOLO takeover through the availability lifecycle below.
-Elapsed time grants neither shared-resource release nor a second writer; unknown
-Word/NLM outcomes remain governed by their original resource receipts.
-
-Authentication, billing, quota and no-account failures are separately classified
-and permit no blind retry loop. A user explicitly stopping an executor or
-withdrawing authorization is also a separate instruction, not evidence that
-Claude crashed or met this retryable-failure threshold. Recovery preserves the
-original session and requires a safe handoff plus a fresh actual handshake for
-the next task; a successful API call alone cannot resume concurrent writes.
-This minimum is an operating policy informed by limited recovery incidents,
-not a statistically optimal outage detector.
-
-This section changes operator policy only. It does not add a runtime timer or
-new receipt fields to the existing availability CLI, install a hook, or migrate
-an active task's pinned controller. Preserve the timing evidence as task artifacts
-and verify the actual installed contract before any transition.
+`scripts/collaboration_continuity.py --input PLAN.json` evaluates bounded,
+SHA-pinned outcome observations and emits the active mode. It does not send,
+release resources, invent identity evidence or perform a shared-file handoff.
+The agent acts on its result under existing task authorization. The following
+v2 availability lifecycle remains the original owner’s shared-write record.
 
 ## Availability v2
 

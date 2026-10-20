@@ -132,6 +132,17 @@ class ProtocolTests(unittest.TestCase):
                     state['continuation']['reservation_inquiries'] = value
                     self.assert_rejected(state, record)
 
+    def test_proactive_capability_is_boolean_explicit_and_never_inherited_by_old_controllers(self):
+        for name in (None, *REVIEWED):
+            for flag in (True, False, 'true', 1):
+                with self.subTest(release=name, flag=flag):
+                    state, record = self.episode(name, current=name is None)
+                    state['continuation'].update(reservation_inquiries=True, proactive_hook=flag)
+                    if name is None and type(flag) is bool:
+                        self.assert_supported(state, record)
+                    else:
+                        self.assert_rejected(state, record)
+
     def test_coordination_path_pin_keeps_each_original_controller_contract(self):
         member = 'scripts/cmux_coordination_paths.py'
         current, record = self.episode(current=True)

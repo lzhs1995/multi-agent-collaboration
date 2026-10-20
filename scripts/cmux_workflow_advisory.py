@@ -83,9 +83,11 @@ def main() -> int:
             # An invalid binding cannot own the session, but diagnostics must
             # distinguish no enrollment from a configured hook that failed.
             try:
-                runtime_audit.record(payload, 'TASK_CONTINUATION_UNAVAILABLE',
-                                     original_hook=hook, mode='fail-open',
-                                     error_type=type(exc).__name__)
+                status = ('TASK_CONTINUATION_EPISODE_BUSY' if isinstance(exc, executor_proactive_hook.reask.EpisodeBusy)
+                          else 'TASK_CONTINUATION_CADENCE_ACTIVE' if isinstance(exc, executor_proactive_hook.CadenceActive)
+                          else 'TASK_CONTINUATION_UNAVAILABLE')
+                runtime_audit.record(payload, status,
+                                     original_hook=hook, mode='fail-open:' + type(exc).__name__)
             except Exception:
                 pass
 

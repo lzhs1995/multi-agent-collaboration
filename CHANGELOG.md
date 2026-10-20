@@ -1,3 +1,13 @@
+## 0.4.56
+
+- Explicit new task registration can enforce original Claude Stop continuation; the foreground runner asks every60seconds and preserves exact reply consumption.
+- Authorized foreground reservation STATUS no longer stops at the file-only boundary; old registrations and launchd remain file-only.
+- Add bounded evidence-based trio/duo/solo/Claude-peer execution planning, a whole-task limit of two children, and original ownership/handoff guidance.
+- Space repeated empty Stop reentry by60seconds, preserve user stop/reply changes and the native continuation cap; distinguish lock contention.
+- Exclude generated compact-summary and transcript-only user records from native receipts; apply a negative proof check when observing an immutable old controller.
+- Retain complete .54/.55 file controllers and their original capabilities; no episode migration.
+- Final release and live adoption evidence are pending during candidate review.
+
 ## 0.4.55
 
 - Resolve authenticated UUID selectors to current refs, retaining providers and rejecting duplicate aliases.

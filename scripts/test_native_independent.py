@@ -235,6 +235,19 @@ class NativeCase:
 
 
 class NativeFileAcceptance(unittest.TestCase):
+    def test_generated_summary_is_not_receipt_or_valid_old_proof(self):
+        for flags in ({'isCompactSummary': True}, {'isVisibleInTranscriptOnly': True},
+                      {'isCompactSummary': True, 'isVisibleInTranscriptOnly': True}):
+            with self.subTest(flags=flags), NativeCase() as case:
+                binding, fence, intent = case.ready()
+                offset, raw = case.append(dict(case.user_record(), **flags))
+                result = native.probe(binding, PAYLOAD, paste_fence=fence, not_before=intent)
+                self.assertFalse(result['confirmed'])
+                self.assertFalse(native.validate_proof(binding, PAYLOAD,
+                    case.raw_proof(binding, offset, raw), paste_fence=fence, not_before=intent))
+                case.append(case.user_record())
+                self.assert_received(case, binding, fence, intent, cursor=result['next_offset'])
+
     def assert_received(self, case, binding, fence, intent, **options):
         result = native.probe(binding, PAYLOAD, paste_fence=fence,
                               not_before=intent, **options)
