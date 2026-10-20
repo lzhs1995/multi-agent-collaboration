@@ -22,6 +22,56 @@ from offline_hook_thread_fixture import native_thread
 
 
 class WorkflowAdvisoryTests(unittest.TestCase):
+    def test_real_stop_wrapper_persists_proactive_and_failure_classification(self):
+        # Stub only the task decision. Exercise the actual wrapper, entrypoint
+        # validation and audit file writer instead of mocking audit.record.
+        cases = [('continue', 'TASK_CONTINUATION_REQUIRED'),
+                 ('episode', 'TASK_CONTINUATION_EPISODE_BUSY'),
+                 ('cadence', 'TASK_CONTINUATION_CADENCE_ACTIVE'),
+                 ('unavailable', 'TASK_CONTINUATION_UNAVAILABLE')]
+        for case, expected in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                wrapper = Path(advisory.__file__).resolve()
+                driver = '''
+from pathlib import Path
+import runpy, sys
+root, script, case = sys.argv[1:4]
+Path.home = staticmethod(lambda: Path(root))
+sys.path.insert(0, str(Path(script).parent))
+import executor_proactive_hook as proactive
+def decide(payload):
+    if case == 'continue':
+        return dict(decision='block', reason='Fixture task continuation')
+    if case == 'episode':
+        raise proactive.reask.EpisodeBusy('private task data')
+    if case == 'cadence':
+        raise proactive.CadenceActive('private task data')
+    raise ValueError('private task data')
+proactive.decide = decide
+sys.argv = [script, '--hook', 'cmux_executor_idle_guard.py']
+runpy.run_path(script, run_name='__main__')
+'''
+                payload = dict(session_id='11111111-1111-4111-8111-111111111111',
+                               hook_event_name='Stop')
+                result = subprocess.run([sys.executable, '-B', '-c', driver,
+                                         directory, str(wrapper), case],
+                                        input=json.dumps(payload), text=True,
+                                        capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, '')
+                if case == 'continue':
+                    self.assertEqual(json.loads(result.stdout)['decision'], 'block')
+                else:
+                    self.assertEqual(result.stdout, '')
+                receipts = list(Path(directory).rglob('*.json'))
+                self.assertEqual(len(receipts), 1)
+                raw = receipts[0].read_text()
+                receipt = json.loads(raw)
+                self.assertEqual(receipt['scope_status'], expected)
+                self.assertEqual(receipt['mode'], 'advisory')
+                self.assertFalse(receipt['native_receipt'])
+                self.assertNotIn('private task data', raw)
+
     def test_all_installed_workflow_commands_allow_fault_payloads(self):
         events = dict(manager.GUARDS, **manager.OPTIONAL_GUARDS)
         for name in sorted(advisory.WORKFLOW_HOOKS):
