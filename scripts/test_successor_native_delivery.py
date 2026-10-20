@@ -173,7 +173,7 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(self.bridge.operations, ['rpc', 'send-key'])
         original = (self.journal() / 'attempt.json').read_bytes()
         self.bridge.response = 'user'
-        with patch.object(self.bridge, 'read_screen_successor', return_value=self.text):
+        with patch.object(self.bridge, 'read_screen_successor', return_value='> ' + self.text):
             result = delivery.recover(self.bridge, self.artifact, self.text,
                 marker=self.marker, state_root=self.root, wait_seconds=0)
             self.assertTrue(result['confirmed'])
