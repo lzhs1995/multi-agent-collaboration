@@ -55,6 +55,11 @@ runpy.run_path(script, run_name='__main__')
 
 def doctor_probe(name):
     argv = shlex.split(command(name))
+    if len(argv) > 2 and Path(argv[2]).name == 'mac_hook_dispatch.py':
+        # The isolated probe home has no CURRENT; probe this release's router
+        # so a stable registration cannot pass by skipping. Dispatcher
+        # resolution is checked separately against the real CURRENT.
+        argv[2] = str(ROOT / 'scripts/mac_hook_entry.py')
     environment = {key: os.environ[key] for key in
                    ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SYSTEMROOT')
                    if key in os.environ}
@@ -73,12 +78,94 @@ def doctor_probe(name):
     return result
 
 
-def command(name):
+DISPATCHER = Path('.local/share/multi-agent-collaboration/bin/mac_hook_dispatch.py')
+RELEASES = Path('.local/share/multi-agent-collaboration/releases')
+
+
+def route(name, root=None):
+    """The one guard routing table, shared by both command forms."""
+    if name not in set(GUARDS) | set(OPTIONAL_GUARDS):
+        return None
+    scripts = Path(root or ROOT) / 'scripts'
     filename = name + '.py'
     if filename in WORKFLOW_HOOKS:
-        return shlex.join([sys.executable, '-B', str(ROOT / 'scripts/cmux_workflow_advisory.py'),
-                           '--hook', filename])
-    return shlex.join([sys.executable, '-B', str(ROOT / 'scripts' / filename)])
+        return scripts / 'cmux_workflow_advisory.py', ['--hook', filename]
+    return scripts / filename, []
+
+
+def release_home(root=None):
+    """HOME owning an immutable release checkout, else None (development checkout)."""
+    root = Path(root or ROOT)
+    parts = root.parts  # <home>/.local/share/multi-agent-collaboration/releases/<name>/source
+    if len(parts) < 7 or parts[-1] != 'source' or Path(*parts[-6:-2]) != RELEASES:
+        return None
+    return Path(*parts[:-6])
+
+
+def dispatcher_path(home):
+    return Path(home) / DISPATCHER
+
+
+def command(name, home=None):
+    """Immutable releases register one release-independent handler per guard.
+
+    A development checkout keeps its direct path so its own tests exercise
+    that tree; it never relies on CURRENT.
+    """
+    owner = release_home()
+    if owner is not None and (home is None or Path(home).resolve() == owner.resolve()):
+        return shlex.join([sys.executable, '-B', str(dispatcher_path(owner)), '--hook', name])
+    script, arguments = route(name)
+    return shlex.join([sys.executable, '-B', str(script), *arguments])
+
+
+def dispatcher_check(home):
+    """Doctor view: installed bytes and what the real CURRENT resolves to now."""
+    import mac_hook_dispatch as dispatch
+    target = dispatcher_path(home)
+    own = Path(__file__).resolve().with_name('mac_hook_dispatch.py').read_bytes()
+    result = dict(path=str(target), present=target.is_file() and not target.is_symlink(),
+                  benignExitZero=False)
+    result['matches_release'] = result['present'] and target.read_bytes() == own
+    try:
+        argv = dispatch.resolve(home, 'cmux_lease_guard')
+        result.update(resolves_to=argv[2], resolved=True)
+    except dispatch.Skip as exc:
+        result.update(resolved=False, skip_reason=str(exc))
+    result['benignExitZero'] = result['present'] and result['resolved']
+    return result
+
+
+def publish_dispatcher(home):
+    """Install the stable entry before any configuration names it.
+
+    Atomic replacement only; never removed. A process whose settings were
+    pinned at startup keeps invoking this path until it exits, and a missing
+    script would make every PreToolUse fail with Python's exit status 2.
+    """
+    source = Path(__file__).resolve().with_name('mac_hook_dispatch.py')
+    raw = source.read_bytes()
+    target = dispatcher_path(home)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    if target.parent.is_symlink() or target.is_symlink():
+        raise RuntimeError('symlinked hook dispatcher refused: ' + str(target))
+    if target.exists():
+        if not target.is_file():
+            raise RuntimeError('foreign hook dispatcher preserved: ' + str(target))
+        if target.read_bytes() == raw:
+            return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=False)
+    fd, pending = tempfile.mkstemp(prefix='.mac-hook-dispatch-', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o644)
+            os.fsync(handle.fileno())
+        os.replace(pending, target)
+    finally:
+        if os.path.exists(pending):
+            os.unlink(pending)
+    return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=True)
 
 
 def release_source(path, home):
@@ -106,6 +193,10 @@ def owned_command(value, home):
     if not words:
         return False
     path = Path(words.pop(0))
+    if path == dispatcher_path(home):
+        # Exactly the stable form; tails and unknown names stay foreign.
+        names = set(GUARDS) | RETIRED_GUARDS | set(OPTIONAL_GUARDS)
+        return len(words) == 2 and words[0] == '--hook' and words[1] in names
     if path.name == 'cmux_workflow_advisory.py':
         # Do not consume similarly named foreign wrappers, malformed options,
         # shell tails or a wrapper invoked for a hook owned by another tool.
@@ -149,7 +240,7 @@ def transform(doc, uninstall=False, *, home=None, executor_reask=False):
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
             raise ValueError("hook event must be a list")
-        cmd = command(name)
+        cmd = command(name, home)
         if not uninstall:
             item = {"type": "command", "command": cmd}
             if name == 'cmux_executor_idle_guard':
@@ -277,6 +368,11 @@ def manage(home, mode, apply=False, executor_reask=False):
     for config, link, snapshot, owned, old, doc, new in plans:
         if read(config)[0] != old or skill_snapshot(link) != snapshot:
             raise RuntimeError('installation changed concurrently; rerun')
+    stable = release_home() is not None and release_home().resolve() == home
+    published = None
+    if stable and mode == "install" and apply:
+        # Publish before any configuration can name the stable path.
+        published = publish_dispatcher(home)
     for config, link, snapshot, owned, old, doc, new in plans:
         expected = transform(doc, home=home, executor_reask=executor_reask and config.parent.name == '.claude')
         checks[str(config)] = {"linked": owned, "configured": doc == expected,
@@ -291,6 +387,8 @@ def manage(home, mode, apply=False, executor_reask=False):
     if mode == "doctor":
         for name in dict(GUARDS, **(OPTIONAL_GUARDS if executor_reask else {})):
             checks[name] = doctor_probe(name)
+        if stable:
+            checks['stable_dispatcher'] = dispatcher_check(home)
         ok = all(v.get("benignExitZero", v.get("linked") and v.get("configured")) for v in checks.values())
         # CURRENT-based releases have two independent launchd jobs. Checking
         # hooks alone missed a scheduler still pinned to the previous release.
@@ -301,7 +399,7 @@ def manage(home, mode, apply=False, executor_reask=False):
     else:
         ok = True
     return {"ok": bool(ok), "mode": mode, "applied": apply and mode != "doctor",
-            "checkout": str(ROOT), "checks": checks,
+            "checkout": str(ROOT), "checks": checks, "dispatcher_published": published,
             "scope": "configuration and isolated benign execution, not live client reload proof"}
 
 

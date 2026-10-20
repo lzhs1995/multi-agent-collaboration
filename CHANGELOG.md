@@ -1,3 +1,8 @@
+## Unreleased
+
+- Register one stable, release-independent hook handler per guard for immutable releases. A fixed dispatcher resolves CURRENT on each call and execs the release's pinned router; identical user and startup-profile handlers now run once. Invalid CURRENT/release is a diagnosable exit-0 skip.
+- Publish the dispatcher before configuration names it and never remove it. Guardian also reconciles magpie profiles, cmux `ccc-compact-*` settings and cmux snapshots that already carry owned handlers, preserving `disableAllHooks`, providers and foreign hooks. Running clients keep their startup-pinned older guards until they exit.
+
 ## 0.4.58
 
 - Check receiver input state before terminal mutation; preserve existing drafts, dialogs and unknown states without treating normal work or Goal as busy gates. Authenticate Claude 2.1.303 before using its complete empty input frame when the host registry has no agent state.
