@@ -5,12 +5,42 @@ are not admission gates. No draft is cleared or pasted twice. A single extra
 Enter is permitted only after a pending receipt and visible residual/compaction.
 """
 import math
+import json
 import re
 import time
 
 from cmux_confirmation import annotate_error, observe_receipt, wait_budget
 
 TRANSPORT = "terminal-direct-marker-v1"
+
+
+def protected_submit_result(raw):
+    """A host acknowledgement is never a receiver user-message receipt."""
+    value = json.loads(raw)
+    if isinstance(value, dict) and isinstance(value.get('result'), dict):
+        value = value['result']
+    if isinstance(value, dict) and value.get('delivery') == 'queued':
+        return dict(submitted=False, delivery='queued')
+    if not isinstance(value, dict) or type(value.get('submitted')) is not bool:
+        raise RuntimeError('PROTECTED_SUBMIT_OUTCOME_UNKNOWN: observe original; no resend')
+    return dict(submitted=value['submitted'], delivery=value.get('delivery'),
+                submit_error=value.get('submit_error'))
+
+
+def require_prompt_state(raw, surface, workspace):
+    """Do not inherit the CLI's fail-open behavior on an unavailable query."""
+    value = json.loads(raw)
+    if isinstance(value, dict) and isinstance(value.get('result'), dict):
+        value = value['result']
+    if (not isinstance(value, dict) or value.get('surface_id') != surface
+            or value.get('workspace_id') != workspace
+            or value.get('agent') is not True or value.get('terminal') is not True
+            or type(value.get('blocks_typing')) is not bool
+            or not isinstance(value.get('state'), str)):
+        raise RuntimeError('PROMPT_STATE_UNKNOWN: zero text input')
+    if value['blocks_typing'] or value['state'] != 'empty':
+        raise RuntimeError('PROMPT_NOT_EMPTY: zero text input; preserve receiver draft')
+    return value
 
 
 def _screen_regions(screen):
@@ -40,6 +70,29 @@ def residual_marker(screen, marker):
     return marker in _screen_regions(screen)[1]
 
 
+def owned_draft(screen, text):
+    """A marker alone never authorizes submitting additional receiver text.
+
+    Reuse measured rendering equivalence, without waiting for a stable screen
+    or an idle turn. The simple one-row form has no footer/body ambiguity.
+    """
+    from cmux_bridge import _exact_pending_text
+    if _exact_pending_text(screen, text):
+        return True
+    region = _screen_regions(screen)[1]
+    rows = region.splitlines()
+    return (len(rows) == 1 and
+            re.sub(r"^\s*[›❯>][ \u00a0]?", "", rows[0], count=1) == text)
+
+
+def recovery_draft_reason(screen, text):
+    if is_compacting(screen):
+        return "COMPACTION_STILL_ACTIVE"
+    if not owned_draft(screen, text):
+        return "ORIGINAL_DRAFT_NOT_OWNED"
+    return None
+
+
 def recover_once(text, marker, *, original, recheck, emit, key, observe,
                  read_screen, wait_seconds=None):
     """Spend an unused extra Enter on the original current-contract attempt.
@@ -56,7 +109,8 @@ def recover_once(text, marker, *, original, recheck, emit, key, observe,
     events = original.get("events", [])
     phases = [event.get("phase") for event in events]
     if (any(phases.count(p) != 1 for p in
-            ("PASTE_INTENT", "PASTED", "ENTER_INTENT", "ENTER_SENT"))
+            ("PASTE_INTENT", "PASTED", "ENTER_INTENT"))
+            or phases.count("ENTER_SENT") + phases.count("ENTER_NOT_SENT") != 1
             or any("TAB" in str(p) or p in ("EXTRA_ENTER_INTENT", "EXTRA_ENTER_SENT",
                     "NATIVE_INPUT_INTENT") for p in phases)):
         raise ValueError("DIRECT_RECOVERY_BUDGET_UNAVAILABLE: reconcile original")
@@ -67,20 +121,25 @@ def recover_once(text, marker, *, original, recheck, emit, key, observe,
         if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
             screen = read_screen()
             emit("DIRECT_RECOVERY_OBSERVATION", screen)
-            if is_compacting(screen):
-                result = dict(result, extra_enter_deferred="COMPACTION_STILL_ACTIVE")
-            elif not residual_marker(screen, marker):
-                result = dict(result, extra_enter_deferred="MARKER_NOT_VISIBLE")
+            reason = recovery_draft_reason(screen, text)
+            if reason:
+                result = dict(result, extra_enter_deferred=reason)
             else:
                 result = observe()
                 if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
                     recheck()
-                    emit("EXTRA_ENTER_INTENT", screen)
-                    recheck()
-                    operations = 1
-                    key("enter")
-                    emit("EXTRA_ENTER_SENT")
-                    result = observe_receipt(observe, seconds, stop_when_queued=True)
+                    screen = read_screen()
+                    emit("DIRECT_RECOVERY_OBSERVATION", screen)
+                    reason = recovery_draft_reason(screen, text)
+                    if reason:
+                        result = dict(result, extra_enter_deferred=reason)
+                    else:
+                        emit("EXTRA_ENTER_INTENT", screen)
+                        recheck()
+                        operations = 1
+                        key("enter")
+                        emit("EXTRA_ENTER_SENT")
+                        result = observe_receipt(observe, seconds, stop_when_queued=True)
         return dict(result, transport=TRANSPORT, recovered="enter" if operations else "observed",
                     input_operations=operations, terminal_input_operations=operations,
                     extra_enter=operations, retries=0)
@@ -90,29 +149,51 @@ def recover_once(text, marker, *, original, recheck, emit, key, observe,
 
 
 def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
-              wait_seconds=None):
+              wait_seconds=None, submit=None, preflight=None):
     if not isinstance(marker, str) or not marker or marker not in text:
         raise ValueError("DIRECT_UNIQUE_MARKER_REQUIRED")
     seconds = wait_budget(wait_seconds)
     started = time.monotonic()
     operations = 0
     extra = False
+    host_queued = False
     try:
         recheck()
+        if preflight is not None:
+            preflight()  # Read-only; failure precedes every input intent.
         # Empty screen records that no composer inspection was required. The
         # caller captures/fsyncs the original transcript fence in this event.
         emit("PASTE_INTENT", "")
         recheck()
-        operations += 1
-        paste(text)
-        emit("PASTED")
-        emit("ENTER_INTENT", "")
-        recheck()
-        operations += 1
-        key("enter")
-        emit("ENTER_SENT")
+        if submit is not None:
+            # Both intents precede the one host request. A refused/uncertain
+            # command never falls through to a separate send-key operation.
+            emit("ENTER_INTENT", "")
+            recheck()
+            operations += 2
+            acknowledgement = submit(text)
+            if (not isinstance(acknowledgement, dict)
+                    or type(acknowledgement.get("submitted")) is not bool):
+                raise RuntimeError("PROTECTED_SUBMIT_OUTCOME_UNKNOWN: observe original")
+            host_queued = acknowledgement.get('delivery') == 'queued'
+            if host_queued:
+                emit('PASTE_QUEUED')  # Host PTY queue is not native reception.
+            else:
+                emit("PASTED")
+                emit("ENTER_SENT" if acknowledgement["submitted"] else "ENTER_NOT_SENT")
+        else:
+            operations += 1
+            paste(text)
+            emit("PASTED")
+            emit("ENTER_INTENT", "")
+            recheck()
+            operations += 1
+            key("enter")
+            emit("ENTER_SENT")
         result = observe_receipt(observe, seconds, stop_when_queued=True)
-        if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
+        if host_queued and not result.get('confirmed'):
+            result = dict(result, extra_enter_deferred='HOST_INPUT_QUEUED')
+        if not host_queued and not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
             # Observation here is solely for the extra-key budget, never for
             # initial admission. A queue already accepted input needs no key.
             screen = read_screen()
@@ -134,18 +215,29 @@ def send_once(text, marker, *, recheck, emit, paste, key, observe, read_screen,
                 emit("DIRECT_RECOVERY_OBSERVATION", screen)
             if is_compacting(screen):
                 result = dict(result, extra_enter_deferred="COMPACTION_STILL_ACTIVE")
-            elif residual_marker(screen, marker):
+            elif owned_draft(screen, text):
                 result = observe()  # close the receipt race before one extra key
                 if not result.get("confirmed") and result.get("state") == "NATIVE_PENDING":
-                    emit("EXTRA_ENTER_INTENT", screen)
                     recheck()
-                    extra = True
-                    operations += 1
-                    key("enter")
-                    emit("EXTRA_ENTER_SENT")
-                    result = observe_receipt(observe, seconds, stop_when_queued=True)
+                    screen = read_screen()
+                    emit("DIRECT_RECOVERY_OBSERVATION", screen)
+                    reason = recovery_draft_reason(screen, text)
+                    if reason:
+                        result = dict(result, extra_enter_deferred=reason)
+                    else:
+                        emit("EXTRA_ENTER_INTENT", screen)
+                        recheck()
+                        extra = True
+                        operations += 1
+                        key("enter")
+                        emit("EXTRA_ENTER_SENT")
+                        result = observe_receipt(observe, seconds, stop_when_queued=True)
+            else:
+                result = dict(result, extra_enter_deferred="ORIGINAL_DRAFT_NOT_OWNED")
         return dict(result, transport=TRANSPORT, input_operations=operations,
-                    terminal_input_operations=operations, submission_key="enter",
+                    terminal_input_operations=operations,
+                    submission_key="agent-aware-return" if submit is not None else "enter",
+                    protected_submit=submit is not None,
                     extra_enter=int(extra), retries=0,
                     elapsed_ms=round((time.monotonic() - started) * 1000, 3))
     except BaseException as exc:

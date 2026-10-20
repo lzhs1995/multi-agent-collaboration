@@ -8,7 +8,7 @@ from unittest.mock import patch
 import cmux_bridge as bridge
 import cmux_direct_input as direct
 import cmux_native_delivery as native
-from native_test_support import NativeFixture
+from native_test_support import NativeFixture, ScreenSequence
 
 
 class DirectInputTests(unittest.TestCase):
@@ -36,22 +36,22 @@ class DirectInputTests(unittest.TestCase):
             self.send(reconcile_only=True)
         self.assertEqual(before, self.f.send.call_count)
 
-    def test_existing_draft_does_not_gate_or_get_cleared(self):
-        original_draft = 'Unsubmitted receiver note. '
-        self.f.key.side_effect = self.f.receipt_on_key(original_draft + self.text)
-        with patch.object(bridge, 'read_screen', side_effect=AssertionError('no composer admission')):
-            result = self.send()
-        self.assertTrue(result['confirmed'])
-        self.f.send.assert_called_once_with('target', self.text)
-        self.f.key.assert_called_once_with('target', 'enter')
-        self.assertIn(original_draft, self.f.transcript.read_text())
+    def test_refused_protected_submit_never_issues_a_followup_key(self):
+        self.f.submit.side_effect = RuntimeError('cmux refused an existing receiver draft')
+        with self.assertRaisesRegex(RuntimeError, 'existing receiver draft'):
+            self.send()
+        self.f.send.assert_not_called()
+        self.f.key.assert_not_called()
+        with self.assertRaises(bridge.TaskPackContractError):
+            self.send()
+        self.f.submit.assert_called_once()
 
     def test_one_extra_enter_after_compaction_ends_without_second_paste(self):
         def key(surface, value):
             if self.f.key.call_count == 2:
                 self.f.append_user(self.text)
         self.f.key.side_effect = key
-        with patch.object(bridge, 'read_screen', side_effect=['Compacting context', '> ' + self.text]):
+        with patch.object(bridge, 'read_screen', side_effect=ScreenSequence(['Compacting context', '> ' + self.text])):
             result = bridge.submit_text('target', self.text, marker=self.marker, wait_seconds=1)
         self.assertTrue(result['confirmed'])
         self.assertEqual(result['extra_enter'], 1)
@@ -82,7 +82,7 @@ class DirectInputTests(unittest.TestCase):
     def test_deferred_then_public_recovery_confirms_once(self):
         self.deferred()
         self.f.key.side_effect = self.f.receipt_on_key(self.text)
-        with patch.object(bridge, 'read_screen', return_value='> receiver note ' + self.text):
+        with patch.object(bridge, 'read_screen', return_value='> ' + self.text):
             self.assertTrue(self.send(recover_stranded=True)['confirmed'])
             with self.assertRaisesRegex(bridge.TaskPackContractError, 'RECEIPT_EXISTS'):
                 self.send(recover_stranded=True)
@@ -133,7 +133,7 @@ class DirectInputTests(unittest.TestCase):
             if self.f.key.call_count == 2:
                 self.f.append_user(self.text)
         self.f.key.side_effect = key
-        with patch.object(bridge, 'read_screen', return_value='> ' + self.text + '\n ? for shortcuts'):
+        with patch.object(bridge, 'read_screen', return_value='› ' + self.text + '\n gpt-5.4'):
             self.assertTrue(self.send()['confirmed'])
         self.assertEqual(self.f.key.call_count, 2)
         self.f.send.assert_called_once()
@@ -153,6 +153,50 @@ class DirectInputTests(unittest.TestCase):
             with self.assertRaises(bridge.DispatchUnconfirmed):
                 self.send(recover_stranded=True)
         self.f.key.assert_called_once()
+
+    def test_mixed_receiver_draft_never_gets_automatic_extra_enter(self):
+        for draft in ('unfinished user question ' + self.text,
+                      self.text + ' user is still typing', self.marker):
+            with self.subTest(draft=draft):
+                events, keys, pastes = [], [], []
+                result = direct.send_once(self.text, self.marker,
+                    recheck=lambda: None, emit=lambda phase, *args: events.append(phase),
+                    paste=pastes.append, key=keys.append,
+                    observe=lambda: {'confirmed': False, 'state': 'NATIVE_PENDING'},
+                    read_screen=lambda: '> ' + draft, wait_seconds=0)
+                self.assertEqual(pastes, [self.text])
+                self.assertEqual(keys, ['enter'])
+                self.assertEqual(result['extra_enter'], 0)
+                self.assertNotIn('EXTRA_ENTER_INTENT', events)
+
+    def test_mixed_draft_cannot_spend_deferred_original_budget(self):
+        self.deferred()
+        for draft in ('unfinished question ' + self.text,
+                      self.text + ' extra receiver words', self.marker):
+            with self.subTest(draft=draft), patch.object(
+                    bridge, 'read_screen', return_value='❯ ' + draft):
+                with self.assertRaises(bridge.DispatchUnconfirmed) as caught:
+                    self.send(recover_stranded=True)
+                self.assertEqual(caught.exception.details['extra_enter_deferred'],
+                                 'ORIGINAL_DRAFT_NOT_OWNED')
+        self.f.key.assert_called_once()
+        self.f.send.assert_called_once()
+
+    def test_user_edit_after_receipt_check_prevents_extra_enter(self):
+        self.deferred()
+        screens = ScreenSequence(['> ' + self.text, '> ' + self.text + ' user edit'])
+        with patch.object(bridge, 'read_screen', side_effect=screens):
+            with self.assertRaises(bridge.DispatchUnconfirmed):
+                self.send(recover_stranded=True)
+        self.f.key.assert_called_once()
+        original = json.loads(next(self.f.home.rglob('attempt-0001.json')).read_text())
+        self.assertNotIn('EXTRA_ENTER_INTENT', [e['phase'] for e in original['events']])
+
+    def test_owned_body_does_not_require_idle_or_fullscreen_stability(self):
+        for status in ('• Working (11s)', '✻ Thinking… (2m)', '◎ /goal active (2h)'):
+            self.assertTrue(direct.owned_draft(status + '\n❯ ' + self.text, self.text))
+        for text in (' ' + self.text, self.text + ' ', self.text + '\nextra'):
+            self.assertFalse(direct.owned_draft('❯ ' + text, self.text))
 
     def test_status_scope_separates_compaction_from_payload_and_old_activity(self):
         for status in ('Compacting context', '• Compacting context (31s • esc to interrupt)',
@@ -208,13 +252,17 @@ class DirectInputTests(unittest.TestCase):
         self.f.send.assert_called_once()
         self.f.key.assert_not_called()
 
-    def test_process_change_after_paste_prevents_key(self):
+    def test_process_change_during_host_submit_prevents_receipt_or_further_key(self):
         def paste(*args):
             self.f.process_state['birth'] = 'different process'
         self.f.send.side_effect = paste
         with self.assertRaisesRegex(native.NativeDeliveryError, 'BIRTH'):
             self.send()
-        self.f.key.assert_not_called()
+        # The host request has already attempted its paste/return. A later
+        # identity change cannot undo it, and must never earn a receipt or
+        # authorize another key.
+        self.f.submit.assert_called_once()
+        self.f.key.assert_called_once()
 
     def test_old_marker_and_assistant_or_tool_echo_do_not_confirm(self):
         self.f.append_user(self.text)  # before original intent
@@ -236,7 +284,8 @@ class DirectInputTests(unittest.TestCase):
             paths = list(self.f.home.rglob('attempt-0001.json'))
             attempt = json.loads(paths[0].read_text())
             self.assertEqual(attempt['native_binding']['receipt_marker'], self.marker)
-            self.assertEqual(attempt['events'][-1]['phase'], 'PASTE_INTENT')
+            self.assertEqual(attempt['events'][-1]['phase'], 'ENTER_INTENT')
+            self.assertEqual([e['phase'] for e in attempt['events']].count('PASTE_INTENT'), 1)
             native.original_input_event(attempt['events'], attempt['native_binding'], self.text)
         self.f.send.side_effect = paste
         self.f.key.side_effect = self.f.receipt_on_key(self.text)

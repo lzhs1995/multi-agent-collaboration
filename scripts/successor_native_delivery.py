@@ -454,8 +454,21 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                 if phase in ("NATIVE_INPUT_INTENT", "PASTE_INTENT", "ENTER_INTENT", "EXTRA_ENTER_INTENT"):
                     operations += 1
             def terminal():
-                from cmux_direct_input import send_once as direct_send
+                from cmux_direct_input import (send_once as direct_send,
+                    protected_submit_result, require_prompt_state)
+                def prompt_preflight():
+                    target = binding['identity']['target_surface_uuid']
+                    workspace = binding['identity']['target_workspace_uuid']
+                    raw = bridge._run_successor('rpc', 'surface.input_state',
+                        json.dumps(dict(surface_id=target, workspace_id=workspace)),
+                        artifact=artifact, receipt_contract=binding.get('receipt_contract'))
+                    return require_prompt_state(raw, target, workspace)
                 return direct_send(wire, marker, recheck=recheck, emit=emit,
+                    preflight=prompt_preflight,
+                    submit=lambda value: protected_submit_result(bridge._run_successor(
+                        "paste", "--submit", "--surface", binding["identity"]["target_surface_uuid"],
+                        "--", value, artifact=artifact, receipt_contract=binding.get("receipt_contract"),
+                        json_output=True)),
                     paste=lambda value: bridge._run_successor("rpc", "terminal.paste", json.dumps({
                         "text": value, "submit_key": "none",
                         "workspace_id": binding["identity"]["target_workspace_uuid"],

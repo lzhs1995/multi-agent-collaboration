@@ -287,7 +287,8 @@ handoff separately.
 
 0.4.29 also holds the existing pane/target delivery mutex throughout a non-submitting
 handshake probe. Automatic terminal writers use the same lock and recheck the
-receiver identity before every input; current sends do not wait for a composer. See [input collisions](references/input-collisions.md).
+receiver identity before every input; current sends do not wait for an idle turn
+or a stable full screen. Preserve actual user drafts. See [input collisions](references/input-collisions.md).
 
 ## Core Contract
 
@@ -318,7 +319,10 @@ coordinator may use `successor-rebind-v2` for the exact designated cross-workspa
 peer. Do not infer a new task, shared writer or replacement session from permission
 to communicate. Raw terminal communication is allowed with native marker verification.
 
-Claude terminal input never clears existing text and sends without a composer gate.
+Claude terminal input never clears existing text. A strict read-only input-state
+check preserves receiver drafts; normal work, Goal and compaction do not prohibit sending.
+Use the protected paste/submit route and distinguish its submission acknowledgement
+from a native receipt. Never follow a refused or unknown paste with Enter.
 Codex uses native input when available and terminal fallback before input when unavailable.
 Busy work alone blocks neither direction. Send ready messages promptly through
 the supported entrypoint; do not pause native Goal or require an idle turn.
@@ -508,8 +512,8 @@ scope. Use a second executor only for an independent unresolved deliverable.
 Read [receiver input and delivery](references/receiver-input-and-delivery.md)
 when a surface may have returned to a shell or a send is unconfirmed. Current
 input type, submission, consumption, agreement and accepted output are separate
-facts. The bridge authenticates the original live agent process, preserves drafts and
-does not use composer/idle state as an admission gate.
+facts. The bridge authenticates the original live agent process and preserves drafts.
+An occupied or unknown input region prevents pasting; a busy agent turn does not.
 
 - Normal supervision is callback-first: one sentinel per task, 7200-second stable
   cadence, 1800 seconds for medium-risk work, 300-600 only for bounded high-risk
