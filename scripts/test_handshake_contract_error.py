@@ -198,7 +198,8 @@ class HandshakeContractRegression(unittest.TestCase):
         self.assertEqual((saved["status"], saved["lifecycle"]), ("FAIL", "REJECTED"))
         self.assertFalse(saved["executor_ack"])
         self.assertFalse(saved["all_executors_acked"])
-        self.assertEqual(saved["unproven_executors"], ["target"])
+        self.assertEqual(saved["unproven_executors"], ["target", "never-dispatched"])
+        self.assertEqual(saved["unstarted_executors"], ["never-dispatched"])
         self.assertEqual(saved["executor_count"], 2)
         first, failed = saved["executors"]
         self.assertEqual((first["status"], first["lifecycle"]), ("PASS", "ACKED"))
