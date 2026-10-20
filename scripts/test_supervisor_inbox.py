@@ -123,6 +123,30 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(self.discover(), [])
         self.assertEqual(list(external.iterdir()), [])
 
+    def test_failed_publish_never_leaves_a_partial_final_snapshot(self):
+        _state, current = self.request()
+        with mock.patch.object(inbox.os, 'link', side_effect=OSError('publish interrupted')):
+            self.assertEqual(self.discover(), [])
+        root = ready.state_root() / 'supervisor-request-snapshots-v1'
+        self.assertEqual(list(root.iterdir()), [])
+        frontier = ready.read_json(self.cursor() / 'frontier.json')
+        self.assertEqual(frontier['snapshot_failures'], {'count': 1, 'last_kind': 'OSError'})
+        notice = self.discover(now=161.)[0]
+        self.assertEqual(Path(notice['request']).read_bytes(), current.read_bytes())
+
+    def test_snapshot_is_complete_and_read_only_before_final_name_is_published(self):
+        _state, current = self.request()
+        original = current.read_bytes()
+        link = inbox.os.link
+        def inspect(source, destination, **kwargs):
+            fd = os.open(source, os.O_RDONLY, dir_fd=kwargs['src_dir_fd'])
+            with os.fdopen(fd, 'rb') as stream:
+                self.assertEqual(stream.read(), original)
+                self.assertFalse(os.fstat(stream.fileno()).st_mode & 0o222)
+            return link(source, destination, **kwargs)
+        with mock.patch.object(inbox.os, 'link', side_effect=inspect):
+            self.assertEqual(len(self.discover()), 1)
+
     def test_wrong_workspace_supervisor_paths_templates_and_inactive_requests_refused(self):
         _state, path = self.request()
         body = ready.read_json(path)

@@ -110,15 +110,38 @@ def freeze_request(raw):
     """Preserve the already-read bytes; never reread the rotating source path."""
     root = ready.state_root() / 'supervisor-request-snapshots-v1'
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    info = root.lstat()
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-            or info.st_mode & 0o077):
-        raise ValueError('UNSAFE_REQUEST_SNAPSHOT_DIRECTORY')
     digest = hashlib.sha256(raw).hexdigest()
     reference = dict(format=references.SINGLE_LINE_FORMAT,
                      path=str(root / (digest + '.txt')),
                      sha256=digest, bytes=len(raw))
-    references.persist(reference, raw.decode('utf-8'))
+    text = raw.decode('utf-8')
+    folder = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary = '.staging-' + uuid.uuid4().hex
+    try:
+        info = os.fstat(folder)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('UNSAFE_REQUEST_SNAPSHOT_DIRECTORY')
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=folder)
+        try:
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fchmod(handle.fileno(), 0o400)
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, digest + '.txt', src_dir_fd=folder,
+                        dst_dir_fd=folder, follow_symlinks=False)
+            except FileExistsError:
+                pass  # Only verify an existing snapshot, never repair it.
+        finally:
+            os.unlink(temporary, dir_fd=folder)
+        current = root.lstat()
+        if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError('REQUEST_SNAPSHOT_DIRECTORY_CHANGED')
+        references.verify(reference, text)
+    finally:
+        os.close(folder)
     return reference
 
 
@@ -205,6 +228,7 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                 last_emitted = 0.0
             pending.append((last_emitted, str(path), path, seen))
         notices = []
+        snapshot_failures = dict(count=0)
         ordered = sorted(pending, key=lambda item: item[:2])
         frontier['pending'] = []
         for index, (last_emitted, _name, path, seen) in enumerate(ordered):
@@ -239,9 +263,11 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                 continue
             try:
                 frozen = freeze_request(raw)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
                 # Do not publish a moving path or overwrite a conflicting
                 # snapshot. Other valid callers can still be discovered.
+                snapshot_failures.update(count=snapshot_failures['count'] + 1,
+                                         last_kind=type(exc).__name__)
                 continue
             notice = dict(state='REQUEST_DISCOVERED', request=frozen['path'],
                           source_request=str(path),
@@ -259,6 +285,7 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                 break
         if emit is not None:
             emit(notices)  # exceptions leave all cursors unchanged; no lost notice
+            frontier['snapshot_failures'] = snapshot_failures
             for notice in notices:
                 ready.write_json(cursor / Path(notice['source_request']).name, notice)
             # Empty/invalid pages also advance, but observation never consumes.

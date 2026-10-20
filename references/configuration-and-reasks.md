@@ -705,5 +705,16 @@ original mailbox; discovery does not accept the request or consume the reply.
 The hook copies only authenticated, bounded requests it is about to expose,
 reuses identical snapshots, and commits its discovery cursor only after output
 flush. A failed or conflicting snapshot is never replaced with a mutable path.
-Snapshots are evidence; do not delete them on a timer while original replies or
-consumption remain unresolved. Existing episodes and old notices are unchanged.
+The final SHA filename is published only after a private staging file has been
+fully written, made read-only and synced. Interrupted staging writes cannot
+poison that final filename. A bounded `snapshot_failures` count and last error
+kind are recorded in the discovery frontier after successful output flush;
+other valid requests may still be offered.
+
+A snapshot may exist even when the subsequent output failed. File existence
+alone therefore proves neither hook exposure nor supervisor reading. Snapshots
+are evidence; do not delete them on a timer while original replies or consumption
+remain unresolved. Their accumulated size is not bounded by the per-sweep limit.
+Any later cleanup must verify terminal reply/consumption state, preserve the
+original notices and use the task's authorized archive process. Existing
+episodes and old notices are unchanged.
