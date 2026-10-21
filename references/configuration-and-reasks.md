@@ -724,3 +724,33 @@ remain unresolved. Their accumulated size is not bounded by the per-sweep limit.
 Any later cleanup must verify terminal reply/consumption state, preserve the
 original notices and use the task's authorized archive process. Existing
 episodes and old notices are unchanged.
+
+### Stable hook entry
+
+Claude runs a handler defined identically in several settings files once. A
+release-pinned command made the startup `--settings` copy and the hot-reloaded
+user copy differ after every upgrade, so both guard generations ran. An
+immutable release therefore registers one release-independent handler per guard:
+`<python> -B ~/.local/share/multi-agent-collaboration/bin/mac_hook_dispatch.py
+--hook <guard>`, with the Stop idle guard's 75-second timeout unchanged. User
+settings, cc-switch profiles, magpie profiles and cmux `ccc-compact-*` settings
+receive the same bytes; a per-session cmux snapshot is rewritten only when it
+already carries an owned handler. `disableAllHooks`, provider fields and foreign
+hooks are preserved.
+
+On each call the dispatcher reads CURRENT, checks the release layout, python and
+manifest hash, and execs that release's pinned `scripts/mac_hook_entry.py`. That
+router uses the installer's single route table, so direct guards, advisory hooks
+and the explicit proactive Stop continuation keep their entrypoints and exit
+status. A release without the router is reached through a frozen legacy route.
+An invalid CURRENT or release is skipped with exit 0 for ordinary tools, a short
+stderr reason and `hook-dispatch-v1/LAST-SKIP.json` (reason, hook, time, pids;
+never the payload). Doctor reports whether the installed entry matches the
+release and what CURRENT resolves to. During such a skip no MAC guard runs.
+
+The installer and guardian publish the entry before any configuration names it
+and never remove it: a process whose settings were pinned at startup keeps
+calling that path until it exits. A development checkout keeps direct paths.
+Upgrading a configuration to the stable form does not unload an older guard
+already held in a running client's startup settings; only that process ending
+does. Explicit old-controller CLI commands keep their original release.

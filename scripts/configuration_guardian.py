@@ -393,6 +393,85 @@ def reconcile_profiles(home, manager, apply):
     return result
 
 
+MAX_STARTUP_FILES = 64
+
+
+def startup_files(home, manager):
+    """Claude --settings sources outside cc-switch, bounded and non-recursive.
+
+    magpie profiles and ccc-compact cmux settings are always startup sources.
+    Other cmux per-session snapshots are touched only if they already carry an
+    owned handler, so a snapshot without our hooks is never given new ones.
+    """
+    home = Path(home)
+    found = []
+    for directory, pattern, always in ((home / '.config/magpie-stations/profiles', '*.json', True),
+                                       (home / '.cmuxterm/claude-settings', 'ccc-compact-*.json', True),
+                                       (home / '.cmuxterm/claude-settings', '*.json', False)):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for path in sorted(directory.glob(pattern)):
+            if path.name.startswith('.') or path.is_symlink() or not path.is_file() or path in found:
+                continue
+            if not always:
+                try:
+                    _raw, doc = read_json(path)
+                except (OSError, ValueError):
+                    continue
+                try:
+                    if not isinstance(doc, dict) or doc == foreign_hooks_doc(doc, manager, home):
+                        continue
+                except ValueError:
+                    continue  # malformed foreign snapshot: never ours to rewrite
+            found.append(path)
+            if len(found) >= MAX_STARTUP_FILES:
+                return found
+    return found
+
+
+def foreign_hooks_doc(doc, manager, home):
+    """The same document with every owned handler removed."""
+    stripped = copy.deepcopy(doc)
+    if 'hooks' in stripped:
+        stripped['hooks'] = foreign_hooks(doc, manager, home)
+    return stripped
+
+
+def reconcile_startup_files(home, manager, apply):
+    results = []
+    for path in startup_files(home, manager):
+        result = dict(path=str(path), change_needed=False, changed=False, hooks_disabled=False)
+        try:
+            raw, doc = read_json(path)
+            if not isinstance(doc, dict) or path.stat().st_uid != os.getuid():
+                result['status'] = 'SKIPPED_NOT_OWNED_OBJECT'
+                results.append(result)
+                continue
+            new = normalized(doc, manager, home, True)
+            result.update(change_needed=doc != new, hooks_disabled=doc.get('disableAllHooks') is True)
+            if apply and doc != new:
+                profile_backup(home, path, raw)
+                atomic_json(path, new, raw, compare=True)
+                result['changed'] = True
+            result['status'] = 'CHECKED'
+        except RuntimeError:
+            result['status'] = 'CONCURRENT_EDIT'
+        except (OSError, ValueError) as exc:
+            result['status'] = 'SKIPPED_' + type(exc).__name__
+        results.append(result)
+    return results
+
+
+def publish_stable_entry(home, manager, apply):
+    """A configuration may name the stable path only once it is installed."""
+    owner = getattr(manager, 'release_home', lambda: None)()
+    if owner is None or owner.resolve() != Path(home).resolve():
+        return dict(status='NOT_STABLE_RELEASE')
+    if not apply:
+        return dict(status='PLANNED', path=str(manager.dispatcher_path(home)))
+    return dict(status='PUBLISHED', **manager.publish_dispatcher(home))
+
+
 def reconcile(home, manifest_path, apply=False):
     home = Path(home).expanduser().resolve()
     root = state_root(home)
@@ -406,11 +485,15 @@ def reconcile(home, manifest_path, apply=False):
         current, manager = load_release(home, manifest_path)
         result = dict(status='RECONCILED', source=current['source'], at_epoch=time.time(),
                       apply=apply, input_operations=0, runtime_reload_proven=False)
+        # Raises before any write if the stable entry cannot be installed.
+        result['stable_entry'] = publish_stable_entry(home, manager, apply)
         result['profiles'] = reconcile_profiles(home, manager, apply)
         result['files'] = reconcile_files(home, manager, apply)
+        result['startup_files'] = reconcile_startup_files(home, manager, apply)
         if result['profiles']['status'] not in ('CHECKED', 'DATABASE_ABSENT'):
             result['status'] = result['profiles']['status']
-        elif any(x['hooks_disabled'] for x in result['files']) or result['profiles'].get('hooks_disabled'):
+        elif (any(x['hooks_disabled'] for x in result['files'] + result['startup_files'])
+              or result['profiles'].get('hooks_disabled')):
             result['status'] = 'HOOKS_DISABLED_EXTERNALLY'
         if apply:
             atomic_json(root / 'configuration-guardian-v1/STATUS.json', result)
@@ -481,6 +564,9 @@ def reconcile_profile(home, manifest_path, settings, apply=False, expected_sha25
             result['status'] = 'CONCURRENT_EDIT'
             return result
         new = normalized(doc, manager, home, True)
+        # A normalized profile may still name a deleted stable dispatcher.
+        # Explicit repair republishes it without changing the guardian job.
+        result['stable_entry'] = publish_stable_entry(home, manager, apply)
         result.update(change_needed=doc != new, non_hook_fields_preserved=True,
                       foreign_hooks_preserved=True,
                       planned_sha256=digest((json.dumps(new, ensure_ascii=False, indent=2) + '\n').encode()))

@@ -193,17 +193,40 @@ def _locked(root, journal, artifact):
     workspace = successor_rebind._uuid(artifact["target_workspace_uuid"], "target_workspace_uuid")
     pane = successor_rebind._uuid(artifact["target_pane_uuid"], "target_pane_uuid")
     target = successor_rebind._uuid(artifact["target_executor_uuid"], "target_executor_uuid")
-    locks = (legacy / ("pane-" + _hash((workspace + ":" + pane).encode()) + ".lock"),
-             legacy / ("target-" + _hash(target.encode()) + ".lock"),
-             task / ("target-" + _hash(target.encode()) + ".lock"), journal / "delivery.lock")
+    locks = (("pane", legacy / ("pane-" + _hash((workspace + ":" + pane).encode()) + ".lock")),
+             ("legacy-target", legacy / ("target-" + _hash(target.encode()) + ".lock")),
+             ("task-target", task / ("target-" + _hash(target.encode()) + ".lock")),
+             ("journal", journal / "delivery.lock"))
     with contextlib.ExitStack() as stack:
-        for path in locks:
+        for kind, path in locks:
             lock = stack.enter_context(open_regular_lock(path))
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
-                raise native.NativeDeliveryError("SUCCESSOR_DELIVERY_IN_PROGRESS: zero input") from exc
+                # This lock failed before any input. Open PIDs are advisory:
+                # lsof cannot establish which process owns a flock.
+                error = native.NativeDeliveryError(
+                    "SUCCESSOR_DELIVERY_IN_PROGRESS: zero input; held_lock=%s path=%s holder_pids=%s"
+                    % (kind, path, _lock_holders(path)))
+                error.details = dict(input_operations=0, held_lock=kind, path=str(path),
+                                     pid_observation='open-file-pids-not-proven-flock-holders',
+                                     retry_mode='original-reconcile-only')
+                raise error from exc
         yield
+
+
+def _lock_holders(path):
+    """Bounded, best-effort open-file PID observation; no lock is removed."""
+    import subprocess
+    try:
+        run = subprocess.run(['/usr/sbin/lsof', '-t', '--', str(path)], capture_output=True,
+                             text=True, timeout=2, check=False)
+        if run.returncode not in (0, 1) or len(run.stdout) > 8192:
+            return 'unmeasured'
+    except (OSError, subprocess.TimeoutExpired):
+        return 'unmeasured'
+    pids = sorted({int(p) for p in run.stdout.split() if p.isdigit() and int(p) != os.getpid()})
+    return ','.join(map(str, pids[:32])) or 'none-observed'
 
 
 def _event(journal, phase, **fields):

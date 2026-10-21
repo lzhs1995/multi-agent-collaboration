@@ -1,5 +1,11 @@
-## Unreleased
+## 0.4.59
 
+- Register one stable, release-independent hook handler per guard for immutable releases. A fixed dispatcher resolves CURRENT and checks the router and local runtime dependencies before execution; identical handler bytes across settings sources support deduplication. Existing client adoption remains separately verified. Invalid CURRENT/release is a diagnosable exit-0 skip.
+- Publish the dispatcher before configuration names it and never remove it. Guardian also reconciles magpie profiles, cmux `ccc-compact-*` settings and cmux snapshots that already carry owned handlers, preserving `disableAllHooks`, providers and foreign hooks. Running clients keep their startup-pinned older guards until they exit.
+- Diagnose pinned router import failures separately from unknown hooks. Doctor exercises real entrypoints inside an isolated namespace; normalized single-profile repair republishes a missing dispatcher without touching guardian registration or foreign dispatcher bytes.
+- Upgrade only exact reviewed predecessor dispatcher hashes, retaining the displaced inode and intent/result evidence; detected concurrent conflicts never trigger a swap-back. Reject unchecked bytecode and verify every scripts member, including non-Python data, before imports. Direct entry bootstraps its verifier from pinned source.
+- Ignore Python environment overrides in registered/resolved hook interpreters with -BE; diagnose and refuse an unisolated direct entry with an external bytecode cache prefix.
+- Name the contended successor delivery lock and path before input. Bounded open-file PID observations remain advisory; original controller, lock order, drafts and input budgets stay unchanged.
 - Document supervisor STANDBY precedence over the 60-second idle inquiry and how executors read bridge zero-input versus pending results (Claude-B CC948292 field evidence, 2026-10-21).
 
 ## 0.4.58
