@@ -73,10 +73,14 @@ def verify_source():
             raise RouterFailure('RELEASE_MANIFEST_MISMATCH')
         verifier = SCRIPTS / 'mac_hook_dispatch.py'
         pin = manifest['files']['scripts/mac_hook_dispatch.py']
-        if verifier.is_symlink() or hashlib.sha256(verifier.read_bytes()).hexdigest() != pin['sha256']:
+        verified_bytes = verifier.read_bytes()
+        if verifier.is_symlink() or hashlib.sha256(verified_bytes).hexdigest() != pin['sha256']:
             raise RouterFailure('RELEASE_MEMBER_CHANGED')
-        import mac_hook_dispatch
-        mac_hook_dispatch.verify_runtime(source, manifest)
+        # Importing this bootstrap would allow an unchecked cache to execute
+        # before it can reject __pycache__. Execute the exact verified source.
+        namespace = {'__file__': str(verifier), '__name__': 'mac_verified_dispatch'}
+        exec(compile(verified_bytes, str(verifier), 'exec'), namespace)
+        namespace['verify_runtime'](source, manifest)
     except RouterFailure:
         raise
     except Exception as exc:

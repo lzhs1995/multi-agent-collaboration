@@ -2,6 +2,7 @@
 """Manage only this checkout's skill links and hook commands. Dry-run by default."""
 import argparse
 import copy
+import ctypes
 import hashlib
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -120,6 +122,12 @@ def doctor_probe(name, *, home=None, argv=None):
 
 DISPATCHER = Path('.local/share/multi-agent-collaboration/bin/mac_hook_dispatch.py')
 RELEASES = Path('.local/share/multi-agent-collaboration/releases')
+# Exact reviewed predecessor bytes, never a mutable owner/header claim.
+# 6115fba6b5f709fc179b774120b19fdfe750d392; 1bf770adae69161c3b3a7c4b8410e9a6942bdf78.
+APPROVED_DISPATCHERS = frozenset({
+    '1e1104958d0715aa0c346b4d186a2c1d85cf6b2f908f9489f19f00723856aa19',
+    'a2e0b9b94d41dc4659df269b0b33bd84c39c77d2959c90ec4bd1807158973f48',
+})
 
 
 def route(name, root=None):
@@ -179,46 +187,146 @@ def dispatcher_check(home):
     return result
 
 
-def publish_dispatcher(home):
-    """Install the stable entry before any configuration names it.
+def _dispatcher_snapshot(directory, name):
+    """Read a bounded regular file through the held, nonredirected parent."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    except FileNotFoundError:
+        return dict(kind='absent')
+    except OSError:
+        raise RuntimeError('foreign hook dispatcher preserved') from None
+    with os.fdopen(fd, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_size > 4 * 1024 * 1024
+                or before.st_uid != os.getuid() or before.st_mode & 0o022):
+            raise RuntimeError('foreign hook dispatcher preserved')
+        raw = stream.read(4 * 1024 * 1024 + 1)
+        after = os.fstat(stream.fileno())
+        named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    if (len(raw) != before.st_size or len(raw) > 4 * 1024 * 1024
+            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            or (after.st_dev, after.st_ino) != (named.st_dev, named.st_ino)):
+        raise RuntimeError('concurrent hook dispatcher preserved')
+    return dict(kind='file', sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw),
+                device=before.st_dev, inode=before.st_ino,
+                mode=stat.S_IMODE(before.st_mode), uid=before.st_uid)
 
-    First publication is exclusive; identical bytes may be reused. A different
-    existing file belongs to another installation and is never overwritten.
-    A process whose settings were
-    pinned at startup keeps invoking this path until it exits, and a missing
-    script would make every PreToolUse fail with Python's exit status 2.
+
+def _exchange_dispatcher(directory, old, new):
+    """Exchange names atomically. Never fall back to destructive replace."""
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == 'darwin':
+        operation = library.renameatx_np
+    elif sys.platform.startswith('linux') and hasattr(library, 'renameat2'):
+        operation = library.renameat2
+    else:
+        raise RuntimeError('preserving dispatcher upgrade unavailable on this platform')
+    operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    # Both platforms use 2 for name exchange.
+    if operation(directory, os.fsencode(old), directory, os.fsencode(new), 2):
+        number = ctypes.get_errno()
+        raise OSError(number, os.strerror(number))
+
+
+def _dispatcher_evidence(directory, name, body):
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                 dir_fd=directory)
+    with os.fdopen(fd, 'w') as stream:
+        json.dump(body, stream, sort_keys=True)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.fsync(directory)
+
+
+def publish_dispatcher(home):
+    """Publish before hook registration; upgrade only exact approved bytes.
+
+    First publication is exclusive. Upgrades exchange names and retain the
+    displaced inode plus intent/result evidence. The comparison is separate
+    from exchange, NOT atomic CAS: a late foreign replacement may be displaced,
+    but is preserved and detected. Never swap back or automatically roll back
+    over another writer. Identical bytes reuse their existing inode.
     """
     source = Path(__file__).resolve().with_name('mac_hook_dispatch.py')
     raw = source.read_bytes()
     target = dispatcher_path(home)
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
-    if target.parent.is_symlink() or target.is_symlink():
+    if target.parent.resolve() != target.parent or target.is_symlink():
         raise RuntimeError('symlinked hook dispatcher refused: ' + str(target))
-    if target.exists():
-        if not target.is_file():
-            raise RuntimeError('foreign hook dispatcher preserved: ' + str(target))
-        if target.read_bytes() == raw:
-            return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=False)
-        raise RuntimeError('foreign hook dispatcher preserved: ' + str(target))
-    fd, pending = tempfile.mkstemp(prefix='.mac-hook-dispatch-', dir=target.parent)
+    parent = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent_pin = os.fstat(parent)
+    token = uuid.uuid4().hex
+    pending = '.mac-hook-dispatch-' + token
+    intent_name = pending + '.intent.json'
+    result_name = pending + '.result.json'
+    intent_written = False
+    staged_pin = None
     try:
+        before = _dispatcher_snapshot(parent, target.name)
+        digest = hashlib.sha256(raw).hexdigest()
+        if before.get('sha256') == digest:
+            return dict(path=str(target), sha256=digest, changed=False)
+        if before['kind'] != 'absent' and before.get('sha256') not in APPROVED_DISPATCHERS:
+            raise RuntimeError('foreign hook dispatcher preserved: ' + str(target))
+        fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=parent)
         with os.fdopen(fd, 'wb') as handle:
             handle.write(raw)
             handle.flush()
             os.fchmod(handle.fileno(), 0o644)
             os.fsync(handle.fileno())
-        # Linking a complete temporary file publishes it only if the target is
-        # still absent. A concurrent creator must survive this installation.
-        try:
-            os.link(pending, target)
-        except FileExistsError:
-            if not target.is_symlink() and target.is_file() and target.read_bytes() == raw:
-                return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=False)
-            raise RuntimeError('concurrent hook dispatcher preserved: ' + str(target)) from None
+        staged_pin = _dispatcher_snapshot(parent, pending)
+        if _dispatcher_snapshot(parent, target.name) != before:
+            raise RuntimeError('concurrent hook dispatcher preserved: ' + str(target))
+        if before['kind'] == 'absent':
+            # A concurrent creator must survive the exclusive link.
+            try:
+                os.link(pending, target.name, src_dir_fd=parent, dst_dir_fd=parent,
+                        follow_symlinks=False)
+            except FileExistsError:
+                if _dispatcher_snapshot(parent, target.name).get('sha256') == digest:
+                    return dict(path=str(target), sha256=digest, changed=False)
+                raise RuntimeError('concurrent hook dispatcher preserved: ' + str(target)) from None
+            os.fsync(parent)
+        else:
+            intent = dict(schema='mac-hook-dispatch-upgrade-v1', target=str(target),
+                          displaced=str(target.parent / pending), before=before, staged=staged_pin,
+                          atomic_cas=False, automatic_reverse_allowed=False,
+                          parent_device=parent_pin.st_dev, parent_inode=parent_pin.st_ino)
+            # From this point, every outcome retains the staging/displaced file.
+            intent_written = True
+            _dispatcher_evidence(parent, intent_name, intent)
+            _exchange_dispatcher(parent, pending, target.name)
+            observed = _dispatcher_snapshot(parent, target.name)
+            displaced = _dispatcher_snapshot(parent, pending)
+            current_parent = target.parent.lstat()
+            conflict = (observed != staged_pin or displaced != before
+                        or (current_parent.st_dev, current_parent.st_ino)
+                        != (parent_pin.st_dev, parent_pin.st_ino))
+            result = dict(intent, observed=observed, displaced_snapshot=displaced,
+                          status='FOREIGN_CONFLICT_PRESERVED' if conflict else 'PUBLISHED')
+            _dispatcher_evidence(parent, result_name, result)
+            if conflict:
+                raise RuntimeError('concurrent hook dispatcher preserved at ' + str(target.parent / pending))
+        if _dispatcher_snapshot(parent, target.name).get('sha256') != digest:
+            raise RuntimeError('concurrent hook dispatcher preserved: ' + str(target))
+        return dict(path=str(target), sha256=digest, changed=True,
+                    upgraded=before['kind'] != 'absent',
+                    displaced=str(target.parent / pending) if intent_written else None,
+                    intent=str(target.parent / intent_name) if intent_written else None,
+                    result=str(target.parent / result_name) if intent_written else None,
+                    atomic_cas=False)
     finally:
-        if os.path.exists(pending):
-            os.unlink(pending)
-    return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=True)
+        if not intent_written and staged_pin is not None:
+            try:
+                pin = os.stat(pending, dir_fd=parent, follow_symlinks=False)
+                if (pin.st_dev, pin.st_ino) == (staged_pin['device'], staged_pin['inode']):
+                    os.unlink(pending, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        os.close(parent)
 
 
 def release_source(path, home):

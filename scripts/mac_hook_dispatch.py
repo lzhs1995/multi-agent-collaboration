@@ -55,10 +55,11 @@ def _pinned(source, manifest, relative):
 
 
 def verify_runtime(source, manifest):
-    """Pin local runtime dependencies before the in-release router imports them.
+    """Pin every scripts member before imports, including runtime data.
 
-    The complete release has a small runtime tree. Hash it on each invocation;
-    a cache shared by hooks would hide later edits. Tests are never hook targets.
+    -B stops cache writes, not cache reads. No bytecode cache is allowed, even
+    if its source is pinned. Hash each invocation rather than hide later edits
+    behind a shared verification cache. Test fixtures are covered as well.
     """
     scripts = source / 'scripts'
     if scripts.is_symlink() or not scripts.is_dir():
@@ -66,19 +67,30 @@ def verify_runtime(source, manifest):
     members = manifest.get('files')
     if not isinstance(members, dict):
         raise Skip('RELEASE_MANIFEST_INVALID')
-    required = {'scripts/manage_install.py', 'scripts/cmux_workflow_advisory.py'}
+    required = ({'scripts/manage_install.py', 'scripts/cmux_workflow_advisory.py'}
+                if 'scripts/mac_hook_entry.py' in members else set())
     for relative in members:
         if not isinstance(relative, str):
             raise Skip('RELEASE_MANIFEST_INVALID')
         parts = Path(relative).parts
-        if parts and parts[0] == 'scripts' and relative.endswith('.py'):
-            if '..' in parts or Path(relative).is_absolute():
-                raise Skip('RELEASE_MANIFEST_INVALID')
-            if not Path(relative).name.startswith('test_'):
-                required.add(relative)
-    for path in scripts.rglob('*.py'):
-        if not path.name.startswith('test_'):
-            required.add(str(path.relative_to(source)))
+        if ('..' in parts or Path(relative).is_absolute()
+                or Path(relative).as_posix() != relative):
+            raise Skip('RELEASE_MANIFEST_INVALID')
+        if parts and parts[0] == 'scripts':
+            required.add(relative)
+    # os.walk does not follow directory symlinks. Inspect those explicitly,
+    # rather than let rglob omit an unverified import subtree.
+    for directory, children, filenames in os.walk(scripts, followlinks=False):
+        for name in children + filenames:
+            path = Path(directory) / name
+            if path.is_symlink():
+                raise Skip('RELEASE_MEMBER_SYMLINK')
+            if name == '__pycache__' or path.suffix in {'.pyc', '.pyo'}:
+                raise Skip('RELEASE_BYTECODE_CACHE_REFUSED')
+            if name in filenames:
+                if not path.is_file():
+                    raise Skip('RELEASE_MEMBER_NOT_REGULAR')
+                required.add(path.relative_to(source).as_posix())
     for relative in sorted(required):
         path = source / relative
         if any(parent.is_symlink() for parent in path.parents if parent != source and source in parent.parents):
@@ -119,8 +131,10 @@ def resolve(home, hook):
     if hashlib.sha256(raw).hexdigest() != expected_manifest or not isinstance(manifest, dict):
         raise Skip('RELEASE_MANIFEST_MISMATCH')
     entry = _pinned(source, manifest, 'scripts/mac_hook_entry.py')
+    # Legacy direct guards import local dependencies too. Cache/data checks
+    # apply to every routed release, not only one with the new entry script.
+    verify_runtime(source, manifest)
     if entry is not None:
-        verify_runtime(source, manifest)
         return [str(python), '-B', str(entry), '--hook', hook]
     # Rollback to a release without the in-release router.
     if hook in LEGACY_DIRECT:

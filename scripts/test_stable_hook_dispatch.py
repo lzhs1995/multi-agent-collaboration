@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import py_compile
 from pathlib import Path
 import shlex
 import subprocess
@@ -310,14 +311,137 @@ class StableHookTests(unittest.TestCase):
 
     def test_dispatcher_first_publication_does_not_overwrite_concurrent_creator(self):
         target = m.dispatcher_path(self.home)
-        def concurrent_creator(source, destination):
-            Path(destination).write_bytes(b'# concurrent owner\n')
+        def concurrent_creator(source, destination, **kwargs):
+            target.write_bytes(b'# concurrent owner\n')
             raise FileExistsError(str(destination))
         with patch.object(m.os, 'link', side_effect=concurrent_creator), \
                 self.assertRaisesRegex(RuntimeError, 'concurrent hook dispatcher preserved'):
             m.publish_dispatcher(self.home)
         self.assertEqual(target.read_bytes(), b'# concurrent owner\n')
         self.assertFalse(list(target.parent.glob('.mac-hook-dispatch-*')))
+
+    def old_dispatcher(self):
+        raw = (SCRIPTS / 'fixtures/mac-hook-dispatch-6115fba.txt').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         '1e1104958d0715aa0c346b4d186a2c1d85cf6b2f908f9489f19f00723856aa19')
+        target = m.dispatcher_path(self.home)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw)
+        return target, raw
+
+    def test_dispatcher_upgrades_exact_reviewed_predecessor_and_retains_inode(self):
+        target, raw = self.old_dispatcher()
+        inode = target.stat().st_ino
+        result = m.publish_dispatcher(self.home)
+        self.assertTrue(result['changed'])
+        self.assertTrue(result['upgraded'])
+        self.assertFalse(result['atomic_cas'])
+        self.assertEqual(target.read_bytes(), (SCRIPTS / 'mac_hook_dispatch.py').read_bytes())
+        retained = Path(result['displaced'])
+        self.assertEqual(retained.read_bytes(), raw)
+        self.assertEqual(retained.stat().st_ino, inode)
+        self.assertEqual(json.loads(Path(result['result']).read_bytes())['status'], 'PUBLISHED')
+        self.assertFalse(m.publish_dispatcher(self.home)['changed'])
+
+    def test_dispatcher_predecessor_tamper_and_owner_header_are_foreign(self):
+        target, raw = self.old_dispatcher()
+        for foreign in (raw + b'\n# altered\n', b'# owned by multi-agent-collaboration\n'):
+            target.write_bytes(foreign)
+            inode = target.stat().st_ino
+            with self.assertRaisesRegex(RuntimeError, 'foreign hook dispatcher preserved'):
+                m.publish_dispatcher(self.home)
+            self.assertEqual((target.read_bytes(), target.stat().st_ino), (foreign, inode))
+        self.assertFalse(list(target.parent.glob('.mac-hook-dispatch-*')))
+
+    def test_dispatcher_late_foreign_replacement_is_retained_without_swap_back(self):
+        target, _ = self.old_dispatcher()
+        real_exchange = m._exchange_dispatcher
+        foreign = b'# concurrently installed by another writer\n'
+        def late_replacement(directory, old, new):
+            replacement = target.with_name('foreign')
+            replacement.write_bytes(foreign)
+            os.replace(replacement, target)
+            real_exchange(directory, old, new)
+        with patch.object(m, '_exchange_dispatcher', side_effect=late_replacement) as exchange, \
+                self.assertRaisesRegex(RuntimeError, 'concurrent hook dispatcher preserved'):
+            m.publish_dispatcher(self.home)
+        self.assertEqual(exchange.call_count, 1)
+        records = list(target.parent.glob('.mac-hook-dispatch-*.result.json'))
+        self.assertEqual(len(records), 1)
+        record = json.loads(records[0].read_bytes())
+        self.assertEqual(record['status'], 'FOREIGN_CONFLICT_PRESERVED')
+        self.assertEqual(Path(record['displaced']).read_bytes(), foreign)
+        self.assertFalse(record['automatic_reverse_allowed'])
+
+    def test_dispatcher_writer_after_exchange_is_kept_at_target(self):
+        target, raw = self.old_dispatcher()
+        real_exchange = m._exchange_dispatcher
+        foreign = b'# after exchange writer\n'
+        def later_replacement(directory, old, new):
+            real_exchange(directory, old, new)
+            replacement = target.with_name('foreign')
+            replacement.write_bytes(foreign)
+            os.replace(replacement, target)
+        with patch.object(m, '_exchange_dispatcher', side_effect=later_replacement), \
+                self.assertRaisesRegex(RuntimeError, 'concurrent hook dispatcher preserved'):
+            m.publish_dispatcher(self.home)
+        self.assertEqual(target.read_bytes(), foreign)
+        record = json.loads(next(target.parent.glob('.mac-hook-dispatch-*.result.json')).read_bytes())
+        self.assertEqual(Path(record['displaced']).read_bytes(), raw)
+
+    def test_dispatcher_upgrade_sync_error_retains_intent_and_displaced_inode(self):
+        target, raw = self.old_dispatcher()
+        real_evidence = m._dispatcher_evidence
+        def sync_error(directory, name, body):
+            if name.endswith('.result.json'):
+                raise OSError('simulated result fsync failure')
+            real_evidence(directory, name, body)
+        with patch.object(m, '_dispatcher_evidence', side_effect=sync_error), self.assertRaises(OSError):
+            m.publish_dispatcher(self.home)
+        intent = json.loads(next(target.parent.glob('.mac-hook-dispatch-*.intent.json')).read_bytes())
+        self.assertEqual(Path(intent['displaced']).read_bytes(), raw)
+        self.assertEqual(target.read_bytes(), (SCRIPTS / 'mac_hook_dispatch.py').read_bytes())
+
+    def test_real_entry_rejects_unchecked_bytecode_and_direct_bootstrap_cache(self):
+        source = self.runtime_release()
+        cache = source / 'scripts/__pycache__'
+        for name in ('manage_install', 'mac_hook_dispatch'):
+            with self.subTest(name=name):
+                malicious = self.home / 'poison.py'
+                malicious.write_text('print("UNVERIFIED_BYTECODE_MUST_NOT_RUN")\n')
+                destination = cache / (name + '.' + sys.implementation.cache_tag + '.pyc')
+                py_compile.compile(str(malicious), cfile=str(destination),
+                                   invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+                for script in (SCRIPTS / 'mac_hook_dispatch.py', source / 'scripts/mac_hook_entry.py'):
+                    run = subprocess.run([sys.executable, '-B', str(script), '--hook', 'cmux_workspace_guard'],
+                                         input='{}', text=True, capture_output=True, timeout=15,
+                                         env=dict(os.environ, HOME=str(self.home)))
+                    self.assertEqual((run.returncode, run.stdout), (0, ''), run.stderr)
+                    self.assertIn('RELEASE_BYTECODE_CACHE_REFUSED', run.stderr)
+                destination.unlink()
+        # Even an empty cache dir is refused: never imply -B suppresses reads.
+        self.assertEqual(self.skip(), 'RELEASE_BYTECODE_CACHE_REFUSED')
+        cache.rmdir()
+        self.assertEqual(self.run_dispatcher('{}', 'cmux_workspace_guard').stdout.strip(), 'PINNED_GUARD {}')
+
+    def test_all_runtime_data_is_pinned_and_directory_symlinks_are_rejected(self):
+        members = {str(path.relative_to(SCRIPTS.parent)): path.read_bytes()
+                   for path in SCRIPTS.glob('*.py') if not path.name.startswith('test_')}
+        members['scripts/cmux_workspace_guard.py'] = b'import sys\nprint("PINNED_GUARD", sys.stdin.read())\n'
+        members['scripts/fixtures/runtime-data.txt'] = b'fixed data\n'
+        source = self.release('0.4.59-aaaaaaaaaaaa', members)
+        data = source / 'scripts/fixtures/runtime-data.txt'
+        self.assertEqual(self.run_dispatcher('{}', 'cmux_workspace_guard').stdout.strip(), 'PINNED_GUARD {}')
+        data.chmod(0o644)
+        data.write_bytes(b'changed data\n')
+        self.assertEqual(self.skip(), 'RELEASE_MEMBER_CHANGED')
+        data.write_bytes(members['scripts/fixtures/runtime-data.txt'])
+        extra = source / 'scripts/foreign.so'
+        extra.write_bytes(b'unmanifested executable\n')
+        self.assertEqual(self.skip(), 'RELEASE_HOOK_DEPENDENCY_MISSING')
+        extra.unlink()
+        (source / 'scripts/redirect').symlink_to(self.home, target_is_directory=True)
+        self.assertEqual(self.skip(), 'RELEASE_MEMBER_SYMLINK')
 
     def test_dispatcher_identical_publication_reuses_existing_inode(self):
         first = m.publish_dispatcher(self.home)

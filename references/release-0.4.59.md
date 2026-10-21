@@ -4,8 +4,11 @@ Release-pinned command strings let an old Claude startup settings file and a
 newly loaded global file register different commands for the same guard. New
 immutable-release installations use one stable command per guard:
 `~/.local/share/multi-agent-collaboration/bin/mac_hook_dispatch.py --hook NAME`.
-The entry resolves CURRENT and verifies its pinned manifest, router and complete
-local Python runtime dependencies on every invocation before importing them.
+The entry resolves CURRENT and verifies its pinned manifest, router and every
+scripts member, including data and test fixtures, before importing them.
+Bytecode caches (including empty __pycache__ directories) are refused because
+Python -B prevents writing, not reading, them. Direct router calls bootstrap
+the verifier from its exact pinned source bytes rather than import a cache.
 It execs the current release's Python/router with stdin
 unchanged; the router preserves each guard's original route and exit status.
 
@@ -21,8 +24,15 @@ from an unknown hook name. Doctor exercises the real dispatcher/router in an
 isolated namespace and rejects diagnostic skips, even when they exit zero.
 Explicit single-profile reconciliation also republishes an absent dispatcher
 when the profile already uses the stable form. Preview never publishes; repair
-does not change guardian registration, and differing existing dispatcher bytes
-are preserved. A deliberate guardian pause stays under its original owner.
+does not change guardian registration. Only exact SHA-256 bytes of reviewed
+predecessor dispatchers can be upgraded; owner comments confer no authority.
+An upgrade exchanges names and retains the displaced inode, original snapshot,
+intent and result. Comparison and exchange are separate, not atomic CAS. A
+concurrent foreign replacement may be displaced but remains intact at the
+recorded staging path; a detected conflict stops registration and never swaps
+back over a later writer. Foreign bytes seen before publication are left in
+place. Identical publication reuses its inode. A deliberate guardian pause
+stays under its original owner.
 
 Successor lock refusal identifies the contended shared lock and path before
 input. Bounded `holder_pids` observation lists open-file PIDs, which are advisory
