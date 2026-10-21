@@ -1,3 +1,15 @@
+## 0.4.61
+
+- Make bounded JSONL scans progress through large complete records with a 256KiB polling budget and an 8MiB record limit. Keep incomplete records and exact offset/bytes/SHA evidence, including original CRLF/LF bytes.
+- Exclude `isMeta` hook feedback from native user receipts; tool results, queued attachments and API wrappers remain insufficient receipt evidence.
+- Suppress automatic terminal inquiries after three distinct same-class native provider failures, or an authentication/billing failure. Native API success rearms the circuit; file inquiries continue and provider settings remain unchanged.
+- Refuse an exited shell before native input and verify the original V2 body identity and exact bytes before sending or reconciling a notice.
+- Add explicit original-executor `register-successor` preview/apply with exact authorization and plan hashes, last-moment native target checks, archived preimages and recoverable registration. Retain original pending messages, callback and reservation ownership, including same-surface supervisor thread changes.
+- Add authenticated monotonic work checkpoints with immutable receipts, unique work/issue progress and directory-sync recovery. Executor reports never supply parent acceptance.
+- Preserve the complete reviewed 0.4.60 file issuer/controller range without extending historical authority. Add critical dependency pins.
+- Bound each author's submitted, unreviewed peer work to two packages during Codex-unavailable continuation; drain an existing excess without invalidating it. Thesis-refiner consumes the shared contract.
+- Separate progress and final output paths, preserve callback-bound reports across later revisions, and record missing toolchains as NOT_RUN. Clarify queued-task context, evidence-only duplicate links and build-specific native socket availability without granting resend authority.
+
 ## 0.4.60
 
 - Persist file-only preference for new enrollment and provide authenticated zero-input reply observation under the original episode lock; preserve changed ANSWERED source bodies as immutable snapshots.

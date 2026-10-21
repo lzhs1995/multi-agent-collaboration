@@ -235,6 +235,40 @@ class NativeCase:
 
 
 class NativeFileAcceptance(unittest.TestCase):
+    def test_claude_hook_meta_cannot_confirm_task_marker(self):
+        with NativeCase() as case:
+            binding = case.bind()
+            binding.update(receipt_contract='native-user-marker-v1',
+                           receipt_marker='native-independent-01')
+            fence, intent = case.fence(binding)
+            offset, raw = case.append(dict(case.user_record(
+                text='Stop hook feedback: reserved task native-independent-01'), isMeta=True))
+            result = native.probe(binding, PAYLOAD, paste_fence=fence, not_before=intent)
+            self.assertFalse(result['confirmed'])
+            self.assertFalse(native.validate_proof(binding, PAYLOAD,
+                case.raw_proof(binding, offset, raw), paste_fence=fence, not_before=intent))
+            case.append(case.user_record(text='Operator continuation native-independent-01'))
+            self.assert_received(case, binding, fence, intent, cursor=result['next_offset'])
+
+    def test_tool_and_api_queue_evidence_do_not_confirm_native_user_receipt(self):
+        with NativeCase() as case:
+            binding = case.bind()
+            binding.update(receipt_contract='native-user-marker-v1',
+                           receipt_marker='native-independent-01')
+            fence, intent = case.fence(binding)
+            tool = case.user_record()
+            tool['message']['content'] = [dict(type='tool_result', tool_use_id='tool-1',
+                                               content='ENQ native-independent-01')]
+            case.append(tool)
+            case.append(dict(type='api-request-blob', sessionId=SESSION,
+                message=dict(role='user', content='The user sent a new message: native-independent-01')))
+            case.append(case.queued_record())
+            result = native.probe(binding, PAYLOAD, paste_fence=fence, not_before=intent)
+            self.assertFalse(result['confirmed'])
+            self.assertEqual(result['state'], 'NATIVE_QUEUED')
+            case.append(case.user_record())
+            self.assert_received(case, binding, fence, intent, cursor=result['next_offset'])
+
     def test_generated_summary_is_not_receipt_or_valid_old_proof(self):
         for flags in ({'isCompactSummary': True}, {'isVisibleInTranscriptOnly': True},
                       {'isCompactSummary': True, 'isVisibleInTranscriptOnly': True}):

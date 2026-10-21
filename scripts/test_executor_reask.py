@@ -52,6 +52,10 @@ class Base(unittest.TestCase):
         marker_reader = mock.patch.object(lifecycle, 'ACTIVE_DIR', self.home / 'active')
         marker_reader.start()
         self.addCleanup(marker_reader.stop)
+        provider_reader = mock.patch('executor_provider_circuit.terminal_gate',
+            return_value=dict(suppress=False, status='UNMEASURED_TEST_FIXTURE', input_operations=0))
+        provider_reader.start()
+        self.addCleanup(provider_reader.stop)
         self.channel = self.home / 'channel'
         self.channel.mkdir()
         self.transcript = self.home / 't.jsonl'

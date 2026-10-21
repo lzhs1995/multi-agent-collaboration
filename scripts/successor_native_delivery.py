@@ -255,6 +255,10 @@ def _original(journal, artifact, text, marker):
             raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
     elif wire != text or attempt.get("body_pin") is not None:
         raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
+    if 'supplied_reference' in attempt:
+        if (prompt_reference.wire_reference(text) != attempt['supplied_reference']
+                or prompt_reference.validate_wire_body(text) != attempt.get('supplied_body_pin')):
+            raise native.NativeDeliveryError('SUCCESSOR_SUPPLIED_BODY_CHANGED')
     events = [json.loads(read_bytes(p)) for p in sorted(journal.glob("event-*.json"))]
     if not any(event.get("phase") in ("PASTE_INTENT", "NATIVE_INPUT_INTENT") for event in events):
         return attempt, None, None
@@ -441,6 +445,11 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
     if key not in (None, "enter", "tab"):
         raise ValueError("SUCCESSOR_UNSUPPORTED_KEY")
     prompt_reference._ordinary(text)
+    # plan() deliberately performs no IO. A caller may supply its preplanned
+    # wire, so validate the already referenced body before reserving any input.
+    # Never create a nested reference around a missing original BODY.
+    supplied_reference = prompt_reference.wire_reference(text)
+    supplied_pin = prompt_reference.validate_wire_body(text) if supplied_reference is not None else None
     root, journal = _paths(artifact, marker, state_root)
     with _locked(root, journal, artifact):
         if (journal / "attempt.json").exists():
@@ -458,6 +467,8 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                        wire_sha256=_hash(wire.encode()), body_reference=reference,
                        body_pin=body_pin, native_binding=binding, created_at_epoch=time.time(),
                        controller_provenance=controller_provenance(__file__))
+        if supplied_reference is not None:
+            attempt.update(supplied_reference=supplied_reference, supplied_body_pin=supplied_pin)
         _exclusive_json(journal / "attempt.json", attempt)
         operations = 0
         try:
@@ -465,6 +476,8 @@ def submit(bridge, artifact, text, *, marker=None, key=None, state_root=None, wa
                 require_bound(bridge, artifact, binding, wire)
                 if reference is not None and prompt_reference.verify(reference, text) != body_pin:
                     raise native.NativeDeliveryError("SUCCESSOR_ORIGINAL_BODY_CHANGED")
+                if supplied_reference is not None and prompt_reference.validate_wire_body(text) != supplied_pin:
+                    raise native.NativeDeliveryError('SUCCESSOR_SUPPLIED_BODY_CHANGED')
             def emit(phase, screen=None, *, evidence=None):
                 nonlocal operations
                 recheck()

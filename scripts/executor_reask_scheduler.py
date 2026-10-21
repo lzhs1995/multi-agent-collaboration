@@ -137,6 +137,8 @@ def binding(state):
     # native identity when registering/reusing a historical inquiry.
     if 'executor_identity' in state:
         value['executor_identity'] = copy.deepcopy(state['executor_identity'])
+    if 'successor_registration' in state:
+        value['successor_registration'] = copy.deepcopy(state['successor_registration'])
     if state.get('continuation'):
         from executor_reask_lifecycle import binding as lifecycle_binding
         value['continuation'] = lifecycle_binding(state['continuation'])
@@ -384,7 +386,7 @@ def _restore_enrollment(path, raw):
 
 
 def _commit(state, pins, previous, registration_raw, *, authorization, original, now,
-            resume_stopped=False):
+            resume_stopped=False, precommit_check=None):
     caller = state['caller_surface_uuid']
     path = enrollment_path(caller)
     secure_directory(path.parent)
@@ -432,6 +434,8 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
         ready.write_json(path, envelope)
         if _raw(reask.state_path(caller)) != before:
             raise ValueError('inquiry state changed during preparation')
+        if precommit_check is not None:
+            precommit_check()
         reask.save(candidate)
         _post_commit(tx, directory)
         ready.write_json(path, prepared)
@@ -448,8 +452,9 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
 
 
 @registration_result
-def start(live, *, now=None, authenticate_executor=False, **kwargs):
+def start(live, *, now=None, authenticate_executor=False, successor_transition=None, **kwargs):
     """Atomically register an explicitly authenticated new inquiry episode."""
+    realtime = now is None
     now = time.time() if now is None else now
     caller = canonical_uuid(live['caller_surface_uuid'])
     with registry_lock(), reask.episode_lock(caller):
@@ -458,6 +463,12 @@ def start(live, *, now=None, authenticate_executor=False, **kwargs):
         if reask.controller()['source'] != current['source']:
             raise ValueError('scheduler and inquiry controller differ')
         previous = reask.load(caller)
+        successor = None
+        if successor_transition is not None:
+            if not authenticate_executor or kwargs.get('file_only') is not True:
+                raise ValueError('successor registration requires original foreground executor and files only')
+            from executor_successor_registration import prepare_transition
+            successor = prepare_transition(successor_transition, previous, live, now=now)
         path = enrollment_path(caller)
         record = ready.read_json(path)
         if record and record.get('schema') == TRANSACTION_SCHEMA:
@@ -466,7 +477,11 @@ def start(live, *, now=None, authenticate_executor=False, **kwargs):
             if record and record.get('schema') == TRANSACTION_SCHEMA:
                 return dict(outcome='REGISTRATION_UNCOMMITTED', input_operations=0)
         state = reask.prepare_start_locked(caller, pins['target_surface_uuid'],
-                                            workspace=pins['workspace_uuid'], now=now, **kwargs)
+                                            workspace=pins['workspace_uuid'], now=now,
+                                            fresh_successor=successor is not None, **kwargs)
+        if successor is not None:
+            state['successor_registration'] = successor
+            state['paused_tasks'] = copy.deepcopy(previous.get('paused_tasks', []))
         if state.get('state') != reask.WAITING:
             return state
         raw = _raw(path)
@@ -485,14 +500,21 @@ def start(live, *, now=None, authenticate_executor=False, **kwargs):
             if not isinstance(native_identity, dict):
                 raise ValueError('new foreground inquiry requires its original executor identity')
             state['executor_identity'] = native_identity
+            if successor is not None and any(native_identity.get(key) != previous['executor_identity'].get(key)
+                                             for key in ('session_id', 'process', 'tty', 'caller_surface_uuid', 'workspace_uuid')):
+                raise ValueError('successor registration cannot replace the original executor')
         # The old stop file stays intact until the new registration commits.
         # Only an explicitly resumed, genuinely new episode may preview past it.
         preview_resume = bool(kwargs.get('resume_stopped') and (
             not previous or state.get('episode_id') != previous.get('episode_id')))
         _available(state, pins, now, preview_resume=preview_resume)
+        check = None
+        if successor is not None:
+            from executor_successor_registration import validate_commit
+            check = lambda: validate_commit(successor_transition, previous, now=time.time() if realtime else now)
         return _commit(state, pins, previous, raw, authorization='EXPLICIT_REASK_START',
                        original=reask.controller(), now=now,
-                       resume_stopped=kwargs.get('resume_stopped', False))
+                       resume_stopped=kwargs.get('resume_stopped', False), precommit_check=check)
 
 
 @registration_result

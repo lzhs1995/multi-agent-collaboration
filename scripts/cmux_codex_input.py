@@ -111,6 +111,36 @@ def read_metadata(client, binding, text):
     return metadata
 
 
+def read_terminal_outcomes(client, binding, text, *, limit=8):
+    """Read bounded original turn outcomes; this performs no input operation."""
+    native._validate_binding(binding, text)
+    if binding['provider'] != 'codex' or type(limit) is not int or not 1 <= limit <= 16:
+        raise native.NativeDeliveryError('CODEX_PROVIDER_OUTCOME_BINDING_REQUIRED')
+    thread_id = binding['session_id']
+    thread = client.request('thread/read', dict(threadId=thread_id, includeTurns=False))['thread']
+    if (not isinstance(thread, dict) or thread.get('id') != thread_id
+            or thread.get('path') != binding['transcript']['path']):
+        raise native.NativeDeliveryError('CODEX_PROVIDER_OUTCOME_THREAD_CHANGED')
+    turns = client.request('thread/turns/list', dict(threadId=thread_id, limit=limit,
+        sortDirection='desc', itemsView='notLoaded'))['data']
+    if (not isinstance(turns, list) or len(turns) > limit
+            or any(not isinstance(turn, dict) for turn in turns)):
+        raise native.NativeDeliveryError('CODEX_PROVIDER_OUTCOMES_INVALID')
+    result = []
+    for turn in reversed(turns):
+        attempt = _turn_id(turn.get('id'))
+        status, error = turn.get('status'), turn.get('error')
+        if status == 'failed' and isinstance(error, dict) and error:
+            result.append(dict(attempt_id=attempt, kind='API_ERROR', terminal=True,
+                error=_bounded(error), source='authenticated-native-turn-error'))
+        elif status == 'completed' and error is None:
+            result.append(dict(attempt_id=attempt, kind='API_SUCCESS', terminal=True,
+                source='authenticated-native-completed-turn'))
+    return dict(source='codex-native-terminal-outcomes-v1', thread_id=thread_id,
+        transcript_path=thread['path'], observed_at_epoch=time.time(), outcomes=result,
+        input_operations=0)
+
+
 def prepare(client, binding, text):
     """Bounded metadata only: never hydrate histories or resume another thread."""
     try:

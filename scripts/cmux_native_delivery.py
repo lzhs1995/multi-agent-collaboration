@@ -137,7 +137,7 @@ def _tree_row(bridge, target):
 def _target_process(row):
     listing = subprocess.run(["/bin/ps", "-ww", "-U", str(os.getuid()), "-o", "pid=,comm="],
                              capture_output=True, text=True, timeout=3, check=True)
-    matches = []
+    matches, shells = [], []
     for line in listing.stdout.splitlines():
         fields = line.strip().split(None, 1)
         if len(fields) != 2 or not fields[0].isdigit():
@@ -145,6 +145,18 @@ def _target_process(row):
         # ps labels only admit discovery. The kernel executable and full native
         # installation path must still pass _provider after the process read.
         name = Path(fields[1]).name
+        if name in ('sh', 'bash', 'zsh', 'fish'):
+            try:
+                shell = identity.process(int(fields[0]), validate_argv=False)
+            except identity.ProcessExited:
+                continue
+            if (shell['env'].get('CMUX_SURFACE_ID', '').upper() == row['target_surface_uuid'].upper()
+                    and shell['env'].get('CMUX_WORKSPACE_ID', '').upper() == row['workspace_uuid'].upper()):
+                tty = subprocess.run(['/bin/ps', '-p', str(shell['pid']), '-o', 'tty='],
+                    capture_output=True, text=True, timeout=3, check=True).stdout.strip()
+                if tty == row['tty'] and identity.process(shell['pid'], validate_argv=False) == shell:
+                    shells.append(dict(pid=shell['pid'], birth=shell['birth'], executable=shell['executable']))
+            continue
         if (name not in ("codex", "claude", "claude.exe", "node")
                 and _CLAUDE_NATIVE_VERSION.fullmatch(name) is None):
             continue
@@ -167,6 +179,12 @@ def _target_process(row):
         if identity.process(p["pid"]) != p:
             raise NativeDeliveryError("NATIVE_PROCESS_CHANGED")
         matches.append(p)
+    if not matches:
+        error = NativeDeliveryError('NATIVE_TARGET_RETURNED_TO_SHELL' if shells else 'NATIVE_TARGET_AGENT_ABSENT')
+        error.details = dict(target_surface_uuid=row['target_surface_uuid'],
+            workspace_uuid=row['workspace_uuid'], tty=row['tty'], shell_processes=shells[:16],
+            native_agent_count=0, input_operations=0, automatic_target_selection=False)
+        raise error
     if len(matches) != 1:
         raise NativeDeliveryError("NATIVE_TARGET_PROCESS_NOT_UNIQUE")
     return matches[0]

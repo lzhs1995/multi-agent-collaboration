@@ -236,7 +236,7 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
 def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels=None,
                          executor_ref='', now=None, reason='MANUAL', own_prefixes=(),
                          workspace='', purpose='REQUEST_NEXT_TASK', resume_stopped=False,
-                         continuing=False, continuation=None, file_only=False):
+                         continuing=False, continuation=None, file_only=False, fresh_successor=False):
     """Only the same complete inquiry binding can reuse a waiting episode.
 
     file_only is persisted as file_only_preference in a NEW episode only. An
@@ -254,7 +254,7 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
     old = load(caller)
     binding = dict(caller_surface_uuid=caller, supervisor=supervisor, task_id=task_id,
                    workspace_uuid=workspace, purpose=purpose)
-    if (old and all(old.get(key) == value for key, value in binding.items())
+    if (not fresh_successor and old and all(old.get(key) == value for key, value in binding.items())
             and (old.get('state') == WAITING or old.get('continuation') and old.get('state') != STOPPED)):
         if continuing and not old.get('continuation'):
             raise ValueError('existing episode must close before enabling continuation')
@@ -459,10 +459,31 @@ def open_marker(state, marker):
         return False
 
 
-def reply_record(body, source, **extra):
+def reply_record(body, source, *, raw_bytes=None, source_identity=None, **extra):
     raw = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-    return dict(source=source, body=body, body_sha256=ready.digest(raw),
+    record = dict(source=source, body=body, body_sha256=ready.digest(raw),
                 marker=body['marker'], status=body['status'], text=raw[:800], **extra)
+    record.update(canonical_body_sha256=record['body_sha256'],
+        body_sha256_encoding='canonical-json-utf8')
+    if raw_bytes is not None:
+        if not isinstance(raw_bytes, bytes):
+            raise ValueError('REPLY_RAW_BYTES_REQUIRED')
+        record.update(raw_sha256=hashlib.sha256(raw_bytes).hexdigest(), raw_bytes=len(raw_bytes),
+            raw_scope='native-transcript-record' if source == 'transcript' else 'exact-source-file',
+            source_identity=list(source_identity) if source_identity is not None else None)
+    return record
+
+
+def read_reply_file(path, source='mailbox'):
+    """Parse the same stable original bytes used by the raw hash."""
+    from cmux_evidence_io import snapshot
+    try:
+        raw, identity = snapshot(Path(path), limit=CHANNEL_FILE_BYTES)
+        text = raw.decode('utf-8')
+        body = json.loads(text) if source == 'mailbox' else replies.from_text(text)
+        return body, raw, identity
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None, None, None
 
 
 def valid_reply(state, body, markers, **binding):
@@ -507,9 +528,9 @@ def mailbox_reply(state):
                 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in marker)):
             continue
         path = ready.mailbox_dir(caller) / (marker + '.json')
-        body = ready.read_json(path)
+        body, raw, identity = read_reply_file(path)
         if valid_reply(state, body, [marker], **binding):
-            return reply_record(body, 'mailbox', path=str(path))
+            return reply_record(body, 'mailbox', path=str(path), raw_bytes=raw, source_identity=identity)
     return None
 
 
@@ -531,39 +552,44 @@ def find_reply(state, *, file_only=False):
     if direct:
         return direct
     for path in _recent_files(state['mailbox'], since):
-        body = ready.read_json(path)
+        body, raw, identity = read_reply_file(path)
         if matched(body):
-            return reply_record(body, 'mailbox', path=str(path))
+            return reply_record(body, 'mailbox', path=str(path), raw_bytes=raw, source_identity=identity)
     own = tuple([current_name(caller), 'EXECUTOR_REASK_'] + list(state.get('own_prefixes', [])))
     for channel in state.get('channels', []):
         for path in _recent_files(channel, since):
             if path.name.startswith(own) or path.suffix not in ('.json', '.md', '.txt'):
                 continue
-            try:
-                text = path.read_text(errors='replace')
-            except OSError:
-                continue
-            body = replies.from_text(text)
+            body, raw, identity = read_reply_file(path, 'channel')
             if matched(body):
-                return reply_record(body, 'channel', path=str(path))
+                return reply_record(body, 'channel', path=str(path), raw_bytes=raw, source_identity=identity)
     if not file_only and state.get('transcript') and state.get('tail_position'):
         try:
             tail = ready.Tail(state['transcript'], state['tail_position'])
         except (OSError, ValueError) as exc:
             state['transcript_error'] = str(exc)[:200]
             return None
-        for line in tail.lines():
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            texts = ready.user_texts(entry) if isinstance(entry, dict) else []
-            for text in texts:
-                body = replies.from_text(text)
-                if matched(body):
-                    state['tail_position'] = tail.position()
-                    return reply_record(body, 'transcript')
-        state['tail_position'] = tail.position()
+        try:
+            for index, line in enumerate(tail.lines()):
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                texts = ready.user_texts(entry) if isinstance(entry, dict) else []
+                for text in texts:
+                    body = replies.from_text(text)
+                    if matched(body):
+                        pin = tail.record_observations[index]
+                        return reply_record(body, 'transcript', raw_bytes=line + b'\n',
+                            source_identity=pin['identity'], transcript_record=dict(
+                                path=state['transcript'], **pin))
+        except (OSError, ValueError) as exc:
+            # A bad transcript does not remove the independent mailbox route.
+            # Keep the original boundary and all pending hashes; never skip it.
+            state['transcript_error'] = str(exc)[:200]
+        finally:
+            state['tail_position'] = tail.position()
+            state['transcript_observation'] = tail.observation
     return None
 
 
@@ -603,7 +629,7 @@ def write_channels(state, marker, text, now, status=WAITING):
                         ('caller_surface_uuid', 'supervisor', 'episode_id'))
                         or previous.get('status') == 'SUPERSEDED'):
                     continue
-            ready.write_json(path, dict(
+            payload = dict(
                 schema='executor-reask-current-v2', status=status, at_epoch=now,
                 episode_id=state['episode_id'], workspace_uuid=state.get('workspace_uuid', ''),
                 purpose=state.get('purpose', 'REQUEST_NEXT_TASK'),
@@ -616,7 +642,12 @@ def write_channels(state, marker, text, now, status=WAITING):
                 request=text, reply_mailbox=f"{state['mailbox']}/{marker}.json",
                 reply_template=replies.template(state, marker),
                 native_delivery_confirmed=False,
-                terminal_inputs_this_round=0 if status != WAITING else None))
+                terminal_inputs_this_round=0 if status != WAITING else None)
+            if state.get('successor_registration'):
+                target = state['successor_registration']['target']
+                payload['successor_supervisor_session_id'] = target['session_id']
+                payload['successor_registration_plan_sha256'] = state['successor_registration']['plan_sha256']
+            ready.write_json(path, payload)
             written.append(str(path))
         except OSError as exc:
             errors.append(dict(path=str(path), error_type=type(exc).__name__))
@@ -852,8 +883,22 @@ def default_send(state, marker, text):
         if pending.get('outcome') == 'CONFIRMED':
             state['terminal_last_confirmed'] = dict(pending)
             state['native_receipts'] = state.get('native_receipts', 0) + 1
-    from cmux_native_delivery import bind_target
-    provider = bind_target(bridge, state['supervisor'], text)['provider']
+    from cmux_native_delivery import bind_target, NativeDeliveryError
+    try:
+        target_binding = bind_target(bridge, state['supervisor'], text)
+    except NativeDeliveryError as exc:
+        if str(exc) not in ('NATIVE_TARGET_AGENT_ABSENT', 'NATIVE_TARGET_RETURNED_TO_SHELL'):
+            raise
+        state['supervisor_diagnostic'] = dict(error=str(exc), details=getattr(exc, 'details', None),
+            input_operations=0, next_action='Explicitly register an authenticated successor; never select another surface automatically.')
+        return dict(outcome='SKIPPED_SUPERVISOR_ABSENT', terminal=False, input_operations=0,
+            supervisor_diagnostic=state['supervisor_diagnostic'])
+    provider = target_binding['provider']
+    from executor_provider_circuit import terminal_gate
+    gate = terminal_gate(state, bridge, target_binding, text)
+    if gate.get('suppress'):
+        return dict(outcome='SKIPPED_PROVIDER_CIRCUIT_OPEN', terminal=False, input_operations=0,
+            provider_gate=gate)
     held, _screen = _held(bridge, state['supervisor'], state.get('asks', []),
                           state['caller_surface_uuid'], provider=provider)
     if held:
@@ -1153,6 +1198,12 @@ def summary(state, *, verification=None):
     closing = closing_channel_errors(state)
     result['channel_errors'] = dict(last_ask=ask_errors, last_closing=closing)
     result['partial_channel_failure'] = bool(ask_errors or closing)
+    result['provider_circuit'] = state.get('provider_circuit')
+    result['supervisor_diagnostic'] = state.get('supervisor_diagnostic')
+    result['transcript_observation'] = state.get('transcript_observation')
+    result['transcript_error'] = state.get('transcript_error')
+    from executor_work_checkpoint import progress
+    result['work_progress'] = progress(state)
     for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent',
                 'consume_result', 'observe_result', 'runner_returned', 'run_return_reason',
                 'wait_boundary'):
@@ -1208,6 +1259,18 @@ def _main(argv=None):
     sync_parser = sub.add_parser('confirm-sync',
                                  help='after COMMITTED_SYNC_UNKNOWN: verify the exact candidate, then retry only fsync')
     sync_parser.add_argument('--candidate-sha256', required=True)
+    work_parser = sub.add_parser('work-checkpoint', help='authenticate and persist exact work progress; no asks, acceptance or resource release')
+    work_parser.add_argument('--record-file', type=Path, required=True)
+    work_parser.add_argument('--record-sha256', required=True)
+    successor_parser = sub.add_parser('register-successor',
+        help='preview explicit original-executor successor file inquiries; apply requires the reviewed exact plan SHA')
+    successor_parser.add_argument('--supervisor', required=True)
+    successor_parser.add_argument('--authorization-file', type=Path, required=True)
+    successor_parser.add_argument('--authorization-sha256', required=True)
+    successor_parser.add_argument('--apply', action='store_true')
+    successor_parser.add_argument('--plan-sha256', default='')
+    successor_parser.add_argument('--resume-stopped', action='store_true',
+        help='requires explicit allow_resume_stopped=true in the pinned successor authorization')
     st = sub.add_parser('stop')
     st.add_argument('--reason', default='OPERATOR')
     e = sub.add_parser('enroll-existing', help='authenticate and register one existing episode; no tick or send')
@@ -1276,6 +1339,17 @@ def _main(argv=None):
         result = confirm_sync(caller, args.candidate_sha256)
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 0 if result['outcome'] == 'SYNC_CONFIRMED' else 2
+    elif args.cmd == 'work-checkpoint':
+        from executor_work_checkpoint import checkpoint
+        result = checkpoint(caller, args.record_file, args.record_sha256)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if result['outcome'] in ('WORK_CHECKPOINT_RECORDED', 'WORK_CHECKPOINT_ALREADY_RECORDED') else 2
+    elif args.cmd == 'register-successor':
+        from executor_successor_registration import register
+        result = register(caller, args.supervisor, args.authorization_file, args.authorization_sha256,
+            apply=args.apply, plan_sha256=args.plan_sha256, resume_stopped=args.resume_stopped)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if result['outcome'] in ('SUCCESSOR_READ_ONLY_PLAN', 'SUCCESSOR_INQUIRY_REGISTERED') else 2
     else:
         state = load(caller) or dict(outcome='NO_EPISODE')
         if state.get('registration'):

@@ -26,6 +26,7 @@ import threading
 import time
 import cmux_prompt_reference as prompt_reference
 import executor_reply as reply_contract
+from cmux_transcript_tail import TranscriptTail
 
 PREFIX = 'EXECUTOR_READY'
 ASK_INTERVAL = 60.0  # 兼容旧参数：现在仅为原请求的只读核收间隔。
@@ -37,6 +38,7 @@ HEARTBEAT_MAX_AGE = 180.0
 ASK_HISTORY = 20
 MAX_JSON_BYTES = 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 256 * 1024
+MAX_TRANSCRIPT_RECORD_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_SCAN = 128
 ASKING, ANSWERED, STOPPED = 'ASKING', 'ANSWERED', 'STOPPED'  # ASKING 仅用于识别旧进程。
 WAITING_DEPENDENCY, TIMED_OUT = 'WAITING_DEPENDENCY', 'TIMED_OUT'
@@ -246,42 +248,12 @@ def loop_live(record, now=None):
             and pid_runs_loop(record.get('pid'), record.get('argv', '')))
 
 
-class Tail:
-    """Read a bounded number of appended bytes from the same transcript inode."""
+class Tail(TranscriptTail):
+    """Bounded polling plus explicit incomplete-record progress on this inode."""
 
     def __init__(self, path, position=None):
-        self.path = Path(path) if path else None
-        st = self.path.stat() if self.path else None
-        if st and not stat.S_ISREG(st.st_mode):
-            raise ValueError('REPLY_TRANSCRIPT_NOT_REGULAR')
-        self.identity = [st.st_dev, st.st_ino] if st else None
-        self.offset = st.st_size if st else 0
-        if position is not None:
-            if (not isinstance(position, dict) or position.get('identity') != self.identity
-                    or type(position.get('offset')) is not int
-                    or not 0 <= position['offset'] <= self.offset):
-                raise ValueError('REPLY_TRANSCRIPT_CHANGED: preserve idle episode')
-            self.offset = position['offset']
-
-    def position(self):
-        return dict(identity=self.identity, offset=self.offset)
-
-    def lines(self):
-        if not self.path:
-            return []
-        fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-        with os.fdopen(fd, 'rb') as handle:
-            st = os.fstat(handle.fileno())
-            if (not stat.S_ISREG(st.st_mode) or [st.st_dev, st.st_ino] != self.identity
-                    or st.st_size < self.offset):
-                raise ValueError('REPLY_TRANSCRIPT_CHANGED')
-            handle.seek(self.offset)
-            data = handle.read(MAX_TRANSCRIPT_BYTES)
-        boundary = data.rfind(b'\n') + 1
-        if not boundary and len(data) == MAX_TRANSCRIPT_BYTES:
-            raise ValueError('REPLY_RECORD_EXCEEDS_READ_BUDGET')
-        self.offset += boundary
-        return data[:boundary].splitlines()
+        super().__init__(path, position, read_budget=MAX_TRANSCRIPT_BYTES,
+                         record_limit=MAX_TRANSCRIPT_RECORD_BYTES)
 
 
 def user_texts(entry):
@@ -594,6 +566,7 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
                     0, clock() - invocation_started, time.monotonic() - monotonic_started)
                 if tail:
                     record['tail_position'] = tail.position()
+                    record['transcript_observation'] = tail.observation
                 write_json(path, record)
                 if one_shot:
                     record['exit_reason'] = 'SINGLE_PASS'
@@ -617,6 +590,7 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
     finally:
         if tail:
             record['tail_position'] = tail.position()
+            record['transcript_observation'] = tail.observation
         record['elapsed_wait_seconds'] = elapsed_before + max(
             0, clock() - invocation_started, time.monotonic() - monotonic_started)
         record.update(monitoring=False, heartbeat_epoch=clock(), ended_epoch=clock())

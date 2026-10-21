@@ -75,6 +75,17 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(len(self.discover()), 1, self.discovery_trace)
         self.assertEqual(len(list(path.parent.glob('*.json'))), 1)
 
+    def test_explicit_successor_inquiry_is_exposed_only_to_pinned_native_thread(self):
+        state, path = self.request()
+        body = ready.read_json(path)
+        body['successor_supervisor_session_id'] = str(uuid.uuid4())
+        ready.write_json(path, body)
+        self.assertEqual(self.discover(), [])
+        self.assertFalse(any(self.emissions))
+        body['successor_supervisor_session_id'] = self.payload['session_id']
+        ready.write_json(path, body)
+        self.assertEqual(len(self.discover(now=161.)), 1)
+
     def test_notice_snapshot_survives_rotation_before_supervisor_first_read(self):
         state, current = self.request()
         original = current.read_bytes()

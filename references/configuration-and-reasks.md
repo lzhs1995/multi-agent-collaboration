@@ -742,6 +742,34 @@ Every registered and resolved hook launcher must use `-E`/`-BE`. The in-process
 external-cache-prefix refusal runs after stdlib imports and cannot protect a
 plain `-B` launch against an already poisoned standard-library cache.
 
+### Bounded transcript progress and work checkpoints (0.4.61)
+
+The shared Tail polls at most256KiB and completes records up to8MiB. Larger
+partial records retain a small hash ledger across polls. A completed record is
+reread within that limit and every recorded chunk is verified before parsing.
+Incomplete or over-limit records remain at the original committed boundary;
+the independent mailbox route stays available. Scan progress never proves a
+receipt. Native record evidence pins the original device/inode, offset, exact
+byte count and SHA including CRLF/LF. `isMeta` Stop feedback, tool output and
+queued attachments are not native operator input.
+
+`executor_reask.py work-checkpoint --record-file ABSOLUTE.json
+--record-sha256 SHA --caller-uuid ORIGINAL_UUID` persists an authenticated
+executor report without asking, consuming, releasing or accepting anything.
+Bind the original episode/session/task/supervisor and exact work-order/evidence
+files. Use unique completed-unit and closed-issue IDs, an allowed status and a
+concrete next action; name the previous checkpoint SHA (`ABSENT` initially).
+Status and progress must be monotonic. The immutable receipt and directory must
+be durable before state commit. A retry of an orphaned receipt cannot lower the
+current checkpoint epoch. Summaries report parent acceptance as `UNMEASURED`.
+
+For `register-successor`, follow the
+[explicit successor contract](task-continuity.md#explicit-successor-inquiry-enrollment-0461).
+Preview is read-only. Apply requires the original executor and exact reviewed
+plan/auth hashes; it sends no terminal input and retains pending/callback and
+reservation ownership. File scheduler discovery binds the new supervisor's
+actual thread, including same-surface thread changes.
+
 ### File-only preference and authenticated reply observation (0.4.60)
 
 New enrollment records an explicit `file_only_preference`. Foreground run/tick
