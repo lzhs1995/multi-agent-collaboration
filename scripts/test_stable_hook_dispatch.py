@@ -239,6 +239,36 @@ class StableHookTests(unittest.TestCase):
             self.assertEqual(g.publish_stable_entry(self.home, m, True)['status'], 'PUBLISHED')
         self.assertTrue(m.dispatcher_path(self.home).is_file())
 
+    def test_dispatcher_publication_preserves_different_existing_file(self):
+        target = m.dispatcher_path(self.home)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b'# another owner\n')
+        before = target.stat()
+        with self.assertRaisesRegex(RuntimeError, 'foreign hook dispatcher preserved'):
+            m.publish_dispatcher(self.home)
+        self.assertEqual(target.read_bytes(), b'# another owner\n')
+        self.assertEqual(target.stat().st_ino, before.st_ino)
+
+    def test_dispatcher_first_publication_does_not_overwrite_concurrent_creator(self):
+        target = m.dispatcher_path(self.home)
+        def concurrent_creator(source, destination):
+            Path(destination).write_bytes(b'# concurrent owner\n')
+            raise FileExistsError(str(destination))
+        with patch.object(m.os, 'link', side_effect=concurrent_creator), \
+                self.assertRaisesRegex(RuntimeError, 'concurrent hook dispatcher preserved'):
+            m.publish_dispatcher(self.home)
+        self.assertEqual(target.read_bytes(), b'# concurrent owner\n')
+        self.assertFalse(list(target.parent.glob('.mac-hook-dispatch-*')))
+
+    def test_dispatcher_identical_publication_reuses_existing_inode(self):
+        first = m.publish_dispatcher(self.home)
+        target = m.dispatcher_path(self.home)
+        before = target.stat()
+        second = m.publish_dispatcher(self.home)
+        self.assertTrue(first['changed'])
+        self.assertFalse(second['changed'])
+        self.assertEqual(target.stat().st_ino, before.st_ino)
+
 
 if __name__ == '__main__':
     unittest.main()

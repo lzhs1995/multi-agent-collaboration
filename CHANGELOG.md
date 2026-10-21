@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.59
 
 - Register one stable, release-independent hook handler per guard for immutable releases. A fixed dispatcher resolves CURRENT on each call and execs the release's pinned router; identical user and startup-profile handlers now run once. Invalid CURRENT/release is a diagnosable exit-0 skip.
 - Publish the dispatcher before configuration names it and never remove it. Guardian also reconciles magpie profiles, cmux `ccc-compact-*` settings and cmux snapshots that already carry owned handlers, preserving `disableAllHooks`, providers and foreign hooks. Running clients keep their startup-pinned older guards until they exit.

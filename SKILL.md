@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.58.** Ready messages may be sent directly in either direction,
+**Version: 0.4.59.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -17,6 +17,12 @@ original receiver transcript proves reception. Do not repaste an uncertain
 message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
+
+The 0.4.59 installer registers one stable hook command per guard. It resolves
+the approved CURRENT release on each invocation and covers owned startup
+settings as well as global files and profiles. Existing clients can still hold
+old commands in memory; installed files are not proof of runtime adoption.
+See [stable hooks](references/release-0.4.59.md).
 
 The 0.4.58 terminal route checks the real input area before one protected
 paste/submit request, preserves user drafts and dialogs, and records the host's

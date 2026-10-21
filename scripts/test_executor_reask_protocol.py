@@ -19,6 +19,18 @@ REVIEWED_V2 = tuple(name for name in REVIEWED if name not in protocol.LEGACY_FIL
 REVIEWED_V3 = tuple(protocol.LEGACY_FILE_PROTOCOL)
 PYTHON = str(Path(sys.executable).resolve())
 OWNER = '11111111-1111-4111-8111-111111111111'
+# Freeze the complete scope of the historical issuer. New reviewed releases
+# must not expand what 0.4.57 could have authorized when it was CURRENT.
+REVIEWED_AT_0457 = frozenset({
+    '0.4.28-ae66245771d0', '0.4.30-ff75100795a9', '0.4.31-79ae83e9d5da',
+    '0.4.32-c7338a400bf4', '0.4.33-09de16ceb823', '0.4.34-d333557fb498',
+    '0.4.35-e62f35828c7a', '0.4.36-8ab59dbb5a5a', '0.4.37-c7258c383218',
+    '0.4.41-28b36490b149', '0.4.42-5947b2d1f8aa', '0.4.44-2b9bce3b41eb',
+    '0.4.46-37e945dea2e3', '0.4.47-46395e3b21e5', '0.4.48-3b4304d24f90',
+    '0.4.49-689dda6455be', '0.4.50-3dd2945b5069', '0.4.51-587295817cef',
+    '0.4.52-0ca4d8002da7', '0.4.53-568efc13c7ae', '0.4.54-f86a9efcf10f',
+    '0.4.55-8064e2645b0e', '0.4.56-bea19f7ff44e', '0.4.57-e8685485a9c5',
+})
 
 
 def digest(raw):
@@ -160,7 +172,8 @@ class ProtocolTests(unittest.TestCase):
     def test_0457_issuer_keeps_exact_original_scope(self):
         name = '0.4.57-e8685485a9c5'
         allowed = set(protocol.LEGACY_FILE_PROTOCOL[name]['controllers'])
-        self.assertEqual(allowed, set(REVIEWED))
+        self.assertEqual(allowed, REVIEWED_AT_0457)
+        self.assertNotIn('0.4.58-cf3f6175840b', allowed)
         self.assertNotIn(name, protocol.LEGACY_FILE_PROTOCOL['0.4.56-bea19f7ff44e']['controllers'])
         state, record = self.episode(name)
         state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
@@ -174,11 +187,32 @@ class ProtocolTests(unittest.TestCase):
                     value['files'].pop(member)
                 self.assert_rejected(bad_state, bad_record)
 
+    def test_0458_issuer_keeps_old_controllers_and_cannot_grant_future_scope(self):
+        issuer_name = '0.4.58-cf3f6175840b'
+        self.assertEqual(set(protocol.LEGACY_FILE_PROTOCOL[issuer_name]['controllers']),
+                         REVIEWED_AT_0457 | {issuer_name})
+        for origin in ('0.4.28-ae66245771d0', '0.4.30-ff75100795a9', '0.4.31-79ae83e9d5da'):
+            with self.subTest(origin=origin):
+                state, record = self.episode(origin)
+                before = copy.deepcopy((state, record['controller']))
+                record.update(schema='executor-reask-enrollment-v2',
+                              file_protocol=protocol.descriptor(),
+                              scheduler=issuer(*self.releases[issuer_name][:2]),
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assert_supported(state, record)
+                self.assertEqual((state, record['controller']), before)
+        state, record = self.episode(issuer_name)
+        record.update(schema='executor-reask-enrollment-v2',
+                      file_protocol=protocol.descriptor(),
+                      scheduler=issuer(*self.releases['0.4.57-e8685485a9c5'][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
     def test_0456_original_registration_remains_active_in_new_stop_hook(self):
         import executor_proactive_hook as hook
         import executor_reask as reask
         from unittest.mock import patch
-        for name, expected in (('0.4.57-e8685485a9c5', True), ('0.4.56-bea19f7ff44e', True), ('0.4.55-8064e2645b0e', False)):
+        for name, expected in (('0.4.58-cf3f6175840b', True), ('0.4.57-e8685485a9c5', True), ('0.4.56-bea19f7ff44e', True), ('0.4.55-8064e2645b0e', False)):
             with self.subTest(name=name):
                 state, record = self.episode(name)
                 state.update(caller_surface_uuid=OWNER, state=reask.WAITING)

@@ -139,7 +139,9 @@ def dispatcher_check(home):
 def publish_dispatcher(home):
     """Install the stable entry before any configuration names it.
 
-    Atomic replacement only; never removed. A process whose settings were
+    First publication is exclusive; identical bytes may be reused. A different
+    existing file belongs to another installation and is never overwritten.
+    A process whose settings were
     pinned at startup keeps invoking this path until it exits, and a missing
     script would make every PreToolUse fail with Python's exit status 2.
     """
@@ -154,6 +156,7 @@ def publish_dispatcher(home):
             raise RuntimeError('foreign hook dispatcher preserved: ' + str(target))
         if target.read_bytes() == raw:
             return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=False)
+        raise RuntimeError('foreign hook dispatcher preserved: ' + str(target))
     fd, pending = tempfile.mkstemp(prefix='.mac-hook-dispatch-', dir=target.parent)
     try:
         with os.fdopen(fd, 'wb') as handle:
@@ -161,7 +164,14 @@ def publish_dispatcher(home):
             handle.flush()
             os.fchmod(handle.fileno(), 0o644)
             os.fsync(handle.fileno())
-        os.replace(pending, target)
+        # Linking a complete temporary file publishes it only if the target is
+        # still absent. A concurrent creator must survive this installation.
+        try:
+            os.link(pending, target)
+        except FileExistsError:
+            if not target.is_symlink() and target.is_file() and target.read_bytes() == raw:
+                return dict(path=str(target), sha256=hashlib.sha256(raw).hexdigest(), changed=False)
+            raise RuntimeError('concurrent hook dispatcher preserved: ' + str(target)) from None
     finally:
         if os.path.exists(pending):
             os.unlink(pending)
