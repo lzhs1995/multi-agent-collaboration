@@ -9,9 +9,81 @@ with the release-path commands. An unknown name is a no-op.
 """
 import runpy
 import sys
+import hashlib
+import json
+import os
+import re
+import stat
+import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+DIAGNOSTIC = Path('.local/state/multi-agent-collaboration/hook-dispatch-v1/LAST-SKIP.json')
+NAME = re.compile(r'[a-z][a-z0-9_]{2,63}')
+
+
+class RouterFailure(Exception):
+    """A bounded reason code, separate from a genuine unknown hook."""
+
+
+def record_skip(hook, reason):
+    """Keep the same private diagnostic even when the router cannot import."""
+    pending = None
+    try:
+        path = Path.home() / DIAGNOSTIC
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = path.parent.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
+            return
+        body = dict(schema='mac-hook-dispatch-skip-v1', reason=reason,
+                    hook=hook if isinstance(hook, str) and NAME.fullmatch(hook) else None,
+                    at_epoch=time.time(), pid=os.getpid(), ppid=os.getppid())
+        fd, pending = tempfile.mkstemp(prefix='.skip-', dir=path.parent)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(body, stream)
+        os.replace(pending, path)
+        pending = None
+    except Exception:
+        pass
+    finally:
+        if pending:
+            try:
+                os.unlink(pending)
+            except OSError:
+                pass
+
+
+def verify_source():
+    """Direct immutable entry calls get the same dependency checks as dispatch.
+
+    Bootstrap the verifier from its own pinned bytes; a development checkout
+    has no release MANIFEST and retains its direct test/install behavior.
+    """
+    source = SCRIPTS.parent
+    if source.name != 'source' or source.parent.parent.name != 'releases':
+        return
+    try:
+        current = json.loads((Path.home() / '.local/state/multi-agent-collaboration/CURRENT.json').read_bytes())
+        raw = (source.parent / 'MANIFEST.json').read_bytes()
+        manifest = json.loads(raw)
+        if (Path(current['source']) != source
+                or hashlib.sha256(raw).hexdigest() != current['manifest_sha256']):
+            raise RouterFailure('RELEASE_MANIFEST_MISMATCH')
+        verifier = SCRIPTS / 'mac_hook_dispatch.py'
+        pin = manifest['files']['scripts/mac_hook_dispatch.py']
+        if verifier.is_symlink() or hashlib.sha256(verifier.read_bytes()).hexdigest() != pin['sha256']:
+            raise RouterFailure('RELEASE_MEMBER_CHANGED')
+        import mac_hook_dispatch
+        mac_hook_dispatch.verify_runtime(source, manifest)
+    except RouterFailure:
+        raise
+    except Exception as exc:
+        # The verifier's Skip carries only a reason code. Other failures have
+        # no file content or exception text in diagnostics.
+        reason = str(exc) if type(exc).__name__ == 'Skip' else 'RELEASE_VERIFICATION_FAILED'
+        raise RouterFailure(reason) from None
 
 
 def target(argv=None):
@@ -19,15 +91,25 @@ def target(argv=None):
     if len(argv) != 2 or argv[0] != '--hook':
         return None
     sys.path.insert(0, str(SCRIPTS))
+    verify_source()
     try:
         import manage_install
+    except Exception:
+        raise RouterFailure('ROUTER_IMPORT_FAILED') from None
+    try:
         return manage_install.route(argv[1])
     except Exception:
-        return None
+        raise RouterFailure('ROUTER_ROUTE_FAILED') from None
 
 
 def main():
-    routed = target()
+    try:
+        routed = target()
+    except RouterFailure as exc:
+        hook = sys.argv[2] if len(sys.argv) == 3 and sys.argv[1] == '--hook' else None
+        record_skip(hook, str(exc))
+        print('mac-hook-entry: skipped ' + str(exc), file=sys.stderr)
+        return 0
     if routed is None:
         print('mac-hook-entry: skipped unknown hook', file=sys.stderr)
         return 0

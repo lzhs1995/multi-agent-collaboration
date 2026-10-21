@@ -54,6 +54,39 @@ def _pinned(source, manifest, relative):
     return path
 
 
+def verify_runtime(source, manifest):
+    """Pin local runtime dependencies before the in-release router imports them.
+
+    The complete release has a small runtime tree. Hash it on each invocation;
+    a cache shared by hooks would hide later edits. Tests are never hook targets.
+    """
+    scripts = source / 'scripts'
+    if scripts.is_symlink() or not scripts.is_dir():
+        raise Skip('RELEASE_MEMBER_SYMLINK')
+    members = manifest.get('files')
+    if not isinstance(members, dict):
+        raise Skip('RELEASE_MANIFEST_INVALID')
+    required = {'scripts/manage_install.py', 'scripts/cmux_workflow_advisory.py'}
+    for relative in members:
+        if not isinstance(relative, str):
+            raise Skip('RELEASE_MANIFEST_INVALID')
+        parts = Path(relative).parts
+        if parts and parts[0] == 'scripts' and relative.endswith('.py'):
+            if '..' in parts or Path(relative).is_absolute():
+                raise Skip('RELEASE_MANIFEST_INVALID')
+            if not Path(relative).name.startswith('test_'):
+                required.add(relative)
+    for path in scripts.rglob('*.py'):
+        if not path.name.startswith('test_'):
+            required.add(str(path.relative_to(source)))
+    for relative in sorted(required):
+        path = source / relative
+        if any(parent.is_symlink() for parent in path.parents if parent != source and source in parent.parents):
+            raise Skip('RELEASE_MEMBER_SYMLINK')
+        if _pinned(source, manifest, relative) is None:
+            raise Skip('RELEASE_HOOK_DEPENDENCY_MISSING')
+
+
 def resolve(home, hook):
     """Return the argv of the current release entry for ``hook``, or raise Skip."""
     if not isinstance(hook, str) or not NAME.fullmatch(hook):
@@ -87,6 +120,7 @@ def resolve(home, hook):
         raise Skip('RELEASE_MANIFEST_MISMATCH')
     entry = _pinned(source, manifest, 'scripts/mac_hook_entry.py')
     if entry is not None:
+        verify_runtime(source, manifest)
         return [str(python), '-B', str(entry), '--hook', hook]
     # Rollback to a release without the in-release router.
     if hook in LEGACY_DIRECT:

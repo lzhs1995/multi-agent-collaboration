@@ -564,7 +564,9 @@ def reconcile_profile(home, manifest_path, settings, apply=False, expected_sha25
             result['status'] = 'CONCURRENT_EDIT'
             return result
         new = normalized(doc, manager, home, True)
-        result['stable_entry'] = publish_stable_entry(home, manager, apply and doc != new)
+        # A normalized profile may still name a deleted stable dispatcher.
+        # Explicit repair republishes it without changing the guardian job.
+        result['stable_entry'] = publish_stable_entry(home, manager, apply)
         result.update(change_needed=doc != new, non_hook_fields_preserved=True,
                       foreign_hooks_preserved=True,
                       planned_sha256=digest((json.dumps(new, ensure_ascii=False, indent=2) + '\n').encode()))

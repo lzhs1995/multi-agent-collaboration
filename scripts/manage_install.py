@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,31 +50,70 @@ os.chdir(diagnostic_root)
 script, *arguments = sys.argv[2:]
 sys.path.insert(0, str(Path(script).parent))
 sys.argv = [script, *arguments]
+# A real exec starts a new interpreter and loses the patched diagnostic HOME.
+# Exercise the dispatcher and its actual router inside this already isolated
+# process; preserve target arguments and SystemExit, without touching live HOME.
+if Path(script).name == 'mac_hook_dispatch.py':
+    def diagnostic_exec(executable, target):
+        routed, *routed_arguments = target[2:]
+        sys.path.insert(0, str(Path(routed).parent))
+        sys.argv = [routed, *routed_arguments]
+        runpy.run_path(routed, run_name='__main__')
+        raise SystemExit(0)
+    os.execv = diagnostic_exec
 runpy.run_path(script, run_name='__main__')
 """
 
 
-def doctor_probe(name):
-    argv = shlex.split(command(name))
+def _probe_argv(argv, diagnostic_root, *, home=None):
+    """Exercise a stable dispatcher against an isolated, exact release copy."""
+    argv = list(argv)
+    diagnostic_root = Path(diagnostic_root).resolve()
     if len(argv) > 2 and Path(argv[2]).name == 'mac_hook_dispatch.py':
-        # The isolated probe home has no CURRENT; probe this release's router
-        # so a stable registration cannot pass by skipping. Dispatcher
-        # resolution is checked separately against the real CURRENT.
-        argv[2] = str(ROOT / 'scripts/mac_hook_entry.py')
+        import mac_hook_dispatch as dispatch
+        owner = Path(home) if home is not None else release_home()
+        if owner is None:
+            raise RuntimeError('stable probe requires its explicit owner')
+        raw = dispatch._read(owner / dispatch.CURRENT, dispatch.MAX_JSON_BYTES)
+        current = json.loads(raw)
+        source = Path(current['source'])
+        dispatch.resolve(owner, argv[-1])
+        copied = Path(diagnostic_root) / RELEASES / source.parent.name / 'source'
+        shutil.copytree(source, copied, symlinks=True)
+        shutil.copy2(source.parent / 'MANIFEST.json', copied.parent / 'MANIFEST.json')
+        current['source'] = str(copied)
+        current_path = Path(diagnostic_root) / dispatch.CURRENT
+        current_path.parent.mkdir(parents=True, exist_ok=True)
+        current_path.write_text(json.dumps(current))
+        target = dispatcher_path(diagnostic_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(argv[2], target)
+        argv[2] = str(target)
+    return argv
+
+
+def doctor_probe(name, *, home=None, argv=None):
+    argv = shlex.split(command(name)) if argv is None else list(argv)
     environment = {key: os.environ[key] for key in
                    ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SYSTEMROOT')
                    if key in os.environ}
     result = dict(benignExitZero=False, probeScope='isolated-empty-payload',
                   liveInvocation=False)
+    if len(argv) > 2 and Path(argv[2]).name == 'mac_hook_dispatch.py':
+        result['execScope'] = 'isolated-in-process-real-entrypoints'
     try:
         with tempfile.TemporaryDirectory(prefix='mac-doctor-') as diagnostic_root:
+            argv = _probe_argv(argv, diagnostic_root, home=home)
             run = subprocess.run(
                 [sys.executable, '-I', '-B', '-c', DOCTOR_BOOTSTRAP,
                  diagnostic_root, *argv[2:]],
                 input='{}', text=True, capture_output=True, timeout=15,
                 cwd=diagnostic_root, env=environment)
             result.update(benignExitZero=run.returncode == 0, returncode=run.returncode)
-    except (OSError, subprocess.SubprocessError) as exc:
+            record = Path(diagnostic_root) / '.local/state/multi-agent-collaboration/hook-dispatch-v1/LAST-SKIP.json'
+            if record.is_file():
+                result.update(benignExitZero=False, skip_reason=json.loads(record.read_bytes())['reason'])
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as exc:
         result['error_type'] = type(exc).__name__
     return result
 
@@ -132,7 +172,10 @@ def dispatcher_check(home):
         result.update(resolves_to=argv[2], resolved=True)
     except dispatch.Skip as exc:
         result.update(resolved=False, skip_reason=str(exc))
-    result['benignExitZero'] = result['present'] and result['resolved']
+    if result['present'] and result['matches_release'] and result['resolved']:
+        result['probe'] = doctor_probe('cmux_lease_guard', home=home,
+                                      argv=[sys.executable, '-B', str(target), '--hook', 'cmux_lease_guard'])
+        result['benignExitZero'] = result['probe']['benignExitZero']
     return result
 
 

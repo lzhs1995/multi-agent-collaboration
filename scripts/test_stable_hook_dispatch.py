@@ -33,6 +33,9 @@ class StableHookTests(unittest.TestCase):
     def release(self, name, members):
         """Immutable-layout fixture; pins CURRENT to it and returns its source."""
         source = self.home / m.RELEASES / name / 'source'
+        if 'scripts/mac_hook_entry.py' in members:
+            members = dict({'scripts/manage_install.py': b'# fixture router\n',
+                            'scripts/cmux_workflow_advisory.py': b'# fixture advisory\n'}, **members)
         files = {}
         for relative, raw in members.items():
             path = source / relative
@@ -145,10 +148,66 @@ class StableHookTests(unittest.TestCase):
         current.write_text('{broken')
         self.assertEqual(self.skip(), 'CURRENT_UNREADABLE')
 
-    def run_dispatcher(self, payload):
+    def run_dispatcher(self, payload, hook='cmux_lease_guard'):
         environment = dict(os.environ, HOME=str(self.home))
-        return subprocess.run([sys.executable, '-B', str(SCRIPTS / 'mac_hook_dispatch.py'), '--hook', 'cmux_lease_guard'],
+        return subprocess.run([sys.executable, '-B', str(SCRIPTS / 'mac_hook_dispatch.py'), '--hook', hook],
                               input=payload, text=True, capture_output=True, timeout=15, env=environment)
+
+    def runtime_release(self, router=None):
+        members = {str(path.relative_to(SCRIPTS.parent)): path.read_bytes()
+                   for path in SCRIPTS.glob('*.py') if not path.name.startswith('test_')}
+        members['scripts/cmux_workspace_guard.py'] = b'import sys\nprint("PINNED_GUARD", sys.stdin.read())\n'
+        if router is not None:
+            members['scripts/manage_install.py'] = router
+        return self.release('0.4.59-aaaaaaaaaaaa', members)
+
+    def test_real_entry_rejects_tampered_router_guard_wrapper_and_imported_dependency(self):
+        source = self.runtime_release()
+        control = self.run_dispatcher('{"control":1}', 'cmux_workspace_guard')
+        self.assertEqual((control.returncode, control.stdout.strip()), (0, 'PINNED_GUARD {"control":1}'), control.stderr)
+        for name in ('manage_install.py', 'cmux_workspace_guard.py',
+                     'cmux_workflow_advisory.py', 'cmux_daemon_identity.py'):
+            with self.subTest(name=name):
+                path = source / 'scripts' / name
+                raw = path.read_bytes()
+                path.chmod(0o644)
+                path.write_bytes(raw + b'\nprint("TAMPERED_MUST_NOT_RUN")\n')
+                run = self.run_dispatcher('{"secret":"not-for-diagnostic"}', 'cmux_workspace_guard')
+                self.assertEqual((run.returncode, run.stdout), (0, ''), run.stderr)
+                record = (self.home / dispatch.DIAGNOSTIC).read_text()
+                self.assertEqual(json.loads(record)['reason'], 'RELEASE_MEMBER_CHANGED')
+                self.assertNotIn('not-for-diagnostic', record)
+                path.write_bytes(raw)
+        (source / 'scripts' / 'shadow_import.py').write_text('print("UNPINNED")\n')
+        run = self.run_dispatcher('{}', 'cmux_workspace_guard')
+        self.assertEqual((run.returncode, run.stdout), (0, ''))
+        self.assertIn('RELEASE_HOOK_DEPENDENCY_MISSING', run.stderr)
+
+    def test_real_entry_reports_pinned_router_import_failure_and_doctor_detects_it(self):
+        source = self.runtime_release(router=b'not valid python !!!\n')
+        m.publish_dispatcher(self.home)
+        run = self.run_dispatcher('{}', 'cmux_workspace_guard')
+        self.assertEqual((run.returncode, run.stdout), (0, ''))
+        self.assertIn('ROUTER_IMPORT_FAILED', run.stderr)
+        self.assertNotIn('unknown hook', run.stderr)
+        self.assertEqual(json.loads((self.home / dispatch.DIAGNOSTIC).read_bytes())['reason'], 'ROUTER_IMPORT_FAILED')
+        # Doctor must use the real entry rather than pass on resolve() alone.
+        (self.home / dispatch.DIAGNOSTIC).unlink()
+        check = m.dispatcher_check(self.home)
+        self.assertTrue(check['resolved'])
+        self.assertFalse(check['benignExitZero'], check)
+        self.assertEqual(check['probe']['skip_reason'], 'ROUTER_IMPORT_FAILED')
+        self.assertFalse((self.home / dispatch.DIAGNOSTIC).exists())
+
+    def test_doctor_dispatcher_positive_control_and_unknown_hook_are_distinct(self):
+        self.runtime_release()
+        m.publish_dispatcher(self.home)
+        check = m.dispatcher_check(self.home)
+        self.assertTrue(check['benignExitZero'], check)
+        run = self.run_dispatcher('{}', 'unknown_guard')
+        self.assertEqual((run.returncode, run.stdout), (0, ''))
+        self.assertIn('unknown hook', run.stderr)
+        self.assertFalse((self.home / dispatch.DIAGNOSTIC).exists())
 
     def test_real_process_execs_release_with_stdin_and_status_or_skips_open(self):
         self.release('0.4.59-aaaaaaaaaaaa', {'scripts/mac_hook_entry.py':
@@ -268,6 +327,37 @@ class StableHookTests(unittest.TestCase):
         self.assertTrue(first['changed'])
         self.assertFalse(second['changed'])
         self.assertEqual(target.stat().st_ino, before.st_ino)
+
+    def test_explicit_profile_repair_republishes_missing_dispatcher_without_job_or_profile_write(self):
+        source = self.runtime_release()
+        path = self.home / '.cmuxterm/claude-settings/pinned.json'
+        path.parent.mkdir(parents=True)
+        base = {'env': {'TOKEN': 'fixture'}, 'hooks': {'Stop': [{'hooks': [
+            {'type': 'command', 'command': 'node goal.mjs'}]}]}}
+        with patch.object(m, 'ROOT', source):
+            path.write_text(json.dumps(g.normalized(base, m, self.home, True)))
+            before = path.read_bytes()
+            manifest = self.home / dispatch.CURRENT
+            with patch.object(g, 'load_release', return_value=(dict(source=str(source)), m)):
+                preview = g.reconcile_profile(self.home, manifest, path)
+                self.assertFalse(m.dispatcher_path(self.home).exists())
+                result = g.reconcile_profile(self.home, manifest, path, True, preview['before_sha256'])
+                self.assertEqual(result['status'], 'PROFILE_UNCHANGED')
+                self.assertFalse(result['changed'])
+                self.assertTrue(result['stable_entry']['changed'])
+                self.assertFalse(result['guardian_job_changed'])
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse((self.home / 'Library/LaunchAgents').exists())
+                self.assertEqual(self.run_dispatcher('{}', 'cmux_workspace_guard').stdout.strip(), 'PINNED_GUARD {}')
+                inode = m.dispatcher_path(self.home).stat().st_ino
+                reused = g.reconcile_profile(self.home, manifest, path, True, preview['before_sha256'])
+                self.assertFalse(reused['stable_entry']['changed'])
+                self.assertEqual(m.dispatcher_path(self.home).stat().st_ino, inode)
+                m.dispatcher_path(self.home).write_bytes(b'# foreign dispatcher\n')
+                with self.assertRaisesRegex(RuntimeError, 'foreign hook dispatcher preserved'):
+                    g.reconcile_profile(self.home, manifest, path, True, preview['before_sha256'])
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(m.dispatcher_path(self.home).read_bytes(), b'# foreign dispatcher\n')
 
 
 if __name__ == '__main__':
