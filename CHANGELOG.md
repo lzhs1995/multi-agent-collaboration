@@ -1,3 +1,7 @@
+## Unreleased
+
+- Document supervisor STANDBY precedence over the 60-second idle inquiry and how executors read bridge zero-input versus pending results (Claude-B CC948292 field evidence, 2026-10-21).
+
 ## 0.4.58
 
 - Check receiver input state before terminal mutation; preserve existing drafts, dialogs and unknown states without treating normal work or Goal as busy gates. Authenticate Claude 2.1.303 before using its complete empty input frame when the host registry has no agent state.
