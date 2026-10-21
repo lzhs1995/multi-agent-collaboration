@@ -46,6 +46,56 @@ def active(state, now):
             and scheduler.registration_observation(state) == 'REGISTERED')
 
 
+def confirmed_standby(state, now):
+    """A read+consumed, task-bound WAIT reply from the original supervisor.
+
+    STANDBY exists only as this exact evidence: the episode is WAITING with no
+    unconsumed reply and no formal reservation; its last reply is a WAIT status
+    whose body SHA, marker and episode match an EXPLICIT_FOREGROUND_EXECUTOR_ACK
+    receipt; and the reply's own next_due_epoch is still in the future. Never
+    inferred from silence, an error, a scheduled wakeup or state.next_due_epoch.
+    """
+    if (state.get('state') != reask.WAITING or state.get('reply')
+            or state.get('paused_tasks')
+            or state.get('replies_closed_through') != state.get('attempt_count')):
+        return None
+    last = state.get('last_reply')
+    history = state.get('reply_history') or []
+    if not isinstance(last, dict) or not history or not isinstance(history[-1], dict):
+        return None
+    body, row = last.get('body'), history[-1]
+    try:
+        if (not isinstance(body, dict) or body.get('status') not in lifecycle.WAIT_STATUSES
+                or row.get('marker') != last.get('marker')
+                or row.get('body_sha256') != last.get('body_sha256')
+                or reask.reply_record(body, last.get('source'))['body_sha256'] != last.get('body_sha256')):
+            return None
+    except (KeyError, TypeError):
+        return None
+    path = (reask.root() / 'consumed' / ready.digest(state['caller_surface_uuid'])
+            / (ready.digest(state['episode_id'] + ':' + str(last.get('marker'))) + '.json'))
+    if row.get('receipt') != str(path):
+        return None
+    receipt = ready.read_json(path) or {}
+    expected = dict(schema='executor-reply-consumed-v1', consumption='EXPLICIT_FOREGROUND_EXECUTOR_ACK',
+                    caller_surface_uuid=state['caller_surface_uuid'], supervisor=state['supervisor'],
+                    task_id=state.get('task_id', ''), episode_id=state['episode_id'],
+                    marker=last.get('marker'), body_sha256=last.get('body_sha256'), body=body)
+    if (any(receipt.get(k) != v for k, v in expected.items())
+            or (receipt.get('executor_authentication') or {}).get('episode_id') != state['episode_id']
+            or body.get('supervisor_uuid') != state['supervisor']
+            or body.get('owner') != state['supervisor']
+            or body.get('episode_id') != state['episode_id']
+            or body.get('task_id') != state.get('task_id', '')
+            or body.get('caller_surface_uuid') != state['caller_surface_uuid']):
+        return None
+    due = body.get('next_due_epoch')
+    if not lifecycle.valid_epoch(due) or not lifecycle.valid_epoch(now) or now >= due:
+        return None
+    return dict(status=body['status'], marker=last['marker'], body_sha256=last['body_sha256'],
+                next_due_epoch=due, trigger=body.get('trigger'), receipt=str(path))
+
+
 def instruction(state):
     if state['state'] == reask.ANSWERED:
         reply = state.get('reply') or {}
@@ -56,11 +106,28 @@ def instruction(state):
                 f'body in {reask.state_path(state["caller_surface_uuid"])}; then run '
                 + command(state, 'consume', '--reply-sha256', digest)
                 + '. Follow the reply and continue the original task. This hook has '
-                'not read, consumed or accepted it for you.')
+                'not read, consumed or accepted it for you. An unconsumed reply is not '
+                'STANDBY and releases no reservation.')
+    if state.get('paused_tasks'):
+        # apply_boundary only records reservations owned by the original
+        # supervisor; a foreign owner stops the episode instead.
+        return ('[MAC task continuation] Formally assigned work from your original '
+                'supervisor is reserved: ' + json.dumps(state['paused_tasks'], ensure_ascii=False)
+                + '. Continue that task through its own harness and callback. Status '
+                'inquiries are files only and never release it; only a formal RELEASED '
+                'event does. Silence, an error or a scheduled wakeup is neither STANDBY '
+                'nor release. When only the supervisor\'s status reply remains, run '
+                + command(state, 'run', '--max-seconds', '60') + '. Explicit user stop, '
+                'revocation or an actual reply ends this obligation.')
+    files = state.get('file_only_preference') is True
     return ('[MAC task continuation] Your explicitly authorized task is still waiting '
             'for the supervisor. Continue useful assigned work; when only its reply '
             'remains, run ' + command(state, 'run', '--max-seconds', '60')
-            + '. Each due round asks for review, progress or the next task. An '
+            + '. Each due round asks for review, progress or the next task. '
+            + ('This episode is file-only: each round writes a file inquiry and sends '
+               'no terminal or native input, so it cannot wake an idle supervisor. '
+               if files else '')
+            + 'An '
             'unconfirmed original input is reconciled without repasting; file '
             'inquiries continue. Busy/Goal/reservation is not a communication ban. '
             'If still WAITING_REPLY, repeat this bounded runner instead of ending. '
@@ -186,6 +253,10 @@ def decide(payload, *, now=None, clock=None, sleep=None, monotonic=None):
         reply_sha = (state.get('reply') or {}).get('body_sha256')
         new_reply = reply_sha and reply_sha != previous.get('reply_sha256')
         urgent, urgent_state = urgent_hint(state, previous if same else {})
+        # An authentic read+consumed STANDBY lets the turn end without a delay;
+        # a genuinely new urgent item is still surfaced.
+        if confirmed_standby(state, now) and not urgent:
+            return None
         delay = (min(55., max(0., float(last) + 60. - now))
                  if same and type(last) in (int, float) and math.isfinite(last)
                  and not new_reply and not urgent else 0.)
@@ -211,7 +282,15 @@ def decide(payload, *, now=None, clock=None, sleep=None, monotonic=None):
             state = authorized_snapshot(caller, payload, clock())
             if state is None:
                 return None
-        reason = instruction(state)
+        standby = confirmed_standby(state, clock())
+        if standby and not urgent:
+            return None
+        if standby:
+            reason = ('[MAC task continuation] A read and consumed '
+                      f'{standby["status"]} reply (body {standby["body_sha256"]}) remains in '
+                      'effect until its next_due_epoch; it does not cover the new item above.')
+        else:
+            reason = instruction(state)
         if not reason:
             return None
         ready.write_json(path, dict(schema='executor-proactive-cadence-v1',

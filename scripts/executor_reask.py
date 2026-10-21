@@ -62,7 +62,90 @@ def load(caller):
 
 
 def save(state):
-    ready.write_json(state_path(state['caller_surface_uuid']), state)
+    durable_write_json(state_path(state['caller_surface_uuid']), state)
+
+
+class CommittedSyncUnknown(OSError):
+    """The candidate replaced the file, but its directory fsync is unconfirmed.
+
+    Never treated as "not written": the visible state may already be newer than
+    the caller's pre-write snapshot. Callers report it; nobody rewrites blindly.
+    """
+
+    def __init__(self, path, candidate_sha256, cause):
+        super().__init__(f'committed state at {path}; directory sync unconfirmed: {cause}')
+        self.path, self.candidate_sha256, self.cause = str(path), candidate_sha256, cause
+
+
+def _candidate_bytes(value):
+    """The bytes ready.write_json writes: json.dump through default text mode."""
+    import locale
+    text = json.dumps(value, ensure_ascii=False)
+    # Default text mode: UTF-8 under -X utf8, else the locale's preferred
+    # encoding (Python 3.10–3.14). A mismatch only means "not recognized",
+    # which re-raises the original error; it can never cause a rewrite.
+    encoding = 'utf-8' if sys.flags.utf8_mode else locale.getpreferredencoding(False)
+    return text.encode(encoding)
+
+
+def durable_write_json(path, value):
+    """ready.write_json, plus an honest outcome when its post-replace sync fails.
+
+    A failure before replacement leaves the original intact and is re-raised
+    unchanged. If the visible file is exactly this candidate, the failure is
+    COMMITTED_SYNC_UNKNOWN carrying the candidate hash; nothing is retried here,
+    so transaction owners (scheduler recovery) keep their own protocol. The
+    only retry is confirm_sync(), which first verifies the current candidate.
+    """
+    from cmux_evidence_io import read_bytes
+    try:
+        raw = _candidate_bytes(value)
+    except (TypeError, ValueError, LookupError):
+        raw = None
+    try:
+        ready.write_json(path, value)
+    except OSError as exc:
+        if raw is None or isinstance(exc, CommittedSyncUnknown):
+            raise
+        try:
+            current = read_bytes(Path(path), limit=ready.MAX_JSON_BYTES)
+        except (OSError, ValueError):
+            raise exc
+        if current != raw:
+            raise                    # not this candidate: original error, no rewrite
+        raise CommittedSyncUnknown(path, hashlib.sha256(raw).hexdigest(), exc) from exc
+    return hashlib.sha256(raw).hexdigest() if raw is not None else None
+
+
+def confirm_sync(caller, candidate_sha256):
+    """Retry only the directory fsync, and only for the exact visible candidate.
+
+    Never recreates, rewrites or re-saves the state; a different visible file
+    is reported, not overwritten. Holds the episode lock; zero input.
+    """
+    from contextlib import ExitStack
+    from cmux_evidence_io import read_bytes
+    path = state_path(caller)
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(episode_lock(caller))
+        except EpisodeBusy:
+            return dict(outcome='EPISODE_BUSY', input_operations=0, retry_same_arguments=True)
+        try:
+            current = hashlib.sha256(read_bytes(path, limit=ready.MAX_JSON_BYTES)).hexdigest()
+        except (OSError, ValueError) as exc:
+            return dict(outcome='CANDIDATE_UNREADABLE', error_type=type(exc).__name__,
+                        input_operations=0, path=str(path))
+        if current != candidate_sha256:
+            return dict(outcome='CANDIDATE_MISMATCH', current_sha256=current,
+                        candidate_sha256=candidate_sha256, input_operations=0, path=str(path))
+        try:
+            ready.sync_directory(path.parent)
+        except OSError as exc:
+            return dict(outcome='COMMITTED_SYNC_UNKNOWN', candidate_sha256=candidate_sha256,
+                        error_type=type(exc).__name__, input_operations=0, path=str(path))
+        return dict(outcome='SYNC_CONFIRMED', candidate_sha256=candidate_sha256,
+                    input_operations=0, path=str(path))
 
 
 class EpisodeBusy(BlockingIOError):
@@ -119,22 +202,23 @@ def configured_channels(supervisor):
 
 def start(caller, supervisor, task_id='', transcript='', channels=None, executor_ref='',
           now=None, reason='MANUAL', own_prefixes=(), workspace='', purpose='REQUEST_NEXT_TASK',
-          resume_stopped=False, continuing=False, continuation=None):
+          resume_stopped=False, continuing=False, continuation=None, file_only=False):
     with episode_lock(caller):
         return start_locked(caller, supervisor, task_id, transcript, channels, executor_ref,
                             now, reason, own_prefixes, workspace, purpose, resume_stopped,
-                            continuing, continuation)
+                            continuing, continuation, file_only=file_only)
 
 
 def start_locked(caller, supervisor, task_id='', transcript='', channels=None, executor_ref='',
                  now=None, reason='MANUAL', own_prefixes=(), workspace='',
                  purpose='REQUEST_NEXT_TASK', resume_stopped=False, continuing=False,
-                 continuation=None):
+                 continuation=None, file_only=False):
     """Local unscheduled API. The authenticated CLI uses scheduler.start()."""
     old = load(caller)
     state = prepare_start_locked(caller, supervisor, task_id, transcript, channels,
                                 executor_ref, now, reason, own_prefixes, workspace,
-                                purpose, resume_stopped, continuing, continuation)
+                                purpose, resume_stopped, continuing, continuation,
+                                file_only=file_only)
     if state == old or state.get('state') != WAITING:
         return state
     if old:
@@ -152,9 +236,16 @@ def start_locked(caller, supervisor, task_id='', transcript='', channels=None, e
 def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels=None,
                          executor_ref='', now=None, reason='MANUAL', own_prefixes=(),
                          workspace='', purpose='REQUEST_NEXT_TASK', resume_stopped=False,
-                         continuing=False, continuation=None):
-    """Only the same complete inquiry binding can reuse a waiting episode."""
+                         continuing=False, continuation=None, file_only=False):
+    """Only the same complete inquiry binding can reuse a waiting episode.
+
+    file_only is persisted as file_only_preference in a NEW episode only. An
+    old episode without the key is never migrated; an explicit conflicting
+    preference on a reused episode must close it first.
+    """
     now = time.time() if now is None else now
+    if type(file_only) is not bool:
+        raise ValueError('file_only must be an explicit boolean')
     if purpose not in ('REQUEST_NEXT_TASK', 'PENDING_TASK_REPLY'):
         raise ValueError('unknown inquiry purpose')
     reservation_inquiries = (continuation or {}).get('reservation_inquiries', False)
@@ -170,6 +261,10 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
         if (continuing and reservation_inquiries !=
                 (old.get('continuation') or {}).get('reservation_inquiries', False)):
             raise ValueError('existing episode must close before changing reservation inquiry authorization')
+        # Never migrate an old episode: absence stays absence. A recorded
+        # preference can only be reused unchanged.
+        if 'file_only_preference' in old and old['file_only_preference'] is not file_only:
+            raise ValueError('existing episode must close before changing its file-only preference')
         return old
     if (stop_file(caller).exists() or old and old.get('state') == STOPPED) and not resume_stopped:
         return old or dict(caller_surface_uuid=caller, state=STOPPED, ask_count=0)
@@ -198,7 +293,8 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
                  continuation=continuation, rearm_count=0, reply_history=[],
                  reply_detected_epoch=None, reply_consumed_epoch=None,
                  terminal_pending=copy.deepcopy(old.get('terminal_pending')) if old else None,
-                 reply=None, own_prefixes=list(own_prefixes))
+                 reply=None, own_prefixes=list(own_prefixes),
+                 file_only_preference=file_only)
     # Restarting an inquiry does not release a formal task. Keep the original
     # pair's recorded reservations even if its marker is temporarily absent.
     if old and all(old.get(key) == binding[key] for key in (
@@ -524,7 +620,37 @@ def write_channels(state, marker, text, now, status=WAITING):
             written.append(str(path))
         except OSError as exc:
             errors.append(dict(path=str(path), error_type=type(exc).__name__))
+    if status != WAITING:
+        record_closing_channels(state, status, now, marker, written, errors)
     return dict(written=written, errors=errors)
+
+
+def closing_channels_path(caller):
+    return root() / (ready.digest(caller) + '.closing-channels.json')
+
+
+def record_closing_channels(state, status, now, marker, written, errors):
+    """Closing/stop/consume channel writes were discarded by their callers.
+
+    Keep partial failures visible in a side file, never in the episode state
+    (previews must stay byte-equivalent). Written when errors occur, and once
+    more to clear a previously recorded failure. Best effort: never blocks.
+    """
+    path = closing_channels_path(state['caller_surface_uuid'])
+    if not errors and not path.exists():
+        return
+    try:
+        ready.write_json(path, dict(schema='executor-reask-closing-channels-v1',
+                                    episode_id=state.get('episode_id'), status=status,
+                                    at_epoch=now, marker=marker, written=len(written),
+                                    errors=errors))
+    except OSError:
+        pass
+
+
+def closing_channel_errors(state):
+    body = ready.read_json(closing_channels_path(state['caller_surface_uuid'])) or {}
+    return body.get('errors', []) if body.get('episode_id') == state.get('episode_id') else []
 
 
 def _unreceived_on_screen(bridge, supervisor, caller, ask, flat_screen):
@@ -811,11 +937,15 @@ def poll_locked(state, now, *, file_only=False):
 
 
 def tick(caller, now=None, send=default_send, *, file_only=False):
-    try:
-        with episode_lock(caller):
-            return tick_locked(caller, now, send, file_only=file_only)
-    except BlockingIOError:
-        return dict(outcome='EPISODE_BUSY', state=WAITING)
+    # Only lock acquisition maps to EPISODE_BUSY. A BlockingIOError raised by
+    # the body (registry, cadence, transport or file I/O) stays visible.
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(episode_lock(caller))
+        except EpisodeBusy:
+            return dict(outcome='EPISODE_BUSY', state=WAITING, input_operations=0)
+        return tick_locked(caller, now, send, file_only=file_only)
 
 
 def observe_boundaries_locked(state, now):
@@ -874,6 +1004,11 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
             from executor_reask_protocol import controller_diagnostic
             return dict(outcome='ORIGINAL_CONTROLLER_REQUIRED', input_operations=0,
                         controller_diagnostic=controller_diagnostic(original, invoked))
+        # A NEW episode's recorded preference narrows this foreground call to
+        # files after the original-controller check; it never skips that check
+        # and never widens a scheduler call. Absence (old episodes) changes nothing.
+        if state.get('file_only_preference') is True:
+            file_only = True
     state['check_count'] = state.get('check_count', 0) + 1
     poll_locked(state, now, file_only=file_only)
     poll_end = time.monotonic()
@@ -921,6 +1056,8 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
     try:
         if file_only:
             ask.update(outcome='FILE_ONLY_SCHEDULED', terminal=False, input_operations=0)
+            if state.get('file_only_preference') is True:
+                ask['file_only_source'] = 'EPISODE_PREFERENCE'
         else:
             ask.update(send(state, marker, text))
     except Exception as exc:         # 终端失败不影响文件通道，也不重试同一轮
@@ -1010,14 +1147,36 @@ def summary(state, *, verification=None):
                 next_ask_epoch=state.get('next_due_epoch'), last_poll=state.get('last_poll'),
                 next_terminal_ask_epoch=state.get('terminal_next_due_epoch'),
                 state_file=str(state_path(state['caller_surface_uuid'])))
+    # Absent key = historical episode with no recorded preference (not False).
+    result['file_only_preference'] = state.get('file_only_preference', 'NOT_RECORDED')
+    ask_errors = ((last or {}).get('channels') or {}).get('errors', [])
+    closing = closing_channel_errors(state)
+    result['channel_errors'] = dict(last_ask=ask_errors, last_closing=closing)
+    result['partial_channel_failure'] = bool(ask_errors or closing)
     for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent',
-                'consume_result', 'runner_returned', 'run_return_reason', 'wait_boundary'):
+                'consume_result', 'observe_result', 'runner_returned', 'run_return_reason',
+                'wait_boundary'):
         if key in state:
             result[key] = state[key]
     return result
 
 
 def main(argv=None):
+    try:
+        return _main(argv)
+    except CommittedSyncUnknown as exc:
+        # The candidate is visible; durability is unconfirmed. Input may already
+        # have happened earlier in this invocation, so do not claim zero.
+        print(json.dumps(dict(outcome='COMMITTED_SYNC_UNKNOWN', path=exc.path,
+                              candidate_sha256=exc.candidate_sha256,
+                              error_type=type(exc.cause).__name__,
+                              input_operations=None, input_operations_known=False,
+                              next_action='VERIFY_CURRENT_FILE_EQUALS_CANDIDATE_BEFORE_ANY_RETRY'),
+                         ensure_ascii=False, indent=1))
+        return 2
+
+
+def _main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='cmd', required=True)
     s = sub.add_parser('start')
@@ -1044,6 +1203,11 @@ def main(argv=None):
         sub.add_parser(name)
     consume_parser = sub.add_parser('consume')
     consume_parser.add_argument('--reply-sha256', default='')
+    sub.add_parser('observe-reply',
+                   help='authenticated zero-input reply observation; no ask, count, consume or release')
+    sync_parser = sub.add_parser('confirm-sync',
+                                 help='after COMMITTED_SYNC_UNKNOWN: verify the exact candidate, then retry only fsync')
+    sync_parser.add_argument('--candidate-sha256', required=True)
     st = sub.add_parser('stop')
     st.add_argument('--reason', default='OPERATOR')
     e = sub.add_parser('enroll-existing', help='authenticate and register one existing episode; no tick or send')
@@ -1084,7 +1248,8 @@ def main(argv=None):
                                 channels=args.channel, executor_ref=caller,
                                 own_prefixes=args.own_prefix, purpose=args.purpose,
                                 resume_stopped=args.resume_stopped,
-                                continuing=args.continuing, continuation=continuation)
+                                continuing=args.continuing, continuation=continuation,
+                                file_only=args.file_only)
         if (state.get('state') == WAITING and not state.get('registration_observation')
                 and scheduler.registered(state)):
             state = tick(caller, file_only=args.file_only)
@@ -1104,6 +1269,13 @@ def main(argv=None):
     elif args.cmd == 'consume':
         from executor_reask_lifecycle import consume
         state = consume(caller, args.reply_sha256)
+    elif args.cmd == 'observe-reply':
+        from executor_reask_lifecycle import observe_reply
+        state = observe_reply(caller)
+    elif args.cmd == 'confirm-sync':
+        result = confirm_sync(caller, args.candidate_sha256)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if result['outcome'] == 'SYNC_CONFIRMED' else 2
     else:
         state = load(caller) or dict(outcome='NO_EPISODE')
         if state.get('registration'):
@@ -1114,6 +1286,9 @@ def main(argv=None):
     result = summary(state)
     print(json.dumps(result, ensure_ascii=False, indent=1))
     if args.cmd == 'consume' and result.get('consume_result', {}).get('consumed') is not True:
+        return 2
+    if args.cmd == 'observe-reply' and (result.get('observe_result') or {}).get('status') in {
+            'EPISODE_BUSY', 'ORIGINAL_CONTROLLER_REQUIRED', 'NO_EPISODE'}:
         return 2
     return 2 if result.get('outcome') in {
         'REGISTRATION_UNCOMMITTED', 'COMMITTED_RECOVERY_REQUIRED',

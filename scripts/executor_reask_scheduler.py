@@ -929,7 +929,7 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
 
 def launchd_spec(home, source, python, manifest):
     return dict(Label=LABEL, RunAtLoad=True, StartInterval=60, ThrottleInterval=10,
-                ProgramArguments=[str(python), '-B', str(Path(source) / 'scripts/executor_reask_scheduler.py'),
+                ProgramArguments=[str(python), '-BE', str(Path(source) / 'scripts/executor_reask_scheduler.py'),
                                   'sweep', '--manifest', str(manifest)],
                 # A 60-second coordination deadline should not inherit the
                 # CPU/I/O throttling of discretionary Background work. Retain

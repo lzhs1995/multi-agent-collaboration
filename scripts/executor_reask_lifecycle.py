@@ -269,7 +269,9 @@ def consume(caller, reply_sha256='', *, now=None):
             receipt = prior
             now = prior['consumed_epoch']
         else:
-            ready.write_json(path, receipt)
+            # A post-replace sync failure surfaces as COMMITTED_SYNC_UNKNOWN; a
+            # retry then finds this exact receipt as `prior`, never a new one.
+            reask.durable_write_json(path, receipt)
         state.update(state=reask.CONSUMED, reply_consumed_epoch=now)
         state['reply_history'] = (state.get('reply_history', []) + [dict(
             marker=marker, status=reply['status'], detected_epoch=reply.get('at_epoch'),
@@ -286,6 +288,148 @@ def consume(caller, reply_sha256='', *, now=None):
         reask.write_channels(state, marker, 'reply explicitly consumed', now, status=reask.CONSUMED)
         reask.save(state)
         return _consume_result(state, 'REPLY_CONSUMED', receipt=receipt, receipt_path=path)
+
+
+def _observe_result(state, status, **facts):
+    """One invocation's observation; never persisted, never an acknowledgement."""
+    result = dict(status=status, consumed=False, input_operations=0, asks_issued=0,
+                  counters_changed=False, terminal_pending_changed=False,
+                  reservation_released=False, episode_state=state.get('state'), **facts)
+    return dict(state, observe_result=result)
+
+
+def _recheck_source(reply):
+    """Re-read an ANSWERED reply's original file. Transcript sources cannot be rechecked."""
+    import executor_reask as reask
+    import executor_reply as replies
+    path = reply.get('path')
+    if reply.get('source') not in ('mailbox', 'channel') or not isinstance(path, str) or not path:
+        return 'NOT_RECHECKABLE', None
+    try:
+        raw = read_bytes(Path(path), limit=reask.CHANNEL_FILE_BYTES)
+    except (OSError, ValueError):
+        return 'SOURCE_UNREADABLE', None
+    try:
+        text = raw.decode('utf-8')
+        body = json.loads(text) if reply['source'] == 'mailbox' else replies.from_text(text)
+    except (UnicodeDecodeError, ValueError):
+        body = None
+    if not isinstance(body, dict) or 'marker' not in body or 'status' not in body:
+        return 'SOURCE_NOT_A_REPLY', None
+    return 'PARSED', reask.reply_record(body, reply['source'])['body_sha256']
+
+
+def _preserve_answered(state):
+    """Immutable snapshot of the stored ANSWERED body; never replaces state."""
+    import executor_reask as reask
+    reply = state['reply']
+    snapshot = dict(schema='executor-answered-reply-snapshot-v1',
+                    caller_surface_uuid=state['caller_surface_uuid'], supervisor=state['supervisor'],
+                    task_id=state.get('task_id', ''), episode_id=state['episode_id'],
+                    marker=reply.get('marker'), source=reply.get('source'), path=reply.get('path'),
+                    detected_epoch=reply.get('at_epoch'), body_sha256=reply.get('body_sha256'),
+                    body=reply.get('body'))
+    raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    directory = (reask.root() / 'answered-snapshots' / ready.digest(state['caller_surface_uuid'])
+                 / ready.digest(state['episode_id'] + ':' + str(reply.get('body_sha256'))))
+    identity = dict(schema='executor-answered-reply-snapshot-v1',
+                    caller=state['caller_surface_uuid'], episode=state['episode_id'],
+                    body_sha256=reply.get('body_sha256'))
+    reask.snapshot_files(directory, {'reply.json': raw}, identity)
+    return dict(path=str(directory / 'reply.json'), sha256=hashlib.sha256(raw).hexdigest())
+
+
+def _prior_consumption(state):
+    """Prior exact consumption facts with their original receipts re-verified."""
+    rows = []
+    for row in (state.get('reply_history') or [])[-HISTORY_ROWS:]:
+        if not isinstance(row, dict):
+            continue
+        receipt = (ready.read_json(row['receipt'])
+                   if isinstance(row.get('receipt'), str) and row['receipt'] else None)
+        verified = bool(receipt and receipt.get('marker') == row.get('marker')
+                        and receipt.get('body_sha256') == row.get('body_sha256')
+                        and receipt.get('episode_id') == state.get('episode_id'))
+        rows.append(dict({k: row.get(k) for k in ('marker', 'status', 'detected_epoch',
+                                                   'consumed_epoch', 'body_sha256', 'receipt')},
+                         receipt_verified=verified))
+    return dict(count=len(rows), reply_consumed_epoch=state.get('reply_consumed_epoch'),
+                last=rows[-1] if rows else None, history=rows)
+
+
+HISTORY_ROWS = 20
+
+
+def observe_reply(caller, *, now=None):
+    """Zero-input reply observation by the authenticated original executor.
+
+    Holds the original episode lock and authenticates the original controller
+    and executor exactly like consume. Stop, revocation, expiry and a changed
+    formal owner are reported first. Never asks, counts, sends, consumes,
+    releases a reservation or mutates terminal_pending or the episode state.
+    The only write: if an ANSWERED reply's source changed, the stored body is
+    preserved as an immutable snapshot (REPLY_CHANGED); the stored body stays.
+    """
+    import executor_reask as reask
+    now = time.time() if now is None else now
+    require_epoch(now, 'observed_epoch')
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(reask.episode_lock(caller))
+        except reask.EpisodeBusy:
+            result = _observe_result(dict(outcome='EPISODE_BUSY'), 'EPISODE_BUSY')
+            result['observe_result'].update(retry_same_arguments=True, retry_after_seconds=1)
+            return result
+        state = reask.load(caller) or {}
+        if not state:
+            return _observe_result(dict(outcome='NO_EPISODE'), 'NO_EPISODE')
+        original, invoked = _consume_controller(state), reask.controller()
+        if original != invoked:
+            from executor_reask_protocol import controller_diagnostic
+            return _observe_result(
+                dict(outcome='ORIGINAL_CONTROLLER_REQUIRED',
+                     controller_diagnostic=controller_diagnostic(original, invoked)),
+                'ORIGINAL_CONTROLLER_REQUIRED')
+        from executor_reask_identity import authenticate
+        observer = authenticate(state)
+        facts = dict(observer_identity_sha256=observer['identity_sha256'],
+                     prior_consumption=_prior_consumption(state))
+        view = copy.deepcopy(state)
+        if reask.stop_file(caller).exists():
+            return _observe_result(state, 'STOPPED', reason='OPERATOR_STOP', **facts)
+        poll_authorization(view, now, publish=False)
+        observe_formal_tasks(view, now, publish=False)
+        if view.get('state') == reask.STOPPED:
+            return _observe_result(state, 'STOPPED', reason=view.get('exit_reason'), **facts)
+        if state.get('state') == reask.ANSWERED and isinstance(state.get('reply'), dict):
+            reply = state['reply']
+            stored = reply.get('body_sha256')
+            try:
+                consistent = reask.reply_record(reply.get('body'), reply.get('source'))['body_sha256'] == stored
+            except (KeyError, TypeError):
+                consistent = False
+            check, current = _recheck_source(reply)
+            if check == 'PARSED':
+                check = 'UNCHANGED' if current == stored else 'CHANGED'
+            facts.update(marker=reply.get('marker'), body_sha256=stored,
+                         stored_body_consistent=consistent, source=reply.get('source'),
+                         path=reply.get('path'), source_check=check,
+                         consume_command_requires='--reply-sha256 ' + str(stored))
+            if check in ('NOT_RECHECKABLE', 'UNCHANGED'):
+                return _observe_result(state, 'REPLY_ANSWERED_UNCONSUMED', **facts)
+            facts.update(current_source_body_sha256=current,
+                         preserved_answered=_preserve_answered(state))
+            return _observe_result(state, 'REPLY_CHANGED', **facts)
+        if state.get('state') == reask.WAITING:
+            found = reask.find_reply(copy.deepcopy(state), file_only=True)
+            if found:
+                return _observe_result(state, 'REPLY_OBSERVED', marker=found['marker'],
+                                       body_sha256=found['body_sha256'], source=found['source'],
+                                       path=found.get('path'),
+                                       note='not ANSWERED until a tick records it; then read and consume',
+                                       **facts)
+            return _observe_result(state, 'NO_REPLY', **facts)
+        return _observe_result(state, str(state.get('state')), **facts)
 
 
 def marker_callers(marker):
@@ -498,9 +642,12 @@ def task_boundary(marker, event, *, now=None):
 
     A reservation pauses inquiries before input; it is not dispatch evidence.
     This helper never enables continuation, changes controllers, or sends input.
+    Only lock acquisition is reported as busy; body I/O errors stay visible.
     """
-    try:
-        with marker_locks(marker):
-            return task_boundary_locked(marker, event, now=now)
-    except BlockingIOError:
-        raise RuntimeError('inquiry state busy; task boundary was not recorded')
+    import executor_reask as reask
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(marker_locks(marker))
+        except reask.EpisodeBusy:
+            raise RuntimeError('inquiry state busy; task boundary was not recorded') from None
+        return task_boundary_locked(marker, event, now=now)

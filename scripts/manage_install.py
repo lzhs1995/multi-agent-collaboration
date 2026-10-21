@@ -129,6 +129,8 @@ APPROVED_DISPATCHERS = frozenset({
     'a2e0b9b94d41dc4659df269b0b33bd84c39c77d2959c90ec4bd1807158973f48',
     # Reviewed 2e4b8ea0217c6cc5f3e4a404b8cddf3478de9357.
     '2764dd99ec600034f9c2cc6130392e179487c378448bfea365597506d20a62bc',
+    # Final reviewed c2d536fea90e6843559576eff8f6c0612e972aa1 / 0.4.59 dispatcher.
+    'a3b5c23b99e2cdd67192a3ecac8ca211ef19da7d73211fe85ab5037e5304210b',
 })
 
 

@@ -145,6 +145,7 @@ class GuardianTests(unittest.TestCase):
         self.assertEqual(spec['StartInterval'], 60)
         self.assertEqual(spec['ThrottleInterval'], 60)
         self.assertEqual(spec['Label'], g.LABEL)
+        self.assertEqual(spec['ProgramArguments'][1], '-BE')
         self.assertEqual(spec['WatchPaths'], [str(self.home / '.claude/settings.json'),
                                              str(self.home / '.codex/hooks.json'),
                                              '/fixture/CURRENT.json'])

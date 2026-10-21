@@ -731,12 +731,39 @@ Claude runs a handler defined identically in several settings files once. A
 release-pinned command made the startup `--settings` copy and the hot-reloaded
 user copy differ after every upgrade, so both guard generations ran. An
 immutable release therefore registers one release-independent handler per guard:
-`<python> -B ~/.local/share/multi-agent-collaboration/bin/mac_hook_dispatch.py
+`<python> -BE ~/.local/share/multi-agent-collaboration/bin/mac_hook_dispatch.py
 --hook <guard>`, with the Stop idle guard's 75-second timeout unchanged. User
 settings, cc-switch profiles, magpie profiles and cmux `ccc-compact-*` settings
 receive the same bytes; a per-session cmux snapshot is rewritten only when it
 already carries an owned handler. `disableAllHooks`, provider fields and foreign
 hooks are preserved.
+
+Every registered and resolved hook launcher must use `-E`/`-BE`. The in-process
+external-cache-prefix refusal runs after stdlib imports and cannot protect a
+plain `-B` launch against an already poisoned standard-library cache.
+
+### File-only preference and authenticated reply observation (0.4.60)
+
+New enrollment records an explicit `file_only_preference`. Foreground run/tick
+honor it after checking the original controller; old episodes without the key
+are not migrated. A reused episode cannot change its recorded preference.
+`observe-reply` authenticates the original executor and holds its episode lock,
+observes stop/revocation/expiry first, and never sends, asks, consumes, updates
+counters or releases a formal reservation. `REPLY_OBSERVED` has not been promoted
+to ANSWERED. A changed ANSWERED file gets an immutable stored-body snapshot;
+the original stored reply remains available for exact consumption.
+
+A consumed task-bound WAIT/STANDBY reply is effective only when its original
+receipt and body bindings verify and the reply's own due time remains ahead.
+Formal reserved work receives a continue-assigned-work instruction. Silence,
+errors and a scheduled wakeup grant no STANDBY or release authority.
+
+`COMMITTED_SYNC_UNKNOWN` retains the visible candidate hash after a replace
+whose directory sync failed. `confirm-sync` verifies that the current state is
+still exactly that candidate, then retries only directory fsync. A mismatch is
+reported and no file is recreated or overwritten. Old controllers and their
+pending input remain unchanged. The complete reviewed 0.4.59 issuer retains
+only the controller range it supported when issued.
 
 On each call the dispatcher reads CURRENT, checks the release layout, python and
 manifest hash, and execs that release's pinned `scripts/mac_hook_entry.py`. That
