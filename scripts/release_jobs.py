@@ -23,7 +23,7 @@ def check(home):
             if path.is_symlink() or not path.is_file():
                 continue
             spec = plistlib.loads(path.read_bytes())
-            expected = [python, '-B', str(Path(source) / 'scripts' / script), mode]
+            expected = [python, '-BE', str(Path(source) / 'scripts' / script), mode]
             if name == 'configuration-guardian':
                 expected += ['--home', str(home)]
             expected += ['--manifest', str(manifest)]

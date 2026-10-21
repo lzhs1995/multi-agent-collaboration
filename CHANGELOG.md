@@ -1,3 +1,11 @@
+## 0.4.60
+
+- Persist file-only preference for new enrollment and provide authenticated zero-input reply observation under the original episode lock; preserve changed ANSWERED source bodies as immutable snapshots.
+- Honor exact consumed task-bound STANDBY and formal assigned-work precedence; keep unconsumed replies and reservations explicit.
+- Surface partial channel errors and post-replace sync uncertainty; exact-candidate confirmation retries only directory fsync.
+- Preserve the complete reviewed 0.4.59 file issuer/controller range and allow the exact reviewed 0.4.59 dispatcher as an upgrade predecessor.
+- Generate both launchd jobs with `-BE` and reject unisolated registrations in release checks, covering the installation review's launchd follow-up with actual disposable launcher controls.
+
 ## 0.4.59
 
 - Register one stable, release-independent hook handler per guard for immutable releases. A fixed dispatcher resolves CURRENT and checks the router and local runtime dependencies before execution; identical handler bytes across settings sources support deduplication. Existing client adoption remains separately verified. Invalid CURRENT/release is a diagnosable exit-0 skip.

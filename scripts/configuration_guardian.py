@@ -602,7 +602,7 @@ def reconcile_profile(home, manifest_path, settings, apply=False, expected_sha25
 def launchd_spec(home, source, python, manifest):
     home = Path(home)
     return dict(Label=LABEL, RunAtLoad=True, StartInterval=60, ThrottleInterval=60,
-                ProgramArguments=[str(python), '-B', str(Path(source) / 'scripts/configuration_guardian.py'),
+                ProgramArguments=[str(python), '-BE', str(Path(source) / 'scripts/configuration_guardian.py'),
                                   'reconcile', '--home', str(home), '--manifest', str(manifest), '--apply'],
                 # The database also contains frequently written request logs.
                 # Discover profile imports on the interval, not every DB/WAL event.

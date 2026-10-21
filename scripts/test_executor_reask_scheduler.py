@@ -409,6 +409,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(spec['Label'], scheduler.LABEL)
         self.assertEqual(spec['StartInterval'], 60)
         self.assertEqual(spec['ProgramArguments'][-3:], ['sweep', '--manifest', '/CURRENT.json'])
+        self.assertEqual(spec['ProgramArguments'][1], '-BE')
         self.assertNotIn('configuration_guardian.py', str(spec))
         self.assertNotIn('run', spec['ProgramArguments'])
         self.assertEqual(spec['ProcessType'], 'Standard')
