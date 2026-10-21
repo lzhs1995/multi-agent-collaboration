@@ -60,6 +60,22 @@ user stop/revocation or task completion ends the obligation. Global hooks for
 unrelated tasks remain advisory. These current task-scoped rules supersede the
 historical “Stop only observes” guidance below for enrolled new episodes.
 
+Supervisor STANDBY precedence: an explicit reply from the authenticated original
+supervisor, bound to this task, satisfies “until the supervisor replies” after
+the original executor reads its complete body and acknowledges it. A continuing
+mailbox reply still needs exact-SHA `consume` through its original controller;
+an unconsumed ANSWERED reply is not completed standby. Follow the reply's waiting
+scope and resumption condition. A later authorized callback or inquiry without
+a reply can require another 60-second inquiry. Silence, a log, a queued marker
+or a failed supervisor turn never supplies STANDBY or releases a reservation.
+Bridge results: print `error`, `details` and `attempt`, rather than one parsed
+field. Missing state or an absent attempt file does not prove zero input. Only
+affirmative original preflight/host evidence of zero input permits a fresh
+authorized submission. Existing or uncertain input is observed through its
+original controller with `--reconcile-only`, without repaste or blind Enter.
+A fresh marker-bearing receiver user record proves receipt; complete body
+reading and business acceptance need their own evidence.
+
 The 0.4.57 audit fix preserves task-continuation and fail-open outcome receipts.
 It retains original 0.4.56 proactive registrations without re-enrollment; no
 legacy registration gains new authority. See [0.4.57](references/release-0.4.57.md).
