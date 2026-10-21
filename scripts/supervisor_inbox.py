@@ -271,6 +271,9 @@ def discover_bound(workspace, supervisor, *, thread_id=None, emit=None, now=None
                     or body.get('status') != 'WAITING_REPLY'
                     or body.get('schema') not in ('executor-reask-current-v2', 'coordination-request-v1')):
                 continue
+            if (body.get('successor_supervisor_session_id') is not None
+                    and body['successor_supervisor_session_id'] != thread_id):
+                continue
             marker = body.get('marker')
             if not isinstance(marker, str) or not marker or len(marker) > 160:
                 continue

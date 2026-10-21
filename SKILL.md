@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.60.** Ready messages may be sent directly in either direction,
+**Version: 0.4.61.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -17,6 +17,15 @@ original receiver transcript proves reception. Do not repaste an uncertain
 message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
+
+Bounded transcript reads make progress through complete records up to 8MiB,
+preserving exact record offsets, byte counts and line-ending hashes. Partial
+records, tool output, queued attachments and `isMeta` hook feedback do not prove
+native reception. Automatic terminal inquiries stop after authenticated provider
+failures; file inquiries remain available. An exited shell is refused before
+input. Explicit successor inquiry registration and durable original-executor
+work checkpoints preserve the previous episode and its owners. See
+[bounded continuity](references/release-0.4.61.md).
 
 New file-only enrollments retain their preference. The authenticated original
 executor can run `observe-reply` without sending, asking, consuming or releasing
@@ -55,6 +64,12 @@ continue with the available participants after bounded genuine retries; if
 Codex fails, the original same-task Claude peers coordinate and continue the
 existing plan. Use no more than two child agents across that task and verify
 results reached their parent. Preserve original sessions and shared-file owners.
+
+In the Codex-unavailable peer phase, each author may have at most two submitted
+packages awaiting completed peer review. At the limit, cross-review existing
+work, register the next scope without executing it, or make the original
+60-second inquiry. Existing excess packages remain valid and must be drained
+before new author work. Peer review remains separate from supervisor acceptance.
 
 New explicitly authorized continuing inquiries MUST enroll with
 `--continuing --reservation-inquiries --proactive-hook`. The installed Stop

@@ -254,6 +254,30 @@ class SuccessorNativeDeliveryTests(unittest.TestCase):
         self.assertEqual(body.read_bytes(), self.text.encode())
         self.assertEqual(body.stat().st_mode & 0o222, 0)
 
+    def test_preplanned_reference_without_body_refuses_before_original_input(self):
+        import cmux_prompt_reference as reference
+        body = self.text + '\n' + 'body' * 200
+        planned = reference.plan(body, self.marker, self.root / 'message-bodies-v1')
+        self.text = planned['text']
+        with self.assertRaises(FileNotFoundError):
+            self.submit()
+        self.assertEqual(self.bridge.operations, [])
+        self.assertFalse((self.journal() / 'attempt.json').exists())
+
+    def test_preplanned_reference_keeps_exact_body_pin_during_reconciliation(self):
+        import cmux_prompt_reference as reference
+        body = self.text + '\n' + 'body' * 200
+        planned = reference.plan(body, self.marker, self.root / 'message-bodies-v1')
+        reference.persist(planned['reference'], body)
+        self.text = planned['text']
+        self.assertTrue(self.submit()['confirmed'])
+        path = Path(planned['reference']['path'])
+        path.chmod(0o600)
+        path.write_text('changed')
+        with self.assertRaises(ValueError):
+            self.submit()
+        self.assertEqual(self.bridge.operations, ['paste'])
+
     def test_ambiguous_paste_never_replays_or_submits_a_key(self):
         self.bridge.fail_paste = True
         with self.assertRaisesRegex(RuntimeError, "ambiguous paste failure"):

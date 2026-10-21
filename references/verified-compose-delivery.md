@@ -59,6 +59,14 @@ Codex bridge 优先调用已绑定原线程的 turn/steer 或 turn/start；contr
 自动转终端直发。身份不符不是降级理由。RPC 输入意图一旦落盘，超时和
 未知结果只能核原次，不再转终端，避免双送。Claude 默认直接终端发送。
 
+原生control socket不是每个Codex启动方式都必然提供的能力。记录实际
+socket路径、原native_fallback_reason和传输方式；缺失本身不是provider失败，
+也不证明daemon崩溃。仅凭FileNotFoundError不能创建socket、重启或更换原客户端。
+没有原生通道时使用上述受保护终端降级并保留其限制；不承诺即时steer。
+原reconcile结果中的COMPACTION_STILL_ACTIVE/extra_enter_deferred只说明本次
+观察到的补键推迟，不是原生队列或未收件的证明。按实际原收件核验，
+正文提到压缩不算当前状态，也不以任意六分钟等待授予重发权限。
+
 终端在输入区空闲时一次原文粘贴并请求主机提交；不等工作回合空闲或完整屏幕稳定。默认有界观察
 30 秒（显式0–60秒）。未见 marker user 且原生状态仍为 pending 时，若屏幕
 显示压缩时在有限预算内等压缩结束，未结束则保留补键预算并返回 pending；

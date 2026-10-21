@@ -255,6 +255,10 @@ def consume(caller, reply_sha256='', *, now=None):
                        body_sha256=reply.get('body_sha256'), body=body,
                        consumption='EXPLICIT_FOREGROUND_EXECUTOR_ACK',
                        executor_authentication=consumer)
+        for key in ('canonical_body_sha256', 'body_sha256_encoding', 'raw_sha256',
+                    'raw_bytes', 'raw_scope', 'source_identity', 'transcript_record'):
+            if key in reply:
+                receipt[key] = copy.deepcopy(reply[key])
         path = reask.root() / 'consumed' / ready.digest(caller) / (ready.digest(
             state['episode_id'] + ':' + marker) + '.json')
         prior = ready.read_json(path)
@@ -540,6 +544,20 @@ def apply_boundary(state, marker, event, now, *, observed=False, publish=True,
         return False
     foreign = owners[0] != state['supervisor']
     reserved = marker_epoch(marker)
+    successor = state.get('successor_registration') or {}
+    inherited = successor.get('inherited_reservations', [])
+    reservation = dict(collaboration_id=marker['collaboration_id'], task_id=marker['task_id'])
+    if (event == 'RELEASED' and reservation in inherited
+            and owners[0] != successor.get('original_supervisor_uuid')):
+        return False
+    if (event == 'RELEASED' and foreign
+            and owners[0] == successor.get('original_supervisor_uuid')
+            and reservation in inherited and reservation in state.get('paused_tasks', [])
+            and ('armed_at' not in marker or reserved is not None and reserved <= state['started_epoch'])):
+        # The original formal owner can release only its exact carried reservation.
+        # This bookkeeping grants no successor callback or shared-write authority.
+        changed = _release_reservation(state, reservation, now, publish=publish)
+        return changed
     if event == 'RESERVED':
         if reserved is None and not observed and 'armed_at' not in marker:
             reserved = now

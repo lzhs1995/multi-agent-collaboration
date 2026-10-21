@@ -2,6 +2,7 @@
 import copy
 from contextlib import redirect_stdout
 import io
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -80,6 +81,27 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNone(reask.load(CALLER)['reply_consumed_epoch'])
         self.assertEqual(scheduler.sweep(now=5000.)['file_posts'], 0)
         self.assertEqual(reask.load(CALLER)['state'], reask.ANSWERED)
+
+    def test_exact_mailbox_bytes_and_canonical_hash_survive_consumption_separately(self):
+        self.enroll()
+        scheduler.sweep(now=1001.)
+        state = reask.load(CALLER)
+        current = ready.read_json(reask.inbox_path(state))
+        body = dict(current['reply_template'], status='ACK', trigger='已完整核读，继续原任务。')
+        raw = (json.dumps(body, ensure_ascii=False, indent=4) + '\n\n').encode('utf-8')
+        Path(current['reply_mailbox']).write_bytes(raw)
+        scheduler.sweep(now=1002.)
+        state = reask.load(CALLER)
+        reply = state['reply']
+        self.assertEqual(reply['raw_sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(reply['raw_bytes'], len(raw))
+        self.assertEqual(reply['canonical_body_sha256'], reply['body_sha256'])
+        self.assertNotEqual(reply['raw_sha256'], reply['body_sha256'])
+        result = lifecycle.consume(CALLER, reply['body_sha256'], now=1003.)
+        receipt = ready.read_json(result['consume_result']['receipt'])
+        for key in ('raw_sha256', 'raw_bytes', 'source_identity', 'canonical_body_sha256', 'body_sha256_encoding'):
+            self.assertEqual(receipt[key], reply[key])
+        self.assertEqual(result['rearm_count'], 1)
 
     def consumption_files(self):
         return {str(path): path.read_bytes() for path in ready.state_root().rglob('*')

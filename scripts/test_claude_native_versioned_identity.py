@@ -72,8 +72,9 @@ class VersionedClaudeTests(unittest.TestCase):
     def test_version_name_outside_install_root_is_not_provider(self):
         self.process["executable"] = str(self.home / "other/2.1.303")
         self.assertIsNone(native._provider(self.process))
-        with self.assertRaisesRegex(native.NativeDeliveryError, "NOT_UNIQUE"):
+        with self.assertRaisesRegex(native.NativeDeliveryError, "AGENT_ABSENT") as error:
             self.select([self.process])
+        self.assertEqual(error.exception.details["input_operations"], 0)
 
     def test_other_home_and_nested_paths_are_rejected(self):
         for path in ["/Users/other/.local/share/claude/versions/2.1.303",
@@ -128,8 +129,9 @@ class VersionedClaudeTests(unittest.TestCase):
 
     def test_other_surface_is_not_selected(self):
         self.process["env"]["CMUX_SURFACE_ID"] = "OTHER"
-        with self.assertRaisesRegex(native.NativeDeliveryError, "NOT_UNIQUE"):
+        with self.assertRaisesRegex(native.NativeDeliveryError, "AGENT_ABSENT") as error:
             self.select([self.process])
+        self.assertEqual(error.exception.details["input_operations"], 0)
 
 
 if __name__ == "__main__":

@@ -115,6 +115,57 @@ only after the parent has received and read the matching result; a spawn ID,
 tool success or a written file alone is insufficient. Confirm actual model and
 elapsed execution if those constraints matter. The parent retains responsibility.
 
+### Bound submitted peer work
+
+During Codex-unavailable continuation, count each author's frozen, submitted
+package until its peer review is complete and linked to the exact package hash.
+Each author may have at most two such packages. At two, cross-review the peer's
+existing work, register a future CLAIM/plan without executing it, or run the
+original authorized 60-second inquiry. Do not start another author package.
+If a recovered checkpoint already has more than two, preserve every package and
+drain the excess before starting new author work. Closing peer review frees this
+work budget; it does not grant original-supervisor or scientific acceptance.
+
+Maintain a small index of author, package pin, peer reviewer and exact review
+result. Do not count inquiry rounds as completed work or mistake independent
+recomputation being frozen for the peer's completed review.
+
+## Explicit successor inquiry enrollment (0.4.61)
+
+An ordinary maintenance contact does not move an old inquiry episode. Only the
+authenticated original executor can use `executor_reask.py register-successor`
+with a pinned `executor-successor-inquiry-authority-v1` file. Preview sends no
+input and changes no registration. Apply requires the preview's exact
+`--plan-sha256`, unchanged original state/enrollment/stop, current complete
+controller, matching original executor and a fresh native Codex target. A new
+Codex thread on the same surface also needs this explicit registration.
+
+The authority binds the original episode, overall task and executor session,
+both supervisors, the successor thread, expiry and the actual user instruction.
+It allows continuing inquiries only: no old task replay, shared writes or
+callback transfer. A stopped episode additionally requires explicit
+`allow_resume_stopped=true` and `--resume-stopped`. Original preimages are
+archived before the recoverable registration transaction. The new episode is
+file-only; pending input and formal reservations retain their original owners.
+Changed or uncertain plans cannot be refreshed silently into an apply.
+
+## Progress and provider failures (0.4.61)
+
+`work-checkpoint` verifies the original executor and exact work-order/evidence
+pins, then archives a unique, monotonic work report. Previous checkpoint SHA,
+completed unit IDs, closed issues and status cannot regress. Work summaries are
+executor self-reports; parent acceptance remains `UNMEASURED`. Inquiry counts
+are not progress. A failed directory sync must be retried on the same archive
+before committing state, without rolling back a newer checkpoint epoch.
+
+Before automatic terminal inquiry input, the provider circuit reads bounded
+original Codex terminal outcome records. Three distinct same-class failures,
+or one authentication/billing failure, suppress that automatic input. Repeated
+observations of the same attempt do not add failures. Only a genuine native API
+success rearms an open circuit; file inquiries remain available. The circuit
+does not change credentials/providers, restart a session or rescue a Goal.
+Explicit ordinary communication keeps its own authorization and input checks.
+
 ## One maintenance and release path
 
 Report problems and measured experience to the designated maintenance owner

@@ -113,6 +113,38 @@ A bounded review may write its outline early and finish as `PARTIAL` or
 accepted round or upgrade partial coverage to PASS. Future task packs state the
 budget's starting event, deadline and expected first evidence.
 
+## Progress paths, final outputs and available tools
+
+Each new work order distinguishes its acceptance record, `progress_path` and
+`final_output`. A single `output` alias designates the final report only; progress
+belongs at a separate path such as `<output>.progress.md`. Freeze each consumed
+version. Revisions arriving after FINAL use new suffixed reports and manifests,
+with the exact predecessor pin and revised scope; never overwrite the report
+bound to an existing callback. An executor checkpoint is a self-report, not
+supervisor acceptance.
+
+Observe required toolchains, command versions and actual available disk before
+dispatching work that depends on them. Record missing and unknown capabilities.
+A command that returned 127, never ran, or redirected only an error cannot certify
+parse/type/build success. Prepare local or GitHub Actions checks when needed;
+the executor reports `NOT_RUN` until actual results exist. VPS builds remain
+outside this workflow.
+
+Waiting executors use their original authorized 60-second runner and inspect
+new original-session input and file context when it returns. A `queued_command`
+can expose a pending task for reading, but is not native operator receipt or
+acceptance. Do not begin work from an unissued draft pack found on disk.
+When a mailbox reply also refers to an already submitted native task, keep an
+evidence-only `duplicate_of_native_marker` and original attempt/pack pin in its
+delivery manifest. That link has no runtime reader or dispatch authority;
+retain the original task deduplication and dedicated submission route.
+
+Measure send-to-receipt, receipt-to-FULL-read and read-to-acceptance separately.
+Tool-call or compaction intervals overlapping a delay do not prove its entire
+cause. No finite observation window, marker hit count or silent transcript
+permits a resend. Use bounded zero-input reconciliation through the original
+controller; longer waiting leaves the same original attempt pending.
+
 ## Runtime provenance and explicit profiles
 
 Distinguish CCC, native Goal, scheduled tasks and Stop hooks by their actual

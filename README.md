@@ -1,4 +1,4 @@
-# Current release: 0.4.54
+# Current release: 0.4.61
 
 Send ready messages directly in both directions, including during work, Goal and
 compaction. Raw cmux send/send-key/paste is allowed. The optional bridge uses
@@ -8,9 +8,17 @@ the unique marker in the original receiver transcript. Never repaste an uncertai
 message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md).
 
+Bounded transcript scans preserve large-record progress and exact receipt
+evidence. Provider circuits keep automatic inquiries from feeding failed
+supervisor turns; file requests remain available. Successor inquiry enrollment
+requires the original executor, a pinned authorization and the exact reviewed
+plan. Durable work checkpoints report unique progress separately from parent
+acceptance. See [0.4.61](references/release-0.4.61.md) and
+[task continuity](references/task-continuity.md).
+
 ## Earlier release notes (historical behavior, not new-message admission rules)
 
-Current source: **0.4.54**. Communicate between distinct existing terminal tabs
+Release **0.4.54** introduced communication between distinct existing terminal tabs
 in one pane, preserving authenticated identities and serialized input. See the
 [0.4.54 contract](references/release-0.4.54.md).
 

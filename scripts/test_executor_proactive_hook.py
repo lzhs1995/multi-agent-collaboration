@@ -229,7 +229,13 @@ class ProactiveHookTests(unittest.TestCase):
             self.assertIn('RESERVATION_STATUS', body)
             self.assertIn('neither dispatches work nor releases a reservation', body)
             ask.update(outcome='CONFIRMED', receipt=dict(native_received_at_epoch=1001.))
+        # Provider outcome observation is external native I/O in this formal
+        # ownership fixture. Its positive/negative controls run separately in
+        # test_executor_provider_circuit with a complete original binding.
+        import executor_provider_circuit as circuit
         with patch.object(native, 'bind_target', return_value=dict(provider='codex')) as bind, \
+                patch.object(circuit, 'terminal_gate', return_value=dict(suppress=False,
+                    status='CLOSED', input_operations=0)), \
                 patch.object(ready, 'advance_ask', side_effect=advance) as transport:
             state = reask.tick(CALLER, 1001.)
         self.assertEqual(state['asks'][-1]['outcome'], 'CONFIRMED')
