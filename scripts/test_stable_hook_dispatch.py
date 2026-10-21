@@ -119,7 +119,7 @@ class StableHookTests(unittest.TestCase):
     def test_dispatcher_resolves_current_release_entry_each_call(self):
         first = self.release('0.4.59-aaaaaaaaaaaa', {'scripts/mac_hook_entry.py': b'# a\n'})
         self.assertEqual(dispatch.resolve(self.home, 'cmux_lease_guard'),
-                         [sys.executable, '-B', str(first / 'scripts/mac_hook_entry.py'), '--hook', 'cmux_lease_guard'])
+                         [sys.executable, '-BE', str(first / 'scripts/mac_hook_entry.py'), '--hook', 'cmux_lease_guard'])
         second = self.release('0.4.60-bbbbbbbbbbbb', {'scripts/mac_hook_entry.py': b'# b\n'})
         self.assertEqual(dispatch.resolve(self.home, 'cmux_lease_guard')[2], str(second / 'scripts/mac_hook_entry.py'))
 
@@ -127,7 +127,7 @@ class StableHookTests(unittest.TestCase):
         old = self.release('0.4.58-cf3f6175840b', {'scripts/cmux_workspace_guard.py': b'# w\n',
                                                      'scripts/cmux_workflow_advisory.py': b'# a\n'})
         self.assertEqual(dispatch.resolve(self.home, 'cmux_workspace_guard'),
-                         [sys.executable, '-B', str(old / 'scripts/cmux_workspace_guard.py')])
+                         [sys.executable, '-BE', str(old / 'scripts/cmux_workspace_guard.py')])
         self.assertEqual(dispatch.resolve(self.home, 'cmux_lease_guard')[2:],
                          [str(old / 'scripts/cmux_workflow_advisory.py'), '--hook', 'cmux_lease_guard.py'])
 
@@ -442,6 +442,34 @@ class StableHookTests(unittest.TestCase):
         extra.unlink()
         (source / 'scripts/redirect').symlink_to(self.home, target_is_directory=True)
         self.assertEqual(self.skip(), 'RELEASE_MEMBER_SYMLINK')
+
+    def test_external_cache_environment_cannot_poison_installed_or_direct_hook(self):
+        source = self.runtime_release()
+        m.publish_dispatcher(self.home)
+        prefix = self.home / 'external-bytecode'
+        poison = self.home / 'poison.py'
+        poison.write_text('print("EXTERNAL_UNVERIFIED_PYC_MUST_NOT_RUN")\n')
+        cache = prefix / str(source / 'scripts').lstrip('/') / ('manage_install.' + sys.implementation.cache_tag + '.pyc')
+        py_compile.compile(str(poison), cfile=str(cache),
+                           invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+        environment = dict(os.environ, HOME=str(self.home), PYTHONPYCACHEPREFIX=str(prefix),
+                           PYTHONPATH=str(self.home / 'untrusted-path'),
+                           PYTHONHOME=str(self.home / 'not-a-python-install'))
+        with patch.object(m, 'ROOT', source):
+            registered = shlex.split(m.command('cmux_workspace_guard', self.home))
+        self.assertEqual(registered[:2], [sys.executable, '-BE'])
+        for argv in (registered,
+                     [sys.executable, '-BE', str(source / 'scripts/mac_hook_entry.py'), '--hook', 'cmux_workspace_guard']):
+            run = subprocess.run(argv, input='{}', text=True, capture_output=True, timeout=15, env=environment)
+            self.assertEqual((run.returncode, run.stdout.strip()), (0, 'PINNED_GUARD {}'), run.stderr)
+        # An explicitly unisolated direct call is refused even with an external
+        # prefix outside scripts. No reliance on -B preventing cache reads.
+        environment.pop('PYTHONHOME')
+        for script in (SCRIPTS / 'mac_hook_dispatch.py', source / 'scripts/mac_hook_entry.py'):
+            run = subprocess.run([sys.executable, '-B', str(script), '--hook', 'cmux_workspace_guard'],
+                                 input='{}', text=True, capture_output=True, timeout=15, env=environment)
+            self.assertEqual((run.returncode, run.stdout), (0, ''), run.stderr)
+            self.assertIn('RELEASE_EXTERNAL_BYTECODE_CACHE_REFUSED', run.stderr)
 
     def test_dispatcher_identical_publication_reuses_existing_inode(self):
         first = m.publish_dispatcher(self.home)

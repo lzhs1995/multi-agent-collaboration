@@ -67,6 +67,8 @@ def verify_runtime(source, manifest):
     members = manifest.get('files')
     if not isinstance(members, dict):
         raise Skip('RELEASE_MANIFEST_INVALID')
+    if sys.pycache_prefix is not None:
+        raise Skip('RELEASE_EXTERNAL_BYTECODE_CACHE_REFUSED')
     required = ({'scripts/manage_install.py', 'scripts/cmux_workflow_advisory.py'}
                 if 'scripts/mac_hook_entry.py' in members else set())
     for relative in members:
@@ -135,17 +137,17 @@ def resolve(home, hook):
     # apply to every routed release, not only one with the new entry script.
     verify_runtime(source, manifest)
     if entry is not None:
-        return [str(python), '-B', str(entry), '--hook', hook]
+        return [str(python), '-BE', str(entry), '--hook', hook]
     # Rollback to a release without the in-release router.
     if hook in LEGACY_DIRECT:
         target = _pinned(source, manifest, 'scripts/' + hook + '.py')
         if target is not None:
-            return [str(python), '-B', str(target)]
+            return [str(python), '-BE', str(target)]
         raise Skip('RELEASE_HOOK_MISSING')
     wrapper = _pinned(source, manifest, 'scripts/cmux_workflow_advisory.py')
     if wrapper is None:
         raise Skip('RELEASE_HOOK_MISSING')
-    return [str(python), '-B', str(wrapper), '--hook', hook + '.py']
+    return [str(python), '-BE', str(wrapper), '--hook', hook + '.py']
 
 
 def record_skip(home, hook, reason):

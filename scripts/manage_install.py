@@ -127,6 +127,8 @@ RELEASES = Path('.local/share/multi-agent-collaboration/releases')
 APPROVED_DISPATCHERS = frozenset({
     '1e1104958d0715aa0c346b4d186a2c1d85cf6b2f908f9489f19f00723856aa19',
     'a2e0b9b94d41dc4659df269b0b33bd84c39c77d2959c90ec4bd1807158973f48',
+    # Reviewed 2e4b8ea0217c6cc5f3e4a404b8cddf3478de9357.
+    '2764dd99ec600034f9c2cc6130392e179487c378448bfea365597506d20a62bc',
 })
 
 
@@ -162,9 +164,9 @@ def command(name, home=None):
     """
     owner = release_home()
     if owner is not None and (home is None or Path(home).resolve() == owner.resolve()):
-        return shlex.join([sys.executable, '-B', str(dispatcher_path(owner)), '--hook', name])
+        return shlex.join([sys.executable, '-BE', str(dispatcher_path(owner)), '--hook', name])
     script, arguments = route(name)
-    return shlex.join([sys.executable, '-B', str(script), *arguments])
+    return shlex.join([sys.executable, '-BE', str(script), *arguments])
 
 
 def dispatcher_check(home):
@@ -182,7 +184,7 @@ def dispatcher_check(home):
         result.update(resolved=False, skip_reason=str(exc))
     if result['present'] and result['matches_release'] and result['resolved']:
         result['probe'] = doctor_probe('cmux_lease_guard', home=home,
-                                      argv=[sys.executable, '-B', str(target), '--hook', 'cmux_lease_guard'])
+                                      argv=[sys.executable, '-BE', str(target), '--hook', 'cmux_lease_guard'])
         result['benignExitZero'] = result['probe']['benignExitZero']
     return result
 
@@ -349,7 +351,7 @@ def owned_command(value, home):
         words.pop(0)
     if not words or not Path(words.pop(0)).name.startswith('python'):
         return False
-    while words and words[0] in ('-B', '-u'):
+    while words and words[0] in ('-B', '-BE', '-E', '-u'):
         words.pop(0)
     if not words:
         return False

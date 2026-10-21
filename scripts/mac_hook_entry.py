@@ -64,6 +64,8 @@ def verify_source():
     source = SCRIPTS.parent
     if source.name != 'source' or source.parent.parent.name != 'releases':
         return
+    if sys.pycache_prefix is not None:
+        raise RouterFailure('RELEASE_EXTERNAL_BYTECODE_CACHE_REFUSED')
     try:
         current = json.loads((Path.home() / '.local/state/multi-agent-collaboration/CURRENT.json').read_bytes())
         raw = (source.parent / 'MANIFEST.json').read_bytes()

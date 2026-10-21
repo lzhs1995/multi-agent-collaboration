@@ -9,6 +9,9 @@ scripts member, including data and test fixtures, before importing them.
 Bytecode caches (including empty __pycache__ directories) are refused because
 Python -B prevents writing, not reading, them. Direct router calls bootstrap
 the verifier from its exact pinned source bytes rather than import a cache.
+Registered hooks and every resolved release target use -BE to ignore Python
+environment overrides (including external bytecode prefixes and Python paths).
+An unisolated direct call with a configured external bytecode prefix is refused.
 It execs the current release's Python/router with stdin
 unchanged; the router preserves each guard's original route and exit status.
 
@@ -33,6 +36,9 @@ recorded staging path; a detected conflict stops registration and never swaps
 back over a later writer. Foreign bytes seen before publication are left in
 place. Identical publication reuses its inode. A deliberate guardian pause
 stays under its original owner.
+Publishing requires a canonical HOME path with no symlinked ancestors; a
+redirected HOME is refused conservatively. Each future dispatcher release must
+add its exact reviewed predecessor SHA to the upgrade allowlist.
 
 Successor lock refusal identifies the contended shared lock and path before
 input. Bounded `holder_pids` observation lists open-file PIDs, which are advisory
