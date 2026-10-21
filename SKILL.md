@@ -54,17 +54,21 @@ user stop/revocation or task completion ends the obligation. Global hooks for
 unrelated tasks remain advisory. These current task-scoped rules supersede the
 historical “Stop only observes” guidance below for enrolled new episodes.
 
-Supervisor STANDBY precedence: once the original executor has read and
-acknowledged an explicit supervisor STANDBY or HOLD reply, “until the supervisor
-replies” is satisfied. Stay on standby with no idle inquiry or runner restart
-until a new package or log arrives; resume the 60-second inquiry only when a
-later delivered callback or idle notice has no supervisor reply. A marker
-receipt that lands in a failed supervisor turn is not a reply. Bridge results:
-print `error`, `details` and `attempt` verbatim, not one parsed field. No `state`
-and no attempt file containing the marker means zero input: send once with a
-new marker. An existing attempt is observed only through the receiver rollout and
-one `--reconcile-only`. For user-authorized direct sends, Enter rc=0 is not
-submission; verify the composer cleared and a new marker user record exists.
+Supervisor STANDBY precedence: an explicit reply from the authenticated original
+supervisor, bound to this task, satisfies “until the supervisor replies” after
+the original executor reads its complete body and acknowledges it. A continuing
+mailbox reply still needs exact-SHA `consume` through its original controller;
+an unconsumed ANSWERED reply is not completed standby. Follow the reply's waiting
+scope and resumption condition. A later authorized callback or inquiry without
+a reply can require another 60-second inquiry. Silence, a log, a queued marker
+or a failed supervisor turn never supplies STANDBY or releases a reservation.
+Bridge results: print `error`, `details` and `attempt`, rather than one parsed
+field. Missing state or an absent attempt file does not prove zero input. Only
+affirmative original preflight/host evidence of zero input permits a fresh
+authorized submission. Existing or uncertain input is observed through its
+original controller with `--reconcile-only`, without repaste or blind Enter.
+A fresh marker-bearing receiver user record proves receipt; complete body
+reading and business acceptance need their own evidence.
 
 The 0.4.57 audit fix preserves task-continuation and fail-open outcome receipts.
 It retains original 0.4.56 proactive registrations without re-enrollment; no
