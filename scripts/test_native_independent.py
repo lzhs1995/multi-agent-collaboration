@@ -152,8 +152,8 @@ class NativeCase:
 
     def _ps(self, args, **kwargs):
         self.ps_calls.append(list(args))
-        if args == ["/bin/ps", "-ww", "-U", str(os.getuid()), "-o", "pid=,comm="]:
-            output = str(PID) + " " + self.process["executable"] + "\n"
+        if args == ["/bin/ps", "-ww", "-t", TTY, "-o", "pid=,uid=,tty=,comm="]:
+            output = str(PID) + " " + str(os.getuid()) + " " + TTY + " " + self.process["executable"] + "\n"
         elif args == ["/bin/ps", "-p", str(PID), "-o", "tty="]:
             output = TTY + "\n"
         else:

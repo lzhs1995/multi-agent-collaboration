@@ -14,9 +14,12 @@ import socket
 import subprocess
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
+import time
 
 import cmux_bridge as bridge
 import cmux_codex_input as direct
+import cmux_confirmation as confirmation
 import cmux_native_delivery as native
 import executor_ready as ready
 import executor_reask as reask
@@ -46,8 +49,10 @@ class OfflineCase(unittest.TestCase):
         self.rpc = FakeRPC(self.fixture)
         self.fixture.rpc.side_effect = lambda **kwargs: self.rpc
         self.state_root = ready.state_root()
-        self.fixture.stack.enter_context(patch.object(
-            direct.time, "monotonic", side_effect=itertools.count().__next__))
+        # RPC elapsed-time checks do not consume the process identity budget.
+        rpc_clock = SimpleNamespace(monotonic=itertools.count().__next__, time=time.time, sleep=time.sleep)
+        self.fixture.stack.enter_context(patch.object(direct, "time", rpc_clock))
+        self.fixture.stack.enter_context(patch.object(confirmation, "time", rpc_clock))
         self.guards = {}
         for name in ("read_screen", "read_screen_successor", "_run_successor",
                      "require_agent_input", "compose_block_is_empty",

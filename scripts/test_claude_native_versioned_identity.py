@@ -33,7 +33,8 @@ class VersionedClaudeTests(unittest.TestCase):
 
     def select(self, processes, labels=None, tty="ttys041", drift=False):
         labels = labels or [p["executable"] for p in processes]
-        listing = "\n".join(str(p["pid"]) + " " + label for p, label in zip(processes, labels))
+        listing = "\n".join(str(p["pid"]) + " " + str(os.getuid()) + " " + self.row['tty'] + " " + label
+            for p, label in zip(processes, labels))
         reads = {}
         def process(pid, **kwargs):
             result = copy.deepcopy(next(p for p in processes if p["pid"] == pid))
@@ -42,8 +43,10 @@ class VersionedClaudeTests(unittest.TestCase):
                 result["birth"][1] += 1
             return result
         def run(argv, **kwargs):
-            if "-U" in argv:
+            if "-t" in argv:
                 self.assertIn("-ww", argv)
+                self.assertEqual(argv[argv.index('-t')+1], self.row['tty'])
+                self.assertNotIn('-U', argv)
                 return subprocess.CompletedProcess(argv, 0, stdout=listing)
             return subprocess.CompletedProcess(argv, 0, stdout=tty)
         with patch.object(native.subprocess, "run", side_effect=run), \

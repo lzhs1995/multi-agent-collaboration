@@ -1,5 +1,6 @@
 """Distinct provider outcomes, genuine rearm and file fallback; no live input."""
 import copy
+import os
 import json
 from pathlib import Path
 import tempfile
@@ -140,7 +141,7 @@ class DeadTargetTests(unittest.TestCase):
     def test_no_native_agent_and_bound_shell_get_explicit_zero_input_diagnostics(self):
         row = dict(target_surface_uuid='S', workspace_uuid='W', tty='ttys999')
         shell = dict(pid=999, birth=[1,2], executable='/bin/zsh', env=dict(CMUX_SURFACE_ID='S', CMUX_WORKSPACE_ID='W'))
-        listing = Mock(stdout='999 /bin/zsh\n')
+        listing = Mock(stdout='999 '+str(os.getuid())+' ttys999 /bin/zsh\n')
         tty = Mock(stdout='ttys999\n')
         with patch.object(native.subprocess, 'run', side_effect=[listing, tty]), patch.object(native.identity,'process',return_value=shell):
             with self.assertRaisesRegex(native.NativeDeliveryError, 'RETURNED_TO_SHELL') as error:

@@ -115,8 +115,8 @@ class ExecutorIdentityIntegrationTests(unittest.TestCase):
 
     def ps(self, args, **_):
         self.assertEqual(args[0], '/bin/ps')
-        if args[-1] == 'pid=,comm=':
-            out = '\n'.join(f"{p['pid']} {p['executable']}" for p in self.processes.values())
+        if args == ['/bin/ps', '-ww', '-t', self.tree_tty, '-o', 'pid=,uid=,tty=,comm=']:
+            out = '\n'.join(f"{p['pid']} {os.getuid()} {self.tree_tty} {p['executable']}" for p in self.processes.values())
         elif args[-1] == 'tty=':
             out = self.process_tty + '\n'
         else:

@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.63.** Ready messages may be sent directly in either direction,
+**Version: 0.4.64.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -34,6 +34,13 @@ own due time; unconsumed replies still require full reading and exact consume.
 Post-replace sync failures report `COMMITTED_SYNC_UNKNOWN` and require an exact
 current-candidate check before retrying directory sync. See
 [reply observation](references/release-0.4.60.md).
+
+Native target discovery uses the exact authenticated TTY inventory and a shared
+ten-second observation budget. Only read-only ps timeouts can retry, at most
+twice per command; stricter caller budgets still apply. UID filtering precedes
+kernel process reads, and native identity, fresh TTY and uniqueness checks remain.
+Reusing an inquiry with different proactive-hook authority is refused before
+state mutation. See [bounded target observation](references/release-0.4.64.md).
 
 New successor previews tolerate validated polling observations while retaining
 semantic task/reply/reservation/pending changes. Exact raw preimages are

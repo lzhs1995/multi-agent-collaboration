@@ -8,16 +8,21 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+from subprocess import TimeoutExpired as ProcessObservationTimeout
 import time
 import uuid
 from datetime import datetime
 import cmux_daemon_identity as identity
 import cmux_foreground_thread as foreground
+import cmux_identity_budget as observation_budget
 
 SCHEMA = "native-delivery-v1"
 MAX_RECORD = 8 * 1024 * 1024
 MAX_SCAN = 64 * 1024 * 1024
 IDENTITY_KEYS = ("workspace_uuid", "caller_surface_uuid", "target_surface_uuid", "target_pane_uuid")
+PROCESS_OBSERVATION_SECONDS = 10.0
+PROCESS_READ_TIMEOUT_SECONDS = 5.0
+PROCESS_READ_ATTEMPTS = 2
 
 class NativeDeliveryError(RuntimeError):
     pass
@@ -134,17 +139,60 @@ def _tree_row(bridge, target):
         raise NativeDeliveryError("NATIVE_TARGET_NOT_UNIQUE_TERMINAL")
     return rows[0]
 
+def _process_observation(argv):
+    """Retry only read-only ps timeouts, inside the caller's shared budget."""
+    for attempt in range(PROCESS_READ_ATTEMPTS):
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True,
+                timeout=observation_budget.timeout(PROCESS_READ_TIMEOUT_SECONDS), check=True)
+            observation_budget.check()
+            return result
+        except ProcessObservationTimeout as exc:
+            if attempt + 1 == PROCESS_READ_ATTEMPTS:
+                error = NativeDeliveryError('NATIVE_PROCESS_OBSERVATION_TIMEOUT')
+                error.details = dict(input_operations=0, read_only=True,
+                    zero_input_scope='this process observation only; prior caller input remains unknown',
+                    dispatch_retry_authorized=False,
+                    observation_budget_seconds=PROCESS_OBSERVATION_SECONDS,
+                    maximum_attempts_per_command=PROCESS_READ_ATTEMPTS,
+                    partial_output_used=False, automatic_target_selection=False)
+                raise error from exc
+
+
+def _process_tty(pid):
+    with observation_budget.limit(PROCESS_OBSERVATION_SECONDS):
+        return _process_observation(['/bin/ps', '-p', str(pid), '-o', 'tty=']).stdout.strip()
+
+
 def _target_process(row):
-    listing = subprocess.run(["/bin/ps", "-ww", "-U", str(os.getuid()), "-o", "pid=,comm="],
-                             capture_output=True, text=True, timeout=3, check=True)
+    tty = row.get('tty')
+    if not isinstance(tty, str) or re.fullmatch(r'tty[a-zA-Z0-9]+', tty, re.ASCII) is None:
+        raise NativeDeliveryError('NATIVE_PROCESS_TTY_SELECTOR_INVALID')
+    # ps is candidate discovery only. Restrict it to the exact target terminal;
+    # UID, executable, birth, environment, TTY and fresh rereads remain mandatory.
+    # Never reuse a cached PID or extend a stricter hook/caller budget.
+    with observation_budget.limit(PROCESS_OBSERVATION_SECONDS):
+        return _target_process_in_budget(row)
+
+
+def _target_process_in_budget(row):
+    listing = _process_observation(["/bin/ps", "-ww", "-t", row['tty'], "-o", "pid=,uid=,tty=,comm="])
     matches, shells = [], []
+    seen = set()
     for line in listing.stdout.splitlines():
-        fields = line.strip().split(None, 1)
-        if len(fields) != 2 or not fields[0].isdigit():
+        observation_budget.check()
+        fields = line.strip().split(None, 3)
+        if (len(fields) != 4 or re.fullmatch(r'[1-9][0-9]*', fields[0], re.ASCII) is None
+                or re.fullmatch(r'[0-9]+', fields[1], re.ASCII) is None
+                or fields[2] != row['tty']
+                or fields[0] in seen):
             raise NativeDeliveryError("NATIVE_PROCESS_INVENTORY_INVALID")
+        seen.add(fields[0])
+        if int(fields[1]) != os.getuid():
+            continue
         # ps labels only admit discovery. The kernel executable and full native
         # installation path must still pass _provider after the process read.
-        name = Path(fields[1]).name
+        name = Path(fields[3]).name.lstrip('-')
         if name in ('sh', 'bash', 'zsh', 'fish'):
             try:
                 shell = identity.process(int(fields[0]), validate_argv=False)
@@ -152,8 +200,7 @@ def _target_process(row):
                 continue
             if (shell['env'].get('CMUX_SURFACE_ID', '').upper() == row['target_surface_uuid'].upper()
                     and shell['env'].get('CMUX_WORKSPACE_ID', '').upper() == row['workspace_uuid'].upper()):
-                tty = subprocess.run(['/bin/ps', '-p', str(shell['pid']), '-o', 'tty='],
-                    capture_output=True, text=True, timeout=3, check=True).stdout.strip()
+                tty = _process_tty(shell['pid'])
                 if tty == row['tty'] and identity.process(shell['pid'], validate_argv=False) == shell:
                     shells.append(dict(pid=shell['pid'], birth=shell['birth'], executable=shell['executable']))
             continue
@@ -170,8 +217,7 @@ def _target_process(row):
             raise NativeDeliveryError("NATIVE_PROCESS_WORKSPACE_MISMATCH")
         if _provider(p) is None:
             continue
-        tty = subprocess.run(["/bin/ps", "-p", str(p["pid"]), "-o", "tty="],
-                             capture_output=True, text=True, timeout=3, check=True).stdout.strip()
+        tty = _process_tty(p['pid'])
         if tty in ("?", "??", "-", ""):
             continue
         if tty != row["tty"]:
@@ -371,8 +417,7 @@ def require_bound(bridge, surface, b, text, *, read_only=False):
     p = identity.process(b["process"]["pid"])
     if _public_process(p) != b["process"]:
         raise NativeDeliveryError("NATIVE_PROCESS_BIRTH_OR_EXECUTABLE_CHANGED")
-    tty = subprocess.run(["/bin/ps", "-p", str(p["pid"]), "-o", "tty="],
-                         capture_output=True, text=True, timeout=3, check=True).stdout.strip()
+    tty = _process_tty(p['pid'])
     if tty != b["tty"]:
         raise NativeDeliveryError("NATIVE_PROCESS_TTY_CHANGED")
     if any(p["env"].get(k) != b["identity"][v] for k, v in

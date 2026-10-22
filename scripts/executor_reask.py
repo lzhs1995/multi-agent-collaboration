@@ -251,6 +251,9 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
     reservation_inquiries = (continuation or {}).get('reservation_inquiries', False)
     if type(reservation_inquiries) is not bool or reservation_inquiries and not continuing:
         raise ValueError('reservation inquiries require explicit continuing authorization')
+    proactive_hook = (continuation or {}).get('proactive_hook', False)
+    if type(proactive_hook) is not bool or proactive_hook and not (continuing and reservation_inquiries):
+        raise ValueError('proactive hook requires explicit continuing reservation inquiry authorization')
     old = load(caller)
     binding = dict(caller_surface_uuid=caller, supervisor=supervisor, task_id=task_id,
                    workspace_uuid=workspace, purpose=purpose)
@@ -261,6 +264,11 @@ def prepare_start_locked(caller, supervisor, task_id='', transcript='', channels
         if (continuing and reservation_inquiries !=
                 (old.get('continuation') or {}).get('reservation_inquiries', False)):
             raise ValueError('existing episode must close before changing reservation inquiry authorization')
+        if continuing:
+            old_proactive = (old.get('continuation') or {}).get('proactive_hook', False)
+            if type(old_proactive) is not bool or proactive_hook is not old_proactive:
+                raise ValueError('existing episode must close before changing proactive hook authorization; '
+                    'use an exact-preview register-successor for an authorized new scope')
         # Never migrate an old episode: absence stays absence. A recorded
         # preference can only be reused unchanged.
         if 'file_only_preference' in old and old['file_only_preference'] is not file_only:

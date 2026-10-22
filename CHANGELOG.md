@@ -1,3 +1,18 @@
+## 0.4.64
+
+- Limit native process discovery to the exact target TTY and filter foreign UIDs
+  before kernel reads. Retain process birth, executable, environment, workspace,
+  surface, fresh TTY and unique native-client checks; reject duplicate PID rows.
+- Share a ten-second read-only process observation budget across discovery and
+  per-PID TTY checks, capped by stricter callers. Retry only ps timeouts at most
+  twice per command, discard partial output and never retry input or transactions.
+  Ordinary and successor rebind TTY reads use the same observer (L463-1).
+- Refuse changed proactive-hook authority on reused inquiry episodes before
+  state mutation, directing an authorized caller to exact-preview successor
+  registration (#74). Preserve absent legacy flags and unchanged registrations.
+- Pin the complete reviewed 0.4.63 file producer; legacy permissions, controllers,
+  pending attempts and callback ownership remain unchanged.
+
 ## 0.4.63
 
 - Keep successor preview hashes stable across validated observation-only polls,

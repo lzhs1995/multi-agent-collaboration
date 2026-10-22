@@ -1,4 +1,11 @@
-# Current release: 0.4.63
+# Current release: 0.4.64
+
+Native target discovery uses the exact authenticated TTY inventory and a shared
+ten-second observation budget. Only read-only ps timeouts can retry, at most
+twice per command; stricter caller budgets still apply. UID filtering precedes
+kernel process reads, and native identity, fresh TTY and uniqueness checks remain.
+Reusing an inquiry with different proactive-hook authority is refused before
+state mutation. See [bounded target observation](references/release-0.4.64.md).
 
 Successor previews now survive ordinary polling while preserving all task,
 reply, reservation and pending-input changes in their reviewed semantic hash.
