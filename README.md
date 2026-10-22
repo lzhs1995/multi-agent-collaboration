@@ -1,4 +1,10 @@
-# Current release: 0.4.62
+# Current release: 0.4.63
+
+Successor previews now survive ordinary polling while preserving all task,
+reply, reservation and pending-input changes in their reviewed semantic hash.
+Apply captures and archives the complete current raw preimages under the
+original locks and verifies them again before commit. See
+[successor polling continuity](references/release-0.4.63.md).
 
 Reply reminders now distinguish an unanswered inquiry from a body that still
 needs full reading and exact consumption. New scoped reviews use separate

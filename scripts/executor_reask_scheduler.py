@@ -511,7 +511,8 @@ def start(live, *, now=None, authenticate_executor=False, successor_transition=N
         check = None
         if successor is not None:
             from executor_successor_registration import validate_commit
-            check = lambda: validate_commit(successor_transition, previous, now=time.time() if realtime else now)
+            check = lambda: validate_commit(successor_transition, previous,
+                now=time.time() if realtime else now, preimages=successor['commit_preimages'])
         return _commit(state, pins, previous, raw, authorization='EXPLICIT_REASK_START',
                        original=reask.controller(), now=now,
                        resume_stopped=kwargs.get('resume_stopped', False), precommit_check=check)
