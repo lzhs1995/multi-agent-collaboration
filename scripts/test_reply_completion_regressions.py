@@ -79,6 +79,8 @@ class ReplyCompletionRegressions(unittest.TestCase):
         self.assertEqual(value['status_observation']['state_sha256'], hashlib.sha256(before).hexdigest())
         self.assertEqual(value['status_observation']['bytes'], len(before))
         self.assertEqual(value['reply_observation']['status'], 'ANSWERED_UNCONSUMED')
+        self.assertEqual(value['reply_observation']['next_action'],
+                         'FULL_READ_AND_ORIGINAL_SHA_CONSUME')
         self.assertEqual(path.read_bytes(), before)
 
     def test_status_unreadable_symlink_is_not_an_absent_episode(self):
