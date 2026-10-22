@@ -105,6 +105,9 @@ class HistoricalInquiryTests(unittest.TestCase):
     def test_reviewed_0461_reservation_inquiries_survive_current_scheduler(self):
         self.check_authorized('0.4.61-')
 
+    def test_reviewed_0464_reservation_inquiries_survive_current_scheduler(self):
+        self.check_authorized('0.4.64-')
+
     def test_absent_authorization_remains_paused(self):
         original, record, _source = self.historical_wait(capability=None)
         result = scheduler.sweep(now=1002.)

@@ -70,7 +70,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual((row['status'], row['caller_surface_uuid']), ('EPISODE_BUSY', CALLER))
         self.assertEqual(result['file_posts'], 0)
 
-    def test_interrupted_commit_keeps_partial_counter_and_pending_enrollment(self):
+    def test_interrupted_commit_keeps_partial_counter_and_timeout_row(self):
         self.enroll()
         tick = reask.tick_locked
         def interrupted(*args, **kwargs):
@@ -79,10 +79,13 @@ class HistoryTests(unittest.TestCase):
         with patch.object(reask, 'tick_locked', side_effect=interrupted):
             result = scheduler.sweep(now=1001.)
         entry = self.history()['entries'][-1]
-        self.assertEqual(entry['status'], 'SWEEP_BUDGET_EXHAUSTED')
+        self.assertEqual(entry['status'], 'SWEPT_WITH_EPISODE_TIMEOUTS')
         self.assertFalse(entry['file_posts_complete'])
-        self.assertEqual(entry['pending_enrollment'], entry['enrollment_order'][0])
-        self.assertEqual(entry['episodes'], [])
+        self.assertNotIn('pending_enrollment', entry)
+        self.assertEqual(entry['episodes'][0]['enrollment'], entry['enrollment_order'][0])
+        self.assertEqual(entry['episodes'][0]['status'], 'EPISODE_BUDGET_EXHAUSTED')
+        self.assertTrue(entry['episodes'][0]['may_have_committed'])
+        self.assertFalse(entry['episodes'][0]['file_posts_complete'])
         self.assertEqual(result['file_posts'], 0)
         self.assertEqual(reask.load(CALLER)['file_posts'], 1)
 

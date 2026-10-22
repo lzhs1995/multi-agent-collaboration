@@ -323,7 +323,12 @@ class SchedulerTests(unittest.TestCase):
             raise ready.WaitBudgetExpired()
         with patch.object(reask, 'tick_locked', side_effect=deadline):
             for _ in range(3):
-                self.assertEqual(scheduler.sweep(now=1001.)['status'], 'SWEEP_BUDGET_EXHAUSTED')
+                result = scheduler.sweep(now=1001.)
+                self.assertEqual(result['status'], 'SWEPT_WITH_EPISODE_TIMEOUTS')
+                self.assertEqual(result['episode_timeouts'], 3)
+                self.assertTrue(result['pass_complete'])
+                self.assertFalse(result['file_posts_complete'])
+        self.assertEqual(len(visited), 9)
         self.assertEqual(len(set(visited)), 3)
         self.assertTrue(ready.read_json(scheduler.root() / 'STATUS.json')['last_enrollment'])
 
@@ -341,9 +346,11 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(failed['phase'], 'VERIFY_RELEASE')
             self.assertEqual(failed['last_enrollment'], first['last_enrollment'])
             self.assertEqual(failed['episodes'], [])
+            self.assertEqual(len(visited), 3)
             self.approved.side_effect = None
             scheduler.sweep(now=1001.)
-        self.assertEqual(len(set(visited)), 2)
+        self.assertEqual(len(set(visited)), 3)
+        self.assertEqual(len(visited), 6)
         self.transport.assert_not_called()
 
     def test_cursor_read_deadline_preserves_exact_status_and_records_error_separately(self):
@@ -388,10 +395,14 @@ class SchedulerTests(unittest.TestCase):
             raise ready.WaitBudgetExpired()
         with patch.object(reask, 'tick_locked', side_effect=interrupted):
             failed = scheduler.sweep(now=1001.)
-        self.assertEqual(failed['status'], 'SWEEP_BUDGET_EXHAUSTED')
-        self.assertEqual(failed['phase'], 'EPISODE')
+        self.assertEqual(failed['status'], 'SWEPT_WITH_EPISODE_TIMEOUTS')
+        self.assertEqual(failed['phase'], 'COMPLETE')
         self.assertFalse(failed['file_posts_complete'])
-        self.assertTrue(failed['pending_enrollment'])
+        self.assertNotIn('pending_enrollment', failed)
+        row = failed['episodes'][0]
+        self.assertEqual(row['status'], 'EPISODE_BUDGET_EXHAUSTED')
+        self.assertTrue(row['may_have_committed'])
+        self.assertFalse(row['file_posts_complete'])
         self.assertEqual(failed['file_posts'], 0)
         self.assertEqual(reask.load(CALLER)['file_posts'], 1)
         self.transport.assert_not_called()
