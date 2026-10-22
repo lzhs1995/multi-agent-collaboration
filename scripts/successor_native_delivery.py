@@ -136,8 +136,7 @@ def require_bound(bridge, artifact, binding, text):
     process = native.identity.process(binding["process"]["pid"])
     if native._public_process(process) != binding["process"]:
         raise native.NativeDeliveryError("NATIVE_SUCCESSOR_PROCESS_CHANGED")
-    tty = native.subprocess.run(["/bin/ps", "-p", str(process["pid"]), "-o", "tty="],
-                                capture_output=True, text=True, timeout=3, check=True).stdout.strip()
+    tty = native._process_tty(process['pid'])
     if tty != binding["target_tty"]:
         raise native.NativeDeliveryError("NATIVE_SUCCESSOR_PROCESS_TTY_CHANGED")
     if process["env"].get("CMUX_SURFACE_ID", "").upper() != pair["target_surface_uuid"].upper() or process["env"].get("CMUX_WORKSPACE_ID", "").upper() != pair["target_workspace_uuid"].upper():

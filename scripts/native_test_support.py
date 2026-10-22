@@ -2,6 +2,7 @@
 import contextlib
 import copy
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -42,7 +43,7 @@ class NativeFixture(contextlib.AbstractContextManager):
         self.identity = identity if identity is not None else dict(
             workspace_uuid="workspace", caller_surface_uuid="caller",
             target_surface_uuid="target", target_pane_uuid="pane")
-        self.tty = "ttys-native-test"
+        self.tty = "ttys999"
         self.process_tty = self.tty
         self.session_id = str(uuid.uuid4())
         self.process_state = dict(
@@ -151,8 +152,8 @@ class NativeFixture(contextlib.AbstractContextManager):
         return copy.deepcopy(self.process_state)
 
     def _ps(self, args, **kwargs):
-        if args[:3] == ["/bin/ps", "-ww", "-U"]:
-            output = str(self.process_state["pid"]) + " " + self.process_state["executable"] + "\n"
+        if args == ["/bin/ps", "-ww", "-t", self.tty, "-o", "pid=,uid=,tty=,comm="]:
+            output = str(self.process_state["pid"]) + " " + str(os.getuid()) + " " + self.tty + " " + self.process_state["executable"] + "\n"
         elif args[:2] == ["/bin/ps", "-p"]:
             output = self.process_tty + "\n"
         else:
