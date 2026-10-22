@@ -332,14 +332,15 @@ def reply_notice(state):
     # The complete immutable reply object is always in this bound episode.
     # Raw mailbox bytes and canonical JSON digests are deliberately distinct.
     path = reask.state_path(state['caller_surface_uuid'])
-    command = shlex.join([controller['python'], '-B',
+    command = shlex.join([controller['python'], '-BE',
                           str(Path(controller['source']) / 'scripts/executor_reask.py'),
                           'consume', '--caller-uuid', state['caller_surface_uuid'],
                           '--reply-sha256', reply['body_sha256']])
     return dict(status='ANSWERED_UNCONSUMED', episode_id=state['episode_id'], marker=marker,
                 reply_file=str(path), json_pointer='/reply/body',
                 body_sha256=reply['body_sha256'], sha256_encoding='canonical-json-utf8',
-                consume_command=command, reservation_paused=bool(state.get('paused_tasks')),
+                consume_command=command, reply_status=body['status'],
+                reservation_paused=bool(state.get('paused_tasks')),
                 input_operations=0, consumed=False)
 
 
@@ -347,12 +348,17 @@ def emit_context(notice):
     text = ('ANSWERED_UNCONSUMED: read the complete reply at REPLY_FILE /reply/body before '
             'using the original controller command below. BODY_SHA256 hashes UTF-8 JSON '
             'with ensure_ascii=False, sort_keys=True, separators=(\',\', \':\'); it is not '
-             'the raw file SHA256. Only you may acknowledge this exact reply. A TASK reply '
-             'does not dispatch a pack; consumption never releases a formal reservation. '
-             'After reading and exact original-controller consumption, if only the supervisor '
-             'can act, end this waiting turn normally and state the pending dependency. Do not '
-             'start another model wait loop solely to look active. Preserve Goal/loop and the '
-             'authorized file scheduler; its enrollment is not proof of a running sweep. '
+             'the raw file SHA256. Only the original executor may acknowledge this exact '
+             'reply. ANSWERED_UNCONSUMED requires FULL reading and exact consumption first; '
+             'it grants no standby. UNANSWERED work retains its original authorized '
+             'continuation/inquiry obligation. CONSUMED work follows the actual reply and '
+             'continues useful assigned work. CONSUMED_STANDBY requires the original '
+             'task-bound waiting reply, its verified consumption receipt and its own future '
+             'next_due_epoch; follow that reply until its resumption condition or due time. '
+             'A later unanswered inquiry or callback requires its own response. A TASK '
+             'reply does not dispatch a pack; consumption never releases a formal '
+             'reservation. Reserved assigned work takes priority. Preserve Goal/loop '
+             'and the authorized file scheduler; its enrollment does not prove a running sweep. '
              'A separate new pack requires fresh identity, handshake and validation preflight. '
              'Both agents should send ready messages through the supported entrypoint during '
              'normal work or native Goal; do not wait for idle or pause Goal to communicate. '

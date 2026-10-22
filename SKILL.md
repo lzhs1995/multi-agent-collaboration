@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.61.** Ready messages may be sent directly in either direction,
+**Version: 0.4.62.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -34,6 +34,13 @@ own due time; unconsumed replies still require full reading and exact consume.
 Post-replace sync failures report `COMMITTED_SYNC_UNKNOWN` and require an exact
 current-candidate check before retrying directory sync. See
 [reply observation](references/release-0.4.60.md).
+
+Reply reminders distinguish unanswered work, answered-unconsumed bodies,
+consumed replies and receipt-bound STANDBY. New scoped reviews declare their
+ordinary result-notice route and separate acceptance/progress/final paths;
+formal harness packs retain their original completion callback. The zero-input
+notice planner and bounded status/archive rules are described in
+[scoped completion and reply status](references/scoped-completion-and-reply-status.md).
 
 The 0.4.59 installer registers one stable hook command per guard. It resolves
 the approved CURRENT release on each invocation and covers owned startup

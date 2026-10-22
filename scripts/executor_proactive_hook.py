@@ -26,7 +26,7 @@ import executor_reask_scheduler as scheduler
 
 def command(state, verb, *args):
     original = protocol.state_controller(state)
-    return shlex.join([original['python'], '-B',
+    return shlex.join([original['python'], '-BE',
                       str(Path(original['source']) / 'scripts/executor_reask.py'),
                       verb, '--caller-uuid', state['caller_surface_uuid'], *args])
 
@@ -94,6 +94,51 @@ def confirmed_standby(state, now):
         return None
     return dict(status=body['status'], marker=last['marker'], body_sha256=last['body_sha256'],
                 next_due_epoch=due, trigger=body.get('trigger'), receipt=str(path))
+
+
+def reply_observation(state, *, now=None):
+    """Diagnostic classification of recorded state, never consume or live health.
+
+    Reuse the same exact STANDBY semantics as Stop; do not manufacture a second
+    interpretation from an ANSWERED flag or the scheduler's future due time.
+    """
+    now = time.time() if now is None else now
+    result = dict(advisory_only=True, input_operations=0, state_changed=False,
+                  source='original_episode_and_consumption_receipt',
+                  reservation_paused=bool(state.get('paused_tasks')))
+    try:
+        if state.get('state') == reask.ANSWERED:
+            reply = state.get('reply') or {}
+            body = reply.get('body')
+            valid = (isinstance(body, dict)
+                     and reask.valid_reply(state, body, [reply.get('marker')],
+                        caller=state['caller_surface_uuid'], supervisor=state['supervisor'],
+                        task_id=state.get('task_id', ''), episode_id=state['episode_id'])
+                     and reask.reply_record(body, reply.get('source'))['body_sha256']
+                        == reply.get('body_sha256'))
+            return dict(result, status='ANSWERED_UNCONSUMED' if valid else 'REPLY_RECORD_UNVERIFIED',
+                        marker=reply.get('marker'), body_sha256=reply.get('body_sha256'),
+                        next_action='FULL_READ_AND_ORIGINAL_SHA_CONSUME' if valid else 'VERIFY_ORIGINAL_REPLY')
+        standby = confirmed_standby(state, now)
+        if standby:
+            return dict(result, status='CONSUMED_STANDBY', standby=standby,
+                        next_action='FOLLOW_REPLY_UNTIL_ITS_DUE_OR_RESUMPTION_CONDITION')
+        if state.get('state') == reask.STOPPED:
+            return dict(result, status='STOPPED', reason=state.get('exit_reason'),
+                        next_action='PRESERVE_ORIGINAL_STOP_AND_AUTHORITY')
+        if state.get('state') == reask.CONSUMED:
+            return dict(result, status='CONSUMED_RECORDED',
+                        next_action='FOLLOW_ACTUAL_REPLY_NO_IMPLICIT_NEW_DISPATCH')
+        if state.get('paused_tasks'):
+            return dict(result, status='RESERVED_ASSIGNED_WORK',
+                        next_action='CONTINUE_ORIGINAL_RESERVED_WORK')
+        if state.get('state') == reask.WAITING:
+            return dict(result, status='UNANSWERED',
+                        prior_consumed_epoch=state.get('reply_consumed_epoch'),
+                        next_action='CONTINUE_ORIGINAL_AUTHORIZED_WORK_OR_INQUIRY')
+        return dict(result, status='UNKNOWN', next_action='VERIFY_ORIGINAL_EPISODE')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return dict(result, status='REPLY_RECORD_UNVERIFIED', next_action='VERIFY_ORIGINAL_REPLY')
 
 
 def instruction(state):
