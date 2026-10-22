@@ -231,6 +231,55 @@ class ProtocolTests(unittest.TestCase):
                          patch.object(hook.scheduler, 'registration_observation', return_value='REGISTERED'):
                         self.assertFalse(hook.active(state, 100.))
 
+    def test_reviewed_0461_issuer_keeps_exact_frozen_range_and_original_controller(self):
+        release61 = '0.4.61-d14ae7c2b757'
+        release60 = '0.4.60-c0db75b2228f'
+        expected60 = REVIEWED_AT_0457 | {'0.4.58-cf3f6175840b',
+                                        '0.4.59-313dc8c3db1b', release60}
+        self.assertEqual(set(protocol.LEGACY_FILE_PROTOCOL[release60]['controllers']), expected60)
+        self.assertEqual(set(protocol.LEGACY_FILE_PROTOCOL[release61]['controllers']),
+                         expected60 | {release61})
+        for origin in expected60 | {release61}:
+            with self.subTest(origin=origin):
+                state, record = self.episode(origin)
+                before = copy.deepcopy((state, record['controller']))
+                record.update(scheduler=issuer(*self.releases[release61][:2]),
+                              schema='executor-reask-enrollment-v2',
+                              authorization='EXPLICIT_REASK_ENROLL_EXISTING',
+                              file_protocol=protocol.descriptor())
+                self.assert_supported(state, record)
+                self.assertEqual((state, record['controller']), before)
+        state, record = self.episode(release61)
+        record.update(scheduler=issuer(*self.releases[release60][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+        state, record = self.episode(current=True)
+        record.update(scheduler=issuer(*self.releases[release61][:2]),
+                      authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
+
+    def test_reviewed_0461_proactive_registration_requires_all_original_dependencies(self):
+        import executor_proactive_hook as hook
+        import executor_reask as reask
+        release = '0.4.61-d14ae7c2b757'
+        state, record = self.episode(release)
+        state.update(caller_surface_uuid=OWNER, state=reask.WAITING)
+        state['continuation'].update(reservation_inquiries=True, proactive_hook=True)
+        before = copy.deepcopy(state)
+        with patch.object(hook.lifecycle, 'poll_authorization'), \
+             patch.object(hook.scheduler, 'registration_observation', return_value='REGISTERED'):
+            self.assertTrue(hook.active(state, 100.))
+            for member in protocol.historical_files(release):
+                broken = copy.deepcopy(state)
+                for controller in (broken['controller'], broken['continuation']['controller']):
+                    controller['files'].pop(member)
+                with self.subTest(member=member):
+                    self.assertFalse(hook.active(broken, 100.))
+        self.assertEqual(state, before)
+        instruction = hook.instruction(state)
+        self.assertIn(str(self.releases[release][0] / 'scripts/executor_reask.py'), instruction)
+        self.assertNotIn(str(self.current[0]), instruction)
+
     def test_coordination_path_pin_keeps_each_original_controller_contract(self):
         member = 'scripts/cmux_coordination_paths.py'
         current, record = self.episode(current=True)

@@ -311,22 +311,32 @@ def validate_continuation(value, now=None):
 
 def archive_episode(state):
     """One bounded snapshot per real transition, never an archive per poll."""
+    from cmux_evidence_io import publish_archive, read_bytes, regular_lstat
+    from executor_reask_protocol import state_controller
+    import stat
     path = root() / 'episodes' / ready.digest(state['caller_surface_uuid']) / (
         ready.digest(state['episode_id']) + '.json')
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if path.exists():
-        previous = ready.read_json(path)
-        if not previous or previous.get('episode_id') != state['episode_id']:
-            raise ValueError('episode archive identity mismatch')
-        return path
+    for directory in (root(), root() / 'episodes', path.parent):
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
+            raise ValueError('episode archive directory is not private and owned')
     raw = json.dumps(state, ensure_ascii=False).encode()
     if len(raw) > ready.MAX_JSON_BYTES:
         raise ValueError('episode archive exceeds bounded state limit')
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'wb') as handle:
-        handle.write(raw)
-        handle.flush()
-        os.fsync(handle.fileno())
+    try:
+        regular_lstat(path, limit=ready.MAX_JSON_BYTES)
+    except FileNotFoundError:
+        publish_archive(path, raw)
+    previous = json.loads(read_bytes(path, limit=ready.MAX_JSON_BYTES))
+    keys = ('caller_surface_uuid', 'supervisor', 'workspace_uuid', 'task_id', 'episode_id')
+    if (not isinstance(previous, dict) or any(previous.get(k) != state.get(k) for k in keys)
+            or previous.get('controller') != state.get('controller')
+            or (previous.get('continuation') or {}).get('controller')
+               != (state.get('continuation') or {}).get('controller')
+            or state_controller(previous) != state_controller(state)):
+        raise ValueError('episode archive identity or original controller mismatch')
     return path
 
 
@@ -1204,12 +1214,73 @@ def summary(state, *, verification=None):
     result['transcript_error'] = state.get('transcript_error')
     from executor_work_checkpoint import progress
     result['work_progress'] = progress(state)
+    from executor_proactive_hook import reply_observation
+    result['reply_observation'] = reply_observation(state)
     for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent',
                 'consume_result', 'observe_result', 'runner_returned', 'run_return_reason',
-                'wait_boundary'):
+                'wait_boundary', 'status_observation'):
         if key in state:
             result[key] = state[key]
     return result
+
+
+def status_snapshot(caller):
+    """One bounded file observation; no transcript scan, tick or inferred health."""
+    from cmux_evidence_io import snapshot
+    path = state_path(caller)
+    observation = dict(state_file=str(path), observed_epoch=time.time(), input_operations=0,
+                       reservation_scope='RECORDED_EPISODE_ONLY',
+                       provider_availability='NOT_LIVE_EVALUATED',
+                       source='bounded_original_state_file', state_changed=False)
+    try:
+        raw, file_identity = snapshot(path, limit=ready.MAX_JSON_BYTES)
+        state = json.loads(raw)
+        if not isinstance(state, dict) or state.get('caller_surface_uuid') != caller:
+            raise ValueError('state is not bound to the requested original caller')
+        if (not isinstance(state.get('asks', []), list)
+                or any(not isinstance(row, dict) for row in state.get('asks', []))
+                or not isinstance(state.get('paused_tasks', []), list)):
+            raise ValueError('recorded inquiry or reservation entries are malformed')
+        for row in state.get('asks', []):
+            channels = row.get('channels', {})
+            if (not isinstance(channels, dict)
+                    or not isinstance(channels.get('errors', []), list)):
+                raise ValueError('recorded inquiry channels are malformed')
+        for key in ('reply', 'last_reply', 'continuation'):
+            if state.get(key) is not None and not isinstance(state[key], dict):
+                raise ValueError('recorded reply or continuation is malformed')
+        history = state.get('reply_history', [])
+        if (not isinstance(history, list)
+                or any(not isinstance(row, dict) for row in history)):
+            raise ValueError('recorded reply history is malformed')
+        checkpoints = state.get('work_checkpoints') or {}
+        from executor_work_checkpoint import STATUSES, MAX_WORK, MAX_UNITS
+        if not isinstance(checkpoints, dict) or len(checkpoints) > MAX_WORK:
+            raise ValueError('recorded work checkpoint map is malformed')
+        for item in checkpoints.values():
+            if not isinstance(item, dict) or item.get('status') not in STATUSES:
+                raise ValueError('recorded work checkpoint status is malformed')
+            for key in ('completed_unit_ids', 'closed_issue_ids'):
+                units = item.get(key, [])
+                if (not isinstance(units, list) or len(units) > MAX_UNITS
+                        or any(not isinstance(unit, str) for unit in units)):
+                    raise ValueError('recorded work checkpoint units are malformed')
+        observation.update(state_sha256=hashlib.sha256(raw).hexdigest(),
+                           bytes=len(raw), file_identity=list(file_identity))
+    except FileNotFoundError:
+        observation.update(reservation_scope='NOT_OBSERVED_WITHOUT_EPISODE')
+        return dict(outcome='NO_EPISODE', status_observation=observation)
+    except (OSError, ValueError) as exc:
+        observation.update(reservation_scope='NOT_OBSERVED_STATE_UNREADABLE',
+                           error_type=type(exc).__name__, error=str(exc)[:240])
+        return dict(outcome='STATE_UNREADABLE', status_observation=observation)
+    state['status_observation'] = observation  # Returned view only; never saved.
+    if state.get('registration'):
+        from executor_reask_scheduler import registration_observation
+        registration = registration_observation(state)
+        if registration != 'REGISTERED':
+            state.update(registration_observation=registration, input_operations=0)
+    return state
 
 
 def main(argv=None):
@@ -1351,12 +1422,7 @@ def _main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 0 if result['outcome'] in ('SUCCESSOR_READ_ONLY_PLAN', 'SUCCESSOR_INQUIRY_REGISTERED') else 2
     else:
-        state = load(caller) or dict(outcome='NO_EPISODE')
-        if state.get('registration'):
-            from executor_reask_scheduler import registration_observation
-            observation = registration_observation(state)
-            if observation != 'REGISTERED':
-                state = dict(state, registration_observation=observation, input_operations=0)
+        state = status_snapshot(caller)
     result = summary(state)
     print(json.dumps(result, ensure_ascii=False, indent=1))
     if args.cmd == 'consume' and result.get('consume_result', {}).get('consumed') is not True:
@@ -1368,6 +1434,7 @@ def _main(argv=None):
         'REGISTRATION_UNCOMMITTED', 'COMMITTED_RECOVERY_REQUIRED',
         'ORIGINAL_CONTROLLER_REQUIRED', 'UNSUPPORTED_FILE_PROTOCOL', 'EPISODE_BUSY',
         'REGISTRY_BUSY',
+        'STATE_UNREADABLE',
     } else 0
 
 

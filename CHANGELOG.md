@@ -1,3 +1,18 @@
+## 0.4.62
+
+- Distinguish unanswered work, answered-unconsumed replies, consumed work and
+  receipt-bound STANDBY in automatic reply context and bounded status output.
+- Plan ordinary scoped completion notices through the real `submit-text --text`
+  CLI, with immutable full-body persistence before the bounded wire notice.
+  Require separate acceptance, progress and final paths; retain formal callbacks.
+- Add a discoverable zero-input `cmux_prompt_reference.py prepare` CLI that pins
+  the exact UTF-8 source and persists the new ordinary body without sending.
+- Publish synced episode archives exclusively and reject mismatched original
+  owners/controllers. Report malformed status files without changing them.
+- Preserve the complete reviewed 0.4.61 controller, manifest, capabilities and
+  original historical issuer range; compatibility grants no migration, consume
+  or pending-message replay authority.
+
 ## 0.4.61
 
 - Make bounded JSONL scans progress through large complete records with a 256KiB polling budget and an 8MiB record limit. Keep incomplete records and exact offset/bytes/SHA evidence, including original CRLF/LF bytes.

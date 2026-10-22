@@ -1,10 +1,14 @@
-"""Bounded wire notices for NEW ordinary messages; never rewrite an attempt.
+"""Prepare bounded wire notices for NEW ordinary messages; never rewrite an attempt.
+
+CLI: prepare --text-file /absolute/body --sha256 SHA --marker UNIQUE_MARKER
+persists the exact ordinary body and returns a wire notice. It sends no input.
 
 The referenced bytes are local evidence, not a native user record. Only the
 short wire notice can earn a native delivery receipt. Reading the body and
 accepting its contents remain separate actions. Formal packs and completion
 callbacks retain their dedicated, task-bound transports.
 """
+import argparse
 import hashlib
 import json
 import os
@@ -213,3 +217,40 @@ def helper_request(identity, mode, message, request_id, *, home=None, reference=
 def original_helper_payload(value):
     return helper_request(value["identity"], value["mode"], value["message"],
                           value["request_id"], reference=False)["payload"]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    prepare = commands.add_parser('prepare', help='pin and persist a new ordinary body; zero input')
+    prepare.add_argument('--text-file', type=Path, required=True)
+    prepare.add_argument('--sha256', required=True)
+    prepare.add_argument('--marker', required=True)
+    prepare.add_argument('--body-root', type=Path)
+    args = parser.parse_args(argv)
+    try:
+        raw, identity = snapshot(args.text_file, limit=MAX_BODY_BYTES)
+        if (not re.fullmatch('[0-9a-f]{64}', args.sha256)
+                or hashlib.sha256(raw).hexdigest() != args.sha256):
+            raise ValueError('MESSAGE_SOURCE_PIN_CHANGED')
+        text = raw.decode('utf-8', errors='strict')
+        _ordinary(text)
+        prepared = plan(text, args.marker, args.body_root)
+        body_pin = persist(prepared['reference'], text)
+        result = dict(prepared, status='ORDINARY_NOTICE_PREPARED', marker=args.marker,
+                      source=dict(path=str(args.text_file), bytes=len(raw),
+                                  sha256=args.sha256, identity=list(identity)),
+                      body_pin=body_pin, input_operations=0,
+                      native_receipt=False, business_accepted=False,
+                      existing_attempt_replayed=False)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(json.dumps(dict(status='ORDINARY_NOTICE_PREPARE_REFUSED',
+                              error_type=type(exc).__name__, error=str(exc),
+                              input_operations=0), ensure_ascii=False))
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

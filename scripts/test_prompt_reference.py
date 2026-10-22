@@ -1,8 +1,13 @@
 """Bounded notices retain exact bodies and cannot weaken ordinary-send contracts."""
 import hashlib
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 
 import cmux_prompt_reference as ref
@@ -177,6 +182,47 @@ class PromptReferenceTests(unittest.TestCase):
         self.assertEqual(ref.validate_wire_body(wire)["sha256"], legacy["sha256"])
         with self.assertRaisesRegex(ValueError, "MULTILINE_OR_TAB"):
             ref.require_inline(wire)
+
+    def test_prepare_cli_preserves_exact_body_and_never_sends(self):
+        source = self.root.parent / 'original-body.txt'
+        source.write_bytes(self.text.encode('utf-8'))
+        expected = hashlib.sha256(source.read_bytes()).hexdigest()
+        args = ['prepare', '--text-file', str(source), '--sha256', expected,
+                '--marker', self.marker, '--body-root', str(self.root)]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(ref.main(args), 0)
+        planned = json.loads(output.getvalue())
+        self.assertEqual(planned['input_operations'], 0)
+        self.assertEqual(planned['status'], 'ORDINARY_NOTICE_PREPARED')
+        self.assertEqual(Path(planned['reference']['path']).read_bytes(), source.read_bytes())
+        self.assertEqual(ref.read_body(planned['reference'])[0], self.text)
+        self.assertFalse(planned['native_receipt'])
+        self.assertFalse(planned['business_accepted'])
+        completed = subprocess.run([sys.executable, '-BE', str(Path(ref.__file__)), *args],
+                                   capture_output=True, text=True, timeout=20)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)['text'], planned['text'])
+        altered = list(args)
+        altered[altered.index('--sha256')+1] = '0'*64
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ref.main(altered), 2)
+        self.assertEqual(source.read_bytes(), self.text.encode('utf-8'))
+
+    def test_prepare_cli_requires_pin_and_formal_route_without_writing(self):
+        source = self.root.parent / 'formal-body.txt'
+        for suffix in ('', '\n' + 'x'*900):
+            raw = ('TASK_PACK_V2 ' + self.marker + suffix).encode()
+            source.write_bytes(raw)
+            args = ['prepare', '--text-file', str(source), '--sha256', hashlib.sha256(raw).hexdigest(),
+                    '--marker', self.marker, '--body-root', str(self.root)]
+            output = io.StringIO()
+            with self.subTest(suffix=suffix[:20]), contextlib.redirect_stdout(output):
+                self.assertEqual(ref.main(args), 2)
+            value = json.loads(output.getvalue())
+            self.assertIn('TASK_BOUND_TRANSPORT_REQUIRED', value['error'])
+            self.assertEqual(value['input_operations'], 0)
+            self.assertFalse(self.root.exists())
 
 
 if __name__ == "__main__":

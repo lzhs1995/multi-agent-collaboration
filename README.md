@@ -1,4 +1,15 @@
-# Current release: 0.4.61
+# Current release: 0.4.62
+
+Reply reminders now distinguish an unanswered inquiry from a body that still
+needs full reading and exact consumption. New scoped reviews use separate
+acceptance, progress and final paths and an executable ordinary result notice.
+`cmux_prompt_reference.py prepare --text-file /absolute/body --sha256 SHA
+--marker UNIQUE_MARKER` persists a new ordinary body and prints its short wire
+notice without sending. The complete 0.4.61 controller and historical issuer
+range stay under their original pins. See
+[completion and reply status](references/scoped-completion-and-reply-status.md).
+Source verification, release, installation and real client collaboration remain
+separate evidence.
 
 Send ready messages directly in both directions, including during work, Goal and
 compaction. Raw cmux send/send-key/paste is allowed. The optional bridge uses
