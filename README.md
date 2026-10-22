@@ -1,4 +1,16 @@
-# Current release: 0.4.64
+# Current release: 0.4.65
+
+File-only sweeps retain the ten-second budget and give each selected executor
+a finite time slice. Recent future-due and finished rows follow overdue work;
+stale or malformed ordering hints cannot grant authority or skip live checks.
+A slice timeout continues with other rows and reports possibly committed work
+as incomplete rather than zero. See [fair file sweeps](references/release-0.4.65.md).
+
+Before generating a shared deliverable, read peer reviews at a separate work
+boundary and pin the adopted findings. Record late reviews as a new increment.
+When the sole reviewer is temporarily reassigned at WIP2, retain the original
+pending package pins and a concrete return condition. See
+[task continuity](references/task-continuity.md).
 
 Native target discovery uses the exact authenticated TTY inventory and a shared
 ten-second observation budget. Only read-only ps timeouts can retry, at most

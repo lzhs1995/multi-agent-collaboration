@@ -130,6 +130,48 @@ Maintain a small index of author, package pin, peer reviewer and exact review
 result. Do not count inquiry rounds as completed work or mistake independent
 recomputation being frozen for the peer's completed review.
 
+### Preserve progress when the sole reviewer is reassigned
+
+Before diverting the only same-task reviewer, record the exact pending package
+pins, original review owner, unfinished check units, reason and expected return
+time or a concrete return checkpoint. Keep the review reservation with its
+owner. A status message alone neither releases it nor supplies another reviewer.
+When the supervisor returns, drain the already submitted reviews before opening
+more author packages.
+
+At WIP2, continue authorized cross-review, author corrections to an existing
+package, or organization of already produced evidence without submitting a
+third package or self-accepting a peer review. A new review hash is an increment,
+not silent replacement of a frozen report. If a reversible downstream
+deliverable is already authorized and has no review/resource dependency,
+continue it within the original writer scope while exposing unresolved author
+decisions separately. Do not make a new permission wait out of that authority.
+User-stopped executors remain stopped; backlog maintenance cannot reactivate them.
+
+### Read reviews before generating deliverables
+
+At a meaningful work boundary, inspect relevant same-task inbox and queued
+messages through their original controller. Verify exact body SHA and bytes,
+FULL-read the peer review, and record adopted or unresolved findings. Complete
+this read boundary before starting the command that generates a deliverable.
+A shell command that prints a review and generates the file before the model
+has read that printout does not establish this boundary.
+
+Before reporting that a peer has not replied, inspect the original request's
+explicit absolute output or reply path and agreed subdirectory, then check the
+input version and exact bytes/SHA and FULL-read a matching result. Mtime is only
+a discovery hint. Freeze a result before sending its unique-marker path/bytes/SHA
+ordinary notice; an uncertain original send permits observation, not resending.
+
+Pin the source, peer reviews, adopted findings and existing single writer.
+Scan again immediately before generation for additional relevant input.
+Generate the authorized new candidate, then scan once more and record late
+reviews as a new increment rather than rewriting a frozen result. These scans
+require no fixed waiting period and do not grant writer rights from mtime,
+CLAIM presence or queue timestamps. Enqueue, context inclusion, notice receipt,
+FULL reading, acceptance and generation are separate facts. A send timeout
+requires original-attempt reconciliation; it does not justify resending.
+
 ## Explicit successor inquiry enrollment (0.4.61)
 
 An ordinary maintenance contact does not move an old inquiry episode. Only the

@@ -46,6 +46,9 @@ TRANSACTION_SCHEMA = 'executor-reask-registration-transaction-v1'
 MAX_ENROLLMENTS = 256
 MAX_CHANNELS = 8
 MAX_SWEEP_SECONDS = 10.0
+MIN_EPISODE_SECONDS = 1.0
+MAX_EPISODE_SECONDS = 4.0
+SERVICE_SCHEMA = 'executor-reask-sweep-service-v1'
 SWEEP_INTERVAL_SECONDS = 60.0
 HISTORY_SCHEMA = 'executor-reask-sweep-history-v1'
 MAX_HISTORY_ENTRIES = 120
@@ -772,12 +775,15 @@ def _history_entry(result):
     keys = ('at_epoch', 'source', 'status', 'phase', 'phase_seconds', 'duration_seconds',
             'file_posts', 'file_posts_complete', 'status_record_unchanged',
             'previous_enrollment', 'last_enrollment', 'pending_enrollment',
-            'enrollment_order', 'cadence', 'startup_observation', 'error_type')
+            'enrollment_order', 'cadence', 'startup_observation', 'error_type',
+            'episode_budget_seconds', 'episode_timeouts', 'pass_complete')
     entry = {key: result[key] for key in keys if key in result}
     entry.update(pid=os.getpid(), input_operations=0, episodes=[])
     row_keys = ('enrollment', 'caller_surface_uuid', 'episode_id', 'status',
                 'file_posts', 'duration_seconds', 'next_due_epoch',
-                'reservation_inquiries_authorized', 'error_type')
+                'reservation_inquiries_authorized', 'error_type',
+                'file_posts_complete', 'budget_seconds', 'may_have_committed',
+                'service_warning')
     for row in result.get('episodes', []):
         compact = {key: row[key] for key in row_keys if key in row}
         if 'paused_tasks' in row:
@@ -846,13 +852,82 @@ def record_history(result):
     return receipt
 
 
+def _service_epoch(value):
+    try:
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
+def _service_hints(previous, paths, now):
+    """Bounded ordering hints only; they never authorize or skip an episode."""
+    previous_epoch = previous.get('at_epoch')
+    if not _service_epoch(previous_epoch) or previous_epoch > now:
+        return {}
+    value = previous.get('service', {})
+    if not isinstance(value, dict) or value.get('schema') != SERVICE_SCHEMA:
+        return {}
+    entries = value.get('enrollments')
+    if not isinstance(entries, dict) or len(entries) > MAX_ENROLLMENTS:
+        return {}
+    result = {}
+    for path in paths:
+        row = entries.get(path.name)
+        if not isinstance(row, dict):
+            continue
+        hint = {}
+        for key in ('last_attempt_epoch', 'last_completed_epoch', 'next_due_epoch'):
+            number = row.get(key)
+            if _service_epoch(number):
+                hint[key] = number
+        count = row.get('consecutive_timeouts')
+        if type(count) is int and 0 <= count <= 8:
+            hint['consecutive_timeouts'] = count
+        if row.get('status') == 'FINISHED':
+            hint['status'] = 'FINISHED'
+        result[path.name] = hint
+    return result
+
+
+def _fair_order(paths, last, hints, now):
+    """Visit overdue/unseen work before recent future-due or finished work.
+
+    The old cursor breaks ties. Attempt age (including interrupted work), rather
+    than success age, prevents a permanently slow caller always sorting first.
+    Stale or future-dated hints fall back to the cursor; every selected episode
+    still has all binding/stop/authorization/eligibility checks under its locks.
+    """
+    paths = sorted(paths)
+    start = bisect_right([path.name for path in paths], last)
+    rotated = paths[start:] + paths[:start]
+    def priority(path):
+        hint = hints.get(path.name, {})
+        attempted = hint.get('last_attempt_epoch', 0)
+        if attempted > now:
+            return 0, 0, 0
+        due = hint.get('next_due_epoch', 0)
+        # A former FINISHED/future-due hint may belong to a newly enrolled
+        # episode. Age it out so stale metadata never excludes that caller.
+        stale = attempted == 0 or now - attempted >= 2 * SWEEP_INTERVAL_SECONDS
+        group = (0 if stale else 2 if hint.get('status') == 'FINISHED' else
+                 1 if now < due <= now + 2 * SWEEP_INTERVAL_SECONDS else 0)
+        # A slice interrupted at the outer fence shares that sweep's attempt
+        # timestamp with completed peers. Visit its unfinished work before
+        # those peers at the same age, or a many-row sweep can strand it again.
+        completed = hint.get('last_completed_epoch', 0)
+        return group, attempted, completed if completed <= now else 0
+    return sorted(rotated, key=priority)
+
+
 def sweep(*, manifest=None, now=None, observe_startup=False):
     """A bounded zero-input sweep, skipping busy/mismatched/unenrolled episodes."""
     started = time.monotonic()
+    deadline = started + MAX_SWEEP_SECONDS
     result = dict(status='SWEPT', label=LABEL, at_epoch=time.time() if now is None else now,
                   input_operations=0, file_posts=0, episodes=[],
                   hook_exposure_proven=False, model_reading_proven=False,
-                  native_reception_proven=False, phase='LOCK', phase_seconds={})
+                  native_reception_proven=False, phase='LOCK', phase_seconds={},
+                  episode_timeouts=0, pass_complete=False)
     if observe_startup:
         result['startup_observation'] = dict(
             boundary='PYTHON_MODULE_ENTRY_AFTER_TIME_IMPORT',
@@ -886,11 +961,13 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
             result['history'] = record_history(result)
             return result
         try:
-            with ready.runtime_limit(MAX_SWEEP_SECONDS):
+            with ready.runtime_limit(max(.001, deadline - time.monotonic())):
                 # Preserve rotation before potentially slow full-release I/O.
                 # An early verification deadline must not reset a prior cursor.
                 phase('LOAD_CURSOR')
                 previous = ready.read_json(root() / 'STATUS.json') or {}
+                if not isinstance(previous, dict):
+                    previous = {}
                 result['cadence'] = _cadence(previous, result['at_epoch'])
                 last = previous.get('last_enrollment', '')
                 if not isinstance(last, str):
@@ -914,22 +991,67 @@ def sweep(*, manifest=None, now=None, observe_startup=False):
                                 raise ValueError('scheduler enrollment capacity exceeded')
                             if entry.is_file(follow_symlinks=False) and entry.name.endswith('.json'):
                                 paths.append(Path(entry.path))
-                paths.sort()
-                start = bisect_right([path.name for path in paths], last)
-                ordered = paths[start:] + paths[:start]
+                hints = _service_hints(previous, paths, result['at_epoch'])
+                ordered = _fair_order(paths, last, hints, result['at_epoch'])
+                result['service'] = dict(schema=SERVICE_SCHEMA, enrollments=hints,
+                                         authority='ORDERING_ONLY')
                 result['enrollment_order'] = [path.name for path in ordered]
+                base_slice = min(MAX_EPISODE_SECONDS, max(MIN_EPISODE_SECONDS,
+                    MAX_SWEEP_SECONDS / max(1, len(ordered))))
+                result['episode_budget_seconds'] = base_slice
                 for path in ordered:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ready.WaitBudgetExpired()
                     # Advance before work. A deadline inside a busy/slow caller
                     # must not starve everyone behind it on the next sweep.
                     result['last_enrollment'] = path.name
                     result['pending_enrollment'] = path.name
                     phase('EPISODE')
                     row_started = time.monotonic()
-                    row = _sweep_one(path, now, execution, verification=verification)
+                    hint = hints.setdefault(path.name, {})
+                    failures = hint.get('consecutive_timeouts', 0)
+                    hint['last_attempt_epoch'] = result['at_epoch']
+                    seconds = min(remaining, MAX_EPISODE_SECONDS,
+                                  base_slice * (2 ** min(failures, 2)))
+                    # More than two stalled slices remains diagnostic only.
+                    # The caller is still eligible on every sweep; no new
+                    # authorization, retry, or multi-sweep backoff is implied.
+                    try:
+                        with ready.runtime_limit(seconds):
+                            row = _sweep_one(path, now, execution, verification=verification)
+                    except ready.WaitBudgetExpired:
+                        # The outer cap still owns the sweep. A slice may have
+                        # committed a state/channel before its return timed out.
+                        # Do not retry, roll back, or present zero as exact work.
+                        hint['consecutive_timeouts'] = min(8, failures + 1)
+                        row = dict(enrollment=path.name, status='EPISODE_BUDGET_EXHAUSTED',
+                                   file_posts=0, file_posts_complete=False,
+                                   may_have_committed=True, budget_seconds=seconds)
+                        result['episode_timeouts'] += 1
+                        if failures >= 2:
+                            row['service_warning'] = 'REPEATED_EPISODE_TIMEOUT'
+                    else:
+                        hint['consecutive_timeouts'] = 0
+                        hint['last_completed_epoch'] = result['at_epoch']
+                        hint.pop('status', None)
+                        if row.get('status') in ('FINISHED', reask.STOPPED):
+                            hint['status'] = 'FINISHED'
+                        due = row.get('next_due_epoch')
+                        if _service_epoch(due):
+                            hint['next_due_epoch'] = due
+                        else:
+                            hint.pop('next_due_epoch', None)
                     row['duration_seconds'] = max(0, time.monotonic() - row_started)
+                    row.setdefault('file_posts_complete', True)
                     result['file_posts'] += row['file_posts']
                     result['episodes'].append(row)
                     result.pop('pending_enrollment', None)
+                    if time.monotonic() >= deadline:
+                        raise ready.WaitBudgetExpired()
+                result['pass_complete'] = True
+                if result['episode_timeouts']:
+                    result['status'] = 'SWEPT_WITH_EPISODE_TIMEOUTS'
                 phase('COMPLETE')
         except ready.WaitBudgetExpired:
             result['status'] = 'SWEEP_BUDGET_EXHAUSTED'

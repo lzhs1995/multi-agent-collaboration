@@ -1,3 +1,20 @@
+## 0.4.65
+
+- Keep the ten-second file sweep budget while bounding each selected executor
+  to a one-to-four-second slice. Continue with peers after a slice timeout;
+  retain incomplete post counters and possible commits without replay (#76).
+- Persist bounded ordering hints only in STATUS. Prioritize overdue/unseen work,
+  rotate equal-age unfinished work, age out finished hints, and discard hints
+  after clock regression. Original binding, stop, authorization, reservation,
+  release verification and locks remain live for every selected row.
+- Record episode timeout counts, pass completion and repeated-timeout warnings;
+  distinguish traversal completion from exact completed file posts.
+- Pin the complete reviewed 0.4.64 producer and its original issuer range.
+  No original controller, callback, pending attempt or consumption authority moves.
+- Require FULL peer-review reading before a separate generation boundary, pin
+  adopted findings, and record late reviews as increments. Document WIP2 reviewer
+  return conditions and continued authorized reversible work (#77/#79).
+
 ## 0.4.64
 
 - Limit native process discovery to the exact target TTY and filter foreign UIDs
