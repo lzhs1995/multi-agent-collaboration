@@ -255,21 +255,63 @@ class FairSliceTests(unittest.TestCase):
         self.transport.assert_not_called()
 
     def test_real_outer_timer_caps_many_slow_slices(self):
-        paths = self.paths(4)
+        # Keep enough real-time headroom for preparation and host scheduling.
+        # Twelve fixed 60ms slices need 720ms even with no preparation, so the
+        # 500ms outer alarm still interrupts an incomplete pass.
+        paths = self.paths(12)
         visited = []
         def one(path, *_args, **_kwargs):
             visited.append(path.name)
-            time.sleep(.5)
+            time.sleep(2.)
             return dict(enrollment=path.name, status='WAITING_REPLY', file_posts=1)
-        with patch.object(scheduler, 'MAX_SWEEP_SECONDS', .1), \
-                patch.object(scheduler, 'MIN_EPISODE_SECONDS', .02), \
-                patch.object(scheduler, 'MAX_EPISODE_SECONDS', .04), \
+        with patch.object(scheduler, 'MAX_SWEEP_SECONDS', .5), \
+                patch.object(scheduler, 'MIN_EPISODE_SECONDS', .06), \
+                patch.object(scheduler, 'MAX_EPISODE_SECONDS', .06), \
                 patch.object(scheduler, '_sweep_one', side_effect=one):
             result = scheduler.sweep(now=1000.)
         self.assertEqual(result['status'], 'SWEEP_BUDGET_EXHAUSTED')
         self.assertFalse(result['pass_complete'])
         self.assertGreater(len(visited), 1)
+        self.assertLess(len(visited), len(paths))
         self.assertTrue(result['episode_timeouts'])
+        self.assertEqual(result['file_posts'], 0)
+        self.assertFalse(result['file_posts_complete'])
+        self.transport.assert_not_called()
+
+    def test_real_outer_alarm_interrupts_work_without_inner_alarms(self):
+        # A loop deadline alone cannot interrupt one blocking row. Disable
+        # only nested alarms to distinguish the real outer alarm explicitly.
+        paths = self.paths(2)
+        visited = []
+        completed = []
+        limit = ready.runtime_limit
+        calls = []
+        @contextmanager
+        def outer_only(seconds):
+            calls.append(seconds)
+            if len(calls) == 1 and seconds > .1:
+                with limit(seconds):
+                    yield
+            else:
+                yield
+        def one(path, *_args, **_kwargs):
+            visited.append(path.name)
+            time.sleep(2.)
+            completed.append(path.name)
+            return dict(enrollment=path.name, status='WAITING_REPLY', file_posts=1)
+        with patch.object(scheduler, 'MAX_SWEEP_SECONDS', .3), \
+                patch.object(scheduler, 'MIN_EPISODE_SECONDS', .03), \
+                patch.object(scheduler, 'MAX_EPISODE_SECONDS', .03), \
+                patch.object(ready, 'runtime_limit', side_effect=outer_only), \
+                patch.object(scheduler, '_sweep_one', side_effect=one):
+            result = scheduler.sweep(now=1000.)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertGreater(calls[0], .1)
+        self.assertEqual(visited, [paths[0].name])
+        self.assertEqual(completed, [])
+        self.assertEqual(result['status'], 'SWEEP_BUDGET_EXHAUSTED')
+        self.assertFalse(result['pass_complete'])
+        self.assertEqual(result['episode_timeouts'], 1)
         self.assertEqual(result['file_posts'], 0)
         self.assertFalse(result['file_posts_complete'])
         self.transport.assert_not_called()
