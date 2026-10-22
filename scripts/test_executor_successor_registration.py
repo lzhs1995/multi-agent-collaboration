@@ -138,6 +138,26 @@ class SuccessorTests(unittest.TestCase):
         self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
         self.assertEqual(scheduler.enrollment_path(CALLER).read_bytes(), enrollment)
 
+    def test_reviewed_preview_survives_real_observation_only_scheduler_sweep(self):
+        preview = self.preview()
+        before = reask.state_path(CALLER).read_bytes()
+        enrollment_before = scheduler.enrollment_path(CALLER).read_bytes()
+        with patch.object(native, 'bind_target', side_effect=AssertionError('file sweep sends no input')):
+            swept = scheduler.sweep(now=1100.5)
+        self.assertEqual(swept['file_posts'], 0, swept)
+        after = reask.state_path(CALLER).read_bytes()
+        enrollment_after = scheduler.enrollment_path(CALLER).read_bytes()
+        self.assertNotEqual(before, after)
+        self.assertNotEqual(enrollment_before, enrollment_after)
+        result = self.apply(preview)
+        self.assertEqual(result['outcome'], 'SUCCESSOR_INQUIRY_REGISTERED', result)
+        current = reask.load(CALLER)
+        archive = Path(current['successor_registration']['original_files'])
+        self.assertEqual((archive / 'state.json').read_bytes(), after)
+        self.assertEqual((archive / 'enrollment.json').read_bytes(), enrollment_after)
+        self.assertEqual(current['terminal_pending'], json.loads(after)['terminal_pending'])
+        self.bridge._run.assert_not_called()
+
     def test_changed_target_session_or_authorization_cannot_apply_old_plan(self):
         preview = self.preview()
         before = reask.state_path(CALLER).read_bytes()
@@ -250,6 +270,263 @@ class SuccessorTests(unittest.TestCase):
         self.bridge._run.assert_not_called()
 
 
+
+    def assert_unchanged_refusal(self, preview, pattern='SUCCESSOR_'):
+        state_path, enrollment_path = reask.state_path(CALLER), scheduler.enrollment_path(CALLER)
+        before = (state_path.read_bytes(), enrollment_path.read_bytes(),
+                  scheduler._raw(reask.stop_file(CALLER)))
+        with self.assertRaisesRegex(ValueError, pattern):
+            self.apply(preview)
+        self.assertEqual(before, (state_path.read_bytes(), enrollment_path.read_bytes(),
+                                 scheduler._raw(reask.stop_file(CALLER))))
+        self.assertFalse((reask.root() / 'successor-preimages').exists())
+        self.bridge._run.assert_not_called()
+
+    def test_all_semantic_changes_refuse_reviewed_sha_without_writing(self):
+        changes = {
+            'state': reask.ANSWERED, 'supervisor': NEW, 'workspace_uuid': PANE,
+            'episode_id': 'changed-episode', 'task_id': 'changed-task',
+            'purpose': 'PENDING_TASK_REPLY', 'terminal_pending': {'marker': 'changed', 'outcome': 'UNKNOWN'},
+            'terminal_attempts': 1, 'paused_tasks': [], 'reply': {'body': 'new-reply'},
+            'last_reply': {'sha256': 'b' * 64}, 'reply_history': [{'marker': 'new'}],
+            'replies_closed_through': 1, 'asks': [{'marker': 'new'}], 'attempt_count': 1,
+            'ask_count': 1, 'file_posts': 1, 'unknown_observation': {'authority': True},
+        }
+        original = reask.state_path(CALLER).read_bytes()
+        preview = self.preview()
+        for key, value in changes.items():
+            with self.subTest(field=key):
+                state = json.loads(original)
+                state[key] = value
+                reask.save(state)
+                self.assert_unchanged_refusal(preview)
+                reask.state_path(CALLER).write_bytes(original)
+        for key in ('paused_tasks', 'terminal_pending', 'reply'):
+            with self.subTest(removed=key):
+                state = json.loads(original)
+                state.pop(key, None)
+                if key == 'reply':
+                    state['continuation'] = {'status': 'REVOKED'}
+                reask.save(state)
+                self.assert_unchanged_refusal(preview)
+                reask.state_path(CALLER).write_bytes(original)
+
+    def test_controller_and_enrollment_authority_changes_refuse_before_archive(self):
+        preview = self.preview()
+        original_state = reask.state_path(CALLER).read_bytes()
+        state = json.loads(original_state)
+        state['controller']['files']['scripts/executor_reask.py'] = 'b' * 64
+        reask.save(state)
+        self.assert_unchanged_refusal(preview, 'CONTROLLER_UNVERIFIED')
+        reask.state_path(CALLER).write_bytes(original_state)
+        path = scheduler.enrollment_path(CALLER)
+        original = path.read_bytes()
+        for key, value in {
+            'authorization': 'FORGED_START', 'status': 'FINISHED',
+            'registration': {'token': 'c' * 32}, 'unknown': 'keep-hashed',
+            'release_resume_observation': {'state': 'RELEASED'},
+        }.items():
+            with self.subTest(field=key):
+                record = json.loads(original)
+                record[key] = value
+                path.write_text(json.dumps(record))
+                self.assert_unchanged_refusal(preview)
+                path.write_bytes(original)
+
+    def test_all_valid_poll_fields_can_drift_without_changing_semantic_plan(self):
+        state = reask.load(CALLER)
+        state.update(check_count=3, attempt_count=10, marker_secret='s',
+                     reply_scan_ordinal=1, last_poll=dict(at_epoch=1090., duration_seconds=.01))
+        reask.save(state)
+        preview = self.preview()
+        state.update(check_count=4, reply_scan_ordinal=9,
+                     last_poll=dict(at_epoch=1100.5, duration_seconds=.2))
+        reask.save(state)
+        after = reask.state_path(CALLER).read_bytes()
+        result = self.apply(preview)
+        self.assertEqual(result['outcome'], 'SUCCESSOR_INQUIRY_REGISTERED', result)
+        archive = Path(reask.load(CALLER)['successor_registration']['original_files'])
+        self.assertEqual((archive / 'state.json').read_bytes(), after)
+        self.bridge._run.assert_not_called()
+
+    def test_malformed_and_unknown_poll_observations_do_not_disappear(self):
+        preview = self.preview()
+        original = reask.state_path(CALLER).read_bytes()
+        changes = [
+            ('check_count', True), ('check_count', -1), ('check_count', 1.5),
+            ('reply_scan_ordinal', 0), ('reply_scan_ordinal', 1),
+            ('last_poll', None), ('last_poll', {}),
+            ('last_poll', {'at_epoch': 1100.}),
+            ('last_poll', {'at_epoch': True, 'duration_seconds': .1}),
+            ('last_poll', {'at_epoch': 1200., 'duration_seconds': .1}),
+            ('last_poll', {'at_epoch': 1100., 'duration_seconds': -1}),
+            ('last_poll', {'at_epoch': 1100., 'duration_seconds': .1, 'unknown': True}),
+        ]
+        for key, value in changes:
+            with self.subTest(field=key, value=value):
+                state = json.loads(original)
+                state[key] = value
+                reask.save(state)
+                self.assert_unchanged_refusal(preview)
+                reask.state_path(CALLER).write_bytes(original)
+        for suffix in (', "check_count": 0', ', "unknown": NaN', ', "unknown": 1e999'):
+            with self.subTest(suffix=suffix):
+                reask.state_path(CALLER).write_bytes(original[:-1] + suffix.encode() + b'}')
+                self.assert_unchanged_refusal(preview, 'SUCCESSOR_|Out of range')
+                reask.state_path(CALLER).write_bytes(original)
+
+    def test_execution_producer_unknown_fields_and_nonzero_posts_remain_semantic(self):
+        with patch.object(native, 'bind_target', side_effect=AssertionError('file-only sweep')):
+            scheduler.sweep(now=1100.)
+        preview = self.preview()
+        path = scheduler.enrollment_path(CALLER)
+        original = path.read_bytes()
+        for key, value in {
+            'source': '/different/source', 'scheduler': dict(scheduler.provenance(), sha256='b' * 64),
+            'state': reask.ANSWERED, 'file_posts': 1, 'input_operations': 1,
+            'unknown': {'allow': True}, 'at_epoch': 1200.,
+        }.items():
+            with self.subTest(field=key):
+                record = json.loads(original)
+                record['last_execution'][key] = value
+                path.write_text(json.dumps(record))
+                self.assert_unchanged_refusal(preview)
+                path.write_bytes(original)
+
+    def test_existing_nonzero_total_accepts_another_zero_post_real_sweep(self):
+        state = reask.load(CALLER)
+        state['file_posts'] = 5
+        reask.save(state)
+        with patch.object(native, 'bind_target', side_effect=AssertionError('file-only sweep')):
+            first = scheduler.sweep(now=1100.)
+        self.assertEqual(first['file_posts'], 0, first)
+        preview = self.preview()
+        with patch.object(native, 'bind_target', side_effect=AssertionError('file-only sweep')):
+            second = scheduler.sweep(now=1100.5)
+        self.assertEqual(second['file_posts'], 0, second)
+        result = self.apply(preview)
+        self.assertEqual(result['outcome'], 'SUCCESSOR_INQUIRY_REGISTERED', result)
+
+    def test_actual_new_file_post_invalidates_reviewed_plan(self):
+        state = reask.load(CALLER)
+        state['paused_tasks'] = []
+        reask.save(state)
+        preview = self.preview()
+        with patch.object(native, 'bind_target', side_effect=AssertionError('file-only sweep')):
+            swept = scheduler.sweep(now=1100.5)
+        self.assertEqual(swept['file_posts'], 1, swept)
+        self.assert_unchanged_refusal(preview)
+
+    def test_stop_expiry_and_exact_authorization_bytes_still_refuse(self):
+        preview = self.preview()
+        reask.stop(CALLER, 'USER_STOP')
+        self.assert_unchanged_refusal(preview, 'STOP_RESUME')
+        reask.stop_file(CALLER).unlink()
+        reask.state_path(CALLER).write_text(json.dumps(self.state))
+        preview = self.preview()
+        auth = self.auth.read_bytes()
+        self.auth.write_bytes(auth + b' ')
+        self.assert_unchanged_refusal(preview, 'EXACT_SHA')
+        self.auth.write_bytes(auth)
+        with self.assertRaisesRegex(ValueError, 'AUTHORIZATION'):
+            successor.register(CALLER, NEW, self.auth, self.auth_sha, apply=True,
+                               plan_sha256=preview['plan_sha256'], now=2000.)
+
+    def test_late_raw_state_and_stop_changes_keep_uncommitted_intent(self):
+        for change in ('state', 'stop'):
+            with self.subTest(change=change):
+                preview = self.preview()
+                old_enrollment = scheduler.enrollment_path(CALLER).read_bytes()
+                before = reask.state_path(CALLER).read_bytes()
+                original = successor.validate_commit
+                def changed(*args, **kwargs):
+                    if change == 'state':
+                        reask.state_path(CALLER).write_bytes(before + b' ')
+                    else:
+                        ready.write_json(reask.stop_file(CALLER), dict(reason='USER_STOP'))
+                    return original(*args, **kwargs)
+                with patch.object(successor, 'validate_commit', side_effect=changed):
+                    result = self.apply(preview)
+                self.assertEqual(result['outcome'], 'REGISTRATION_UNCOMMITTED', result)
+                self.assertEqual(reask.state_path(CALLER).read_bytes(),
+                                 before + b' ' if change == 'state' else before)
+                path = scheduler.enrollment_path(CALLER)
+                envelope = ready.read_json(path)
+                self.assertEqual(envelope['schema'], scheduler.TRANSACTION_SCHEMA)
+                reask.state_path(CALLER).write_bytes(before)
+                reask.stop_file(CALLER).unlink(missing_ok=True)
+                scheduler._recover(envelope, reask.load(CALLER), path)
+                self.assertEqual(path.read_bytes(), old_enrollment)
+                self.bridge._run.assert_not_called()
+
+    def test_envelope_preimage_tampering_cannot_commit(self):
+        preview = self.preview()
+        before = reask.state_path(CALLER).read_bytes()
+        path = scheduler.enrollment_path(CALLER)
+        original = successor.validate_commit
+        def changed(*args, **kwargs):
+            envelope = ready.read_json(path)
+            envelope['previous_enrollment_sha256'] = 'b' * 64
+            ready.write_json(path, envelope)
+            return original(*args, **kwargs)
+        with patch.object(successor, 'validate_commit', side_effect=changed):
+            result = self.apply(preview)
+        self.assertEqual(result['outcome'], 'REGISTRATION_UNCOMMITTED', result)
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+        self.bridge._run.assert_not_called()
+
+    def test_raw_drift_during_final_native_authentication_refuses_commit(self):
+        preview = self.preview()
+        before = reask.state_path(CALLER).read_bytes()
+        path = scheduler.enrollment_path(CALLER)
+        calls = [0]
+        original = self.bind.side_effect
+        def changed(*args):
+            calls[0] += 1
+            if calls[0] == 3:
+                path.write_bytes(path.read_bytes() + b' ')
+            return original(*args)
+        with patch.object(native, 'bind_target', side_effect=changed):
+            result = self.apply(preview)
+        self.assertEqual(result['outcome'], 'REGISTRATION_UNCOMMITTED', result)
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+        self.bridge._run.assert_not_called()
+
+
+
+    def cli_register(self, preview=None):
+        argv = ['register-successor', '--caller-uuid', CALLER, '--supervisor', NEW,
+                '--authorization-file', str(self.auth), '--authorization-sha256', self.auth_sha]
+        if preview is not None:
+            argv += ['--apply', '--plan-sha256', preview['plan_sha256']]
+        with patch('sys.stdout', new_callable=io.StringIO) as output, \
+             patch.object(successor.time, 'time', return_value=1101.):
+            rc = reask.main(argv)
+        return rc, json.loads(output.getvalue())
+
+    def test_wired_cli_reviewed_apply_survives_observation_sweep(self):
+        rc, preview = self.cli_register()
+        self.assertEqual(rc, 0)
+        with patch.object(native, 'bind_target', side_effect=AssertionError('file-only sweep')):
+            swept = scheduler.sweep(now=1100.5)
+        self.assertEqual(swept['file_posts'], 0, swept)
+        rc, result = self.cli_register(preview)
+        self.assertEqual(rc, 0)
+        self.assertEqual(result['outcome'], 'SUCCESSOR_INQUIRY_REGISTERED', result)
+        self.bridge._run.assert_not_called()
+
+    def test_wired_cli_semantic_negative_is_not_discarded_with_poll_fields(self):
+        rc, preview = self.cli_register()
+        self.assertEqual(rc, 0)
+        state = reask.load(CALLER)
+        state['terminal_pending']['outcome'] = 'RECEIVED'
+        reask.save(state)
+        before = reask.state_path(CALLER).read_bytes()
+        with self.assertRaisesRegex(ValueError, 'REVIEWED_PLAN_SHA'):
+            self.cli_register(preview)
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+        self.bridge._run.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
-

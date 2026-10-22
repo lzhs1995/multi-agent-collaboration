@@ -6,6 +6,7 @@ shared-write or resource ownership. Current same-workspace pair rules remain.
 """
 import hashlib
 import json
+import math
 from pathlib import Path
 import time
 from contextlib import ExitStack
@@ -17,12 +18,90 @@ import executor_ready as ready
 import executor_reask_scheduler as scheduler
 
 AUTH_SCHEMA = 'executor-successor-inquiry-authority-v1'
-PLAN_SCHEMA = 'executor-successor-inquiry-plan-v1'
+PLAN_SCHEMA = 'executor-successor-inquiry-plan-v2'
+
+# A scheduler observation must not invalidate a reviewed transition. Everything
+# else, including replies, input fences and authority, remains in the plan hash.
+STATE_COUNTERS = ('check_count', 'reply_scan_ordinal')
+STATE_POLL_FIELDS = ('at_epoch', 'duration_seconds')
+OBSERVATION_CLOCK_TOLERANCE = 5.0
+
+
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('SUCCESSOR_DUPLICATE_JSON_KEY')
+        value[key] = item
+    return value
+
+
+def _observed_epoch(value, *, now=None):
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        raise ValueError('SUCCESSOR_MALFORMED_OBSERVATION')
+    if now is not None and value > now + OBSERVATION_CLOCK_TOLERANCE:
+        raise ValueError('SUCCESSOR_FUTURE_OBSERVATION')
+
+
+def _nonfinite_constant(_value):
+    raise ValueError('SUCCESSOR_NONFINITE_JSON')
+
+
+def _review_pin(pin, raw, *, state=False, episode=None, now=None):
+    """Hash the full JSON except the narrow, validated polling observations."""
+    if raw is None:
+        return pin
+    value = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_nonfinite_constant)
+    if not isinstance(value, dict):
+        raise ValueError('SUCCESSOR_ORIGINAL_OBJECT_REQUIRED')
+    if state:
+        for key in STATE_COUNTERS:
+            if key in value:
+                if type(value[key]) is not int or value[key] < 0:
+                    raise ValueError('SUCCESSOR_MALFORMED_OBSERVATION')
+                if key == 'reply_scan_ordinal':
+                    count = value.get('attempt_count', 0)
+                    if (type(count) is not int or count < 1
+                            or not 1 <= value[key] <= count):
+                        raise ValueError('SUCCESSOR_MALFORMED_REPLY_SCAN')
+                del value[key]
+        if 'last_poll' in value:
+            poll = value['last_poll']
+            if not isinstance(poll, dict) or not set(STATE_POLL_FIELDS).issubset(poll):
+                raise ValueError('SUCCESSOR_MALFORMED_OBSERVATION')
+            for key in STATE_POLL_FIELDS:
+                if key in poll:
+                    _observed_epoch(poll.pop(key), now=now if key == 'at_epoch' else None)
+            if not poll:
+                del value['last_poll']
+    else:
+        execution = value.get('last_execution')
+        producer = scheduler.provenance()
+        source = str(Path(producer['path']).parents[1])
+        # Only this approved scheduler's zero-post sweep is observational.
+        # A post changes episode.file_posts/asks and remains a semantic change.
+        # Retain the producer in the semantic pin, including before its first
+        # observation, so a changed source/provenance never disappears.
+        neutral = dict(source=source, scheduler=producer,
+                       state=(episode or {}).get('state'), file_posts=0, input_operations=0)
+        if 'last_execution' not in value:
+            value['last_execution'] = neutral
+        else:
+            if not isinstance(execution, dict):
+                raise ValueError('SUCCESSOR_MALFORMED_OBSERVATION')
+            if 'at_epoch' in execution:
+                _observed_epoch(execution['at_epoch'], now=now)
+            if (set(execution) == set(neutral) | {'at_epoch'}
+                    and all(execution[key] == item and type(execution[key]) is type(item)
+                            for key, item in neutral.items())):
+                value['last_execution'] = neutral
+    return dict(path=pin['path'], semantic_sha256=digest(value),
+        comparison='validated-poll-observations-v1')
 
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
-        separators=(',', ':')).encode()).hexdigest()
+        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
 def _pin(path, *, absent=False):
@@ -69,11 +148,13 @@ def _live_pair(live):
     return {key: live[key] for key in (*scheduler.LIVE_KEYS, 'caller_pane_uuid') if key in live}
 
 
-def build_plan(caller, supervisor, auth_file, auth_sha, *, now=None, resume_stopped=False):
+def build_plan(caller, supervisor, auth_file, auth_sha, *, now=None, resume_stopped=False,
+               observations=None):
     now = time.time() if now is None else now
     from executor_reask_lifecycle import require_epoch
     require_epoch(now, 'successor_registration_epoch')
     state_pin, raw = _pin(reask.state_path(caller))
+    state_review = _review_pin(state_pin, raw, state=True, now=now)
     state = json.loads(raw)
     if state.get('caller_surface_uuid') != caller or state.get('state') not in (reask.WAITING, reask.ANSWERED, reask.STOPPED):
         raise ValueError('SUCCESSOR_ORIGINAL_EPISODE_REQUIRED')
@@ -95,12 +176,13 @@ def build_plan(caller, supervisor, auth_file, auth_sha, *, now=None, resume_stop
     auth_pin, value = authority(auth_file, auth_sha, state, live['target_surface_uuid'], target['session_id'], now,
         resume_stopped=resume_stopped)
     enrollment_pin, enrollment_raw = _pin(scheduler.enrollment_path(caller), absent=True)
+    enrollment_review = _review_pin(enrollment_pin, enrollment_raw, episode=state, now=now)
     stop_pin, _stop_raw = _pin(reask.stop_file(caller), absent=True)
     if enrollment_raw and json.loads(enrollment_raw).get('schema') == scheduler.TRANSACTION_SCHEMA:
         raise ValueError('SUCCESSOR_PRESERVE_UNRESOLVED_ORIGINAL_REGISTRATION')
     plan = dict(schema=PLAN_SCHEMA, caller_surface_uuid=caller, original_episode_id=state['episode_id'],
-        task_id=state['task_id'], overall_task=value['overall_task'], original_state=state_pin,
-        original_enrollment=enrollment_pin, original_stop=stop_pin,
+        task_id=state['task_id'], overall_task=value['overall_task'], original_state=state_review,
+        original_enrollment=enrollment_review, original_stop=stop_pin,
         original_controller=state_controller(state),
         authorization=auth_pin, authorization_until_epoch=value['until_epoch'],
         target=_target_identity(target), live_pair=_live_pair(live),
@@ -110,6 +192,9 @@ def build_plan(caller, supervisor, auth_file, auth_sha, *, now=None, resume_stop
         shared_write_authority_transferred=False, input_operations=0,
         resume_stopped=resume_stopped, file_only=True, proactive_hook=True,
         reservation_inquiries=True)
+    if observations is not None:
+        observations.update(original_state=state_pin, original_enrollment=enrollment_pin,
+                            original_stop=stop_pin)
     return plan
 
 
@@ -117,20 +202,28 @@ def prepare_transition(plan, previous, live, *, now):
     """Called under the original registry/episode locks before any commit."""
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA:
         raise ValueError('SUCCESSOR_REVIEWED_PLAN_REQUIRED')
+    preimages = {}
     fresh = build_plan(plan['caller_surface_uuid'], plan['target']['identity']['target_surface_uuid'],
         plan['authorization']['path'], plan['authorization']['sha256'], now=now,
-        resume_stopped=plan['resume_stopped'])
+        resume_stopped=plan['resume_stopped'], observations=preimages)
     if (fresh != plan or not previous or previous.get('episode_id') != plan['original_episode_id']
             or _live_pair(live) != plan['live_pair']):
         raise ValueError('SUCCESSOR_REVIEWED_PLAN_CHANGED')
     state_raw = snapshot(reask.state_path(plan['caller_surface_uuid']), limit=ready.MAX_JSON_BYTES)[0]
     enrollment_raw = scheduler._raw(scheduler.enrollment_path(plan['caller_surface_uuid']))
     stop_raw = scheduler._raw(reask.stop_file(plan['caller_surface_uuid']))
-    directory = reask.root() / 'successor-preimages' / ready.digest(plan['caller_surface_uuid']) / digest(plan)
+    for key, raw in (('original_state', state_raw), ('original_enrollment', enrollment_raw),
+                     ('original_stop', stop_raw)):
+        observed = preimages[key]
+        sha = hashlib.sha256(raw).hexdigest() if raw is not None else 'ABSENT'
+        if observed['sha256'] != sha or observed['bytes'] != (len(raw) if raw is not None else 0):
+            raise ValueError('SUCCESSOR_PREPARATION_PREIMAGE_CHANGED')
+    directory = (reask.root() / 'successor-preimages' / ready.digest(plan['caller_surface_uuid'])
+                 / digest(plan) / digest(preimages))
     reask.snapshot_files(directory, {'state.json': state_raw, 'enrollment.json': enrollment_raw, 'stop.json': stop_raw},
         dict(schema='executor-successor-original-files-v1', plan_sha256=digest(plan),
             original_episode_id=plan['original_episode_id']))
-    return dict(plan_sha256=digest(plan), authorization=plan['authorization'],
+    return dict(plan_sha256=digest(plan), authorization=plan['authorization'], commit_preimages=preimages,
         original_episode_id=plan['original_episode_id'], original_controller=plan['original_controller'],
         original_files=str(directory), target=plan['target'], input_operations=0,
         original_supervisor_uuid=previous['supervisor'],
@@ -138,13 +231,25 @@ def prepare_transition(plan, previous, live, *, now):
         original_callbacks_transferred=False, shared_write_authority_transferred=False)
 
 
-def validate_commit(plan, previous, *, now):
+def validate_commit(plan, previous, *, now, preimages):
     """Last read-only endpoint/authentication check before the state commit."""
     state_pin, _raw = _pin(reask.state_path(plan['caller_surface_uuid']))
     stop_pin, _raw_stop = _pin(reask.stop_file(plan['caller_surface_uuid']), absent=True)
-    if (state_pin != plan['original_state'] or stop_pin != plan['original_stop']
+    if (state_pin != preimages['original_state'] or stop_pin != preimages['original_stop']
             or reask.controller() != plan['current_controller']):
         raise ValueError('SUCCESSOR_ORIGINAL_STATE_OR_CONTROLLER_CHANGED')
+    # The enrollment now contains the transaction envelope. Its immutable
+    # preimages must be precisely those captured under the original locks.
+    path = scheduler.enrollment_path(plan['caller_surface_uuid'])
+    enrollment_raw = scheduler._raw(path)
+    envelope = json.loads(enrollment_raw, object_pairs_hook=_unique_object,
+                          parse_constant=_nonfinite_constant)
+    transaction, _directory = scheduler._transaction(envelope, path)
+    if (transaction['previous_state_sha256'] != preimages['original_state']['sha256']
+            or transaction['previous_enrollment_sha256'] != preimages['original_enrollment']['sha256']
+            or any(envelope.get(key) != transaction[key] for key in
+                   ('previous_state_sha256', 'previous_enrollment_sha256'))):
+        raise ValueError('SUCCESSOR_REGISTRATION_PREIMAGE_CHANGED')
     from executor_reask_identity import authenticate
     proof = authenticate(previous)
     expected = dict(session_id=proof['session_id'], process=proof['process'], identity_sha256=proof['identity_sha256'])
@@ -160,22 +265,30 @@ def validate_commit(plan, previous, *, now):
         live['target_surface_uuid'], target['session_id'], now, resume_stopped=plan['resume_stopped'])
     if pin != plan['authorization']:
         raise ValueError('SUCCESSOR_AUTHORIZATION_CHANGED_BEFORE_COMMIT')
+    # Endpoint/authentication I/O may take time. Cooperating writers share our
+    # locks; also reject raw file drift during those final checks.
+    if (_pin(reask.state_path(plan['caller_surface_uuid']))[0] != preimages['original_state']
+            or _pin(reask.stop_file(plan['caller_surface_uuid']), absent=True)[0] != preimages['original_stop']
+            or scheduler._raw(path) != enrollment_raw):
+        raise ValueError('SUCCESSOR_COMMIT_PREIMAGE_CHANGED_DURING_AUTHENTICATION')
 
 
 def register(caller, supervisor, auth_file, auth_sha, *, apply=False, plan_sha256='', now=None, resume_stopped=False):
     realtime = now is None
     now = time.time() if now is None else now
     caller = scheduler.canonical_uuid(caller)
+    observations = {}
     with ExitStack() as stack:
         try:
             stack.enter_context(reask.episode_lock(caller))
         except reask.EpisodeBusy:
             return dict(outcome='EPISODE_BUSY', input_operations=0)
-        plan = build_plan(caller, supervisor, auth_file, auth_sha, now=now, resume_stopped=resume_stopped)
+        plan = build_plan(caller, supervisor, auth_file, auth_sha, now=now,
+                          resume_stopped=resume_stopped, observations=observations)
     sha = digest(plan)
     if not apply:
         return dict(outcome='SUCCESSOR_READ_ONLY_PLAN', plan=plan, plan_sha256=sha,
-            input_operations=0, registration_changed=False)
+            original_observations=observations, input_operations=0, registration_changed=False)
     if sha != plan_sha256:
         raise ValueError('SUCCESSOR_REVIEWED_PLAN_SHA_REQUIRED')
     continuation = dict(enabled=True, overall_task=plan['overall_task'], owner=plan['target']['identity']['target_surface_uuid'],

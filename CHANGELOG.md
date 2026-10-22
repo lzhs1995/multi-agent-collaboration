@@ -1,3 +1,17 @@
+## 0.4.63
+
+- Keep successor preview hashes stable across validated observation-only polls,
+  including the first zero-post scheduler observation, while task, reply,
+  reservation, pending input and unknown-field changes still require review.
+- Bind last-execution normalization to exact scheduler provenance and per-sweep
+  zero posts; refuse malformed, duplicate and nonfinite JSON observations.
+- Archive exact apply-time preimages under original locks and recheck state,
+  stop, transaction enrollment SHA and raw envelope after native authentication.
+- Preserve the complete reviewed 0.4.62 file producer without moving original
+  controllers or granting new consumption/callback authority.
+- Verify the wired CLI with real private sweeps and semantic/CAS negatives;
+  original-session adoption and latency remain separate live evidence.
+
 ## 0.4.62
 
 - Distinguish unanswered work, answered-unconsumed replies, consumed work and
