@@ -157,6 +157,12 @@ this read boundary before starting the command that generates a deliverable.
 A shell command that prints a review and generates the file before the model
 has read that printout does not establish this boundary.
 
+Before reporting that a peer has not replied, inspect the original request's
+explicit absolute output or reply path and agreed subdirectory, then check the
+input version and exact bytes/SHA and FULL-read a matching result. Mtime is only
+a discovery hint. Freeze a result before sending its unique-marker path/bytes/SHA
+ordinary notice; an uncertain original send permits observation, not resending.
+
 Pin the source, peer reviews, adopted findings and existing single writer.
 Scan again immediately before generation for additional relevant input.
 Generate the authorized new candidate, then scan once more and record late

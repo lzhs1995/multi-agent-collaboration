@@ -137,6 +137,25 @@ class FairSliceTests(unittest.TestCase):
         self.assertEqual(visited[0], paths[1].name)
         self.assertEqual(len(visited), 2)
 
+    def test_stale_finished_hint_competes_on_its_older_attempt(self):
+        paths = self.paths(3)
+        hints = {
+            paths[0].name: dict(last_attempt_epoch=900., status='FINISHED'),
+            paths[1].name: dict(last_attempt_epoch=950.),
+            paths[2].name: dict(last_attempt_epoch=960.),
+        }
+        self.assertEqual(scheduler._fair_order(paths, '', hints, 1200.)[0],
+                         paths[0])
+
+    def test_recent_finished_hint_still_follows_unfinished_peers(self):
+        paths = self.paths(3)
+        hints = {
+            path.name: dict(last_attempt_epoch=1150.) for path in paths
+        }
+        hints[paths[0].name]['status'] = 'FINISHED'
+        self.assertEqual(scheduler._fair_order(paths, '', hints, 1200.)[-1],
+                         paths[0])
+
     def test_malformed_hints_fall_back_to_cursor(self):
         paths = self.paths(2)
         for service in ('bad', dict(schema='bad', enrollments={}), dict(
