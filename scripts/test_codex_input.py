@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import time
+from types import SimpleNamespace
 import unittest
 import uuid
 from unittest.mock import patch
 
 import cmux_bridge as bridge
 import cmux_codex_input as direct
+import cmux_confirmation as confirmation
 import cmux_native_delivery as native
 from native_test_support import NativeFixture, LegacyTerminalFixture
 
@@ -72,8 +74,10 @@ class CodexInputTests(unittest.TestCase):
         self.marker = 'NATIVE_DIRECT_TEST'
         self.fixture.stack.enter_context(patch.object(bridge, 'read_screen',
             side_effect=AssertionError('new Codex input must not inspect a composer')))
-        self.fixture.stack.enter_context(patch.object(direct.time, 'monotonic',
-            side_effect=itertools.count().__next__))
+        # RPC timing must not advance the shared identity observation clock.
+        rpc_clock = SimpleNamespace(monotonic=itertools.count().__next__, time=time.time, sleep=time.sleep)
+        self.fixture.stack.enter_context(patch.object(direct, "time", rpc_clock))
+        self.fixture.stack.enter_context(patch.object(confirmation, "time", rpc_clock))
 
     def send(self, **kwargs):
         return bridge.submit_text('target', self.text, marker=self.marker, **kwargs)
