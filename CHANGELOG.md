@@ -1,3 +1,20 @@
+## 0.4.67
+
+- Add a read-only exact-pinned mailbox reply preflight with concrete refusal
+  reasons. Require actual issued markers, original bindings and an open
+  continuing frontier; preserve existing statuses and live authority checks.
+- Reject duplicate JSON keys, nonstandard constants, invalid UTF-8 and changed
+  content/inodes. Return a bounded refusal for recursive fallback parser limits.
+- Retain complete stdout/stderr and return codes for ordinary result submission;
+  print original --surface/--marker/--text reconcile arguments. Unknown input is
+  reconciled, never resubmitted.
+- Withhold provisional final counts before freezing an independent review;
+  record actual FULL-read boundaries separately from byte verification (#79).
+- Retain the complete original 0.4.66 producer and historical issuer range.
+  Original controllers, replies, reservations and callbacks remain unchanged.
+- Source review and tests do not prove installation, every client's adoption,
+  dissertation acceptance or a measured overall efficiency improvement.
+
 ## 0.4.66
 
 - Add authenticated, bounded read-only coverage for exactly two designated

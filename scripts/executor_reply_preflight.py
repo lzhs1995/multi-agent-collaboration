@@ -37,8 +37,11 @@ def read_object(path, expected=None):
     digest = hashlib.sha256(raw).hexdigest()
     if expected is not None and digest != expected:
         raise ValueError("PIN_MISMATCH")
-    body = json.loads(raw.decode('utf-8', errors='strict'), object_pairs_hook=_object,
-                      parse_constant=_invalid_constant)
+    try:
+        body = json.loads(raw.decode('utf-8', errors='strict'), object_pairs_hook=_object,
+                          parse_constant=_invalid_constant)
+    except RecursionError as exc:
+        raise ValueError('JSON_NESTING_LIMIT_EXCEEDED') from exc
     if not isinstance(body, dict):
         raise ValueError("JSON_OBJECT_REQUIRED")
     return body, dict(path=str(path), bytes=len(raw), sha256=digest,

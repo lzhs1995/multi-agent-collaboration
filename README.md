@@ -1,4 +1,9 @@
-# Current release: 0.4.66
+# Current release: 0.4.67
+
+Validate a prospective mailbox reply against exact original episode/body pins
+before publication, without sending, consuming or granting authority. New
+completion plans retain complete stdout/stderr and the original reconcile
+arguments. See [reply preflight](references/release-0.4.67.md).
 
 Read-only exact-pair coverage now reports the two original executor scopes,
 missing enrollment, expired authority and changed observations. Successor

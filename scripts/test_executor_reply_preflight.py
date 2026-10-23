@@ -167,6 +167,34 @@ class ReplyPreflightTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'INPUT_IDENTITY_CHANGED'):
                     preflight.preflight(*args)
 
+    def test_cli_deep_json_returns_bounded_refusal_without_writes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            args = self.files(root)
+            nested = b'{"nested":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}'
+            for target in (args[0], args[2]):
+                with self.subTest(target=target.name):
+                    self.files(root)
+                    target.write_bytes(nested)
+                    before = {p.name: p.read_bytes() for p in root.iterdir()}
+                    output = io.StringIO()
+                    # Python 3.14's accelerated scanner handles deep arrays
+                    # iteratively. Exercise the real recursive fallback parser
+                    # to verify older/fallback interpreters also return JSON.
+                    with patch.object(json.scanner, 'make_scanner', json.scanner.py_make_scanner), \
+                            redirect_stdout(output):
+                        code = preflight.main([
+                            '--state-file', str(args[0]), '--state-sha256',
+                            hashlib.sha256(args[0].read_bytes()).hexdigest(),
+                            '--body-file', str(args[2]), '--body-sha256',
+                            hashlib.sha256(args[2].read_bytes()).hexdigest(),
+                        ])
+                    result = json.loads(output.getvalue())
+                    self.assertEqual(code, 2)
+                    self.assertEqual(result['reason'], 'JSON_NESTING_LIMIT_EXCEEDED')
+                    self.assertEqual(result['input_operations'], 0)
+                    self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
+
     def test_symlink_special_and_changed_contents_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             args = self.files(Path(folder))
