@@ -40,6 +40,7 @@ MAX_JSON_BYTES = 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 256 * 1024
 MAX_TRANSCRIPT_RECORD_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_SCAN = 128
+LEGACY_RECOVERY_SECONDS = 1.0
 ASKING, ANSWERED, STOPPED = 'ASKING', 'ANSWERED', 'STOPPED'  # ASKING 仅用于识别旧进程。
 WAITING_DEPENDENCY, TIMED_OUT = 'WAITING_DEPENDENCY', 'TIMED_OUT'
 REPLY_HEAD = re.compile(r'^\s*(?:STATUS\s*:|TASK(?:[\s:|]|$)|BLOCKED\b|WAITING_DEPENDENCY\b|SOLO\b|ACK\b)')
@@ -209,6 +210,7 @@ def write_record(caller_uuid, marker, text, target_surface, task_id='', episode_
         json.dump(record, handle, ensure_ascii=False)
         handle.flush()
         os.fsync(handle.fileno())
+    sync_directory(path.parent)
     return path, record
 
 
@@ -356,8 +358,8 @@ def _submit(bridge, supervisor, text, marker, reconcile_only=False, recover_stra
 
 
 def prepare_ask(bridge, supervisor, caller_uuid, executor_ref, task_id='', note='', attempt=1,
-                mailbox='', clock=time.time, episode_id=''):
-    marker = f'{PREFIX}_{secrets.token_hex(8)}'
+                mailbox='', clock=time.time, episode_id='', *, marker=None):
+    marker = marker or f'{PREFIX}_{secrets.token_hex(8)}'
     text = build_text(executor_ref, marker, task_id, note, attempt, mailbox, caller_uuid,
                       episode_id, supervisor)
     if bridge._looks_like_task_dispatch(text):
@@ -429,29 +431,118 @@ def advance_ask(bridge, supervisor, caller_uuid, ask, *, allow_send=False):
     return ask
 
 
-def _orphan_request(caller_uuid, supervisor, task_id):
-    """恢复写请求后、写 loop 前崩溃的窗口；不读无限历史，不发送输入。"""
-    if not requests_dir().is_dir():
+def _orphan_request(caller_uuid, supervisor, task_id, *, checkpoint=None):
+    """Stream legacy discovery within a time budget; incomplete means no input.
+
+    A checkpoint is diagnostic, never a portable seekdir cursor. After interruption
+    restart the pass; only complete, unchanged discovery may establish absence.
+    Two order-independent metadata passes also detect in-place record changes.
+    """
+    root = requests_dir()
+    progress = dict(version=1, status='INCOMPLETE_RESTART_REQUIRED', entries=0,
+                    verification_entries=0, matching_requests=0)
+    deadline = time.monotonic() + LEGACY_RECOVERY_SECONDS
+
+    def publish():
+        if checkpoint:
+            # The loop keeps this object so its finally block persists progress
+            # even when SIGALRM interrupts before the next page checkpoint.
+            checkpoint(progress)
+
+    def check_budget():
+        if time.monotonic() >= deadline:
+            raise ValueError('REQUEST_RECOVERY_INCOMPLETE: preserve requests; restart discovery')
+
+    def stamp(info):
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def member(name, info):
+        return int(digest(json.dumps([name, stamp(info)])), 16)
+
+    publish()
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        progress['status'] = 'COMPLETE_ABSENT'
+        publish()
         return None
-    found = []
-    for index, path in enumerate(requests_dir().iterdir()):
-        if index >= MAX_REQUEST_SCAN:
-            raise ValueError('REQUEST_SCAN_BUDGET_EXHAUSTED: preserve existing requests')
-        if path.suffix != '.json':
-            continue
-        record = read_json(path)
-        if not record or not isinstance(record.get('caller_surface_uuid'), str):
-            raise ValueError('REQUEST_RECORD_UNREADABLE: do not create another request')
-        if record.get('caller_surface_uuid') != caller_uuid:
-            continue
-        if record.get('target_surface') != supervisor or record.get('task_id', '') != task_id:
-            raise ValueError('UNRESOLVED_IDLE_EPISODE: original request binding differs')
-        found.append(dict(marker=record.get('marker'), attempt=1, record=str(path),
-                          outcome='UNCONFIRMED_DO_NOT_RESEND',
-                          at_epoch=record.get('created_at_epoch', 0)))
-    if len(found) > 1:
-        raise ValueError('MULTIPLE_ORIGINAL_REQUESTS: explicit reconciliation required')
-    return found[0] if found else None
+    except OSError as exc:
+        raise ValueError('REQUEST_DIRECTORY_UNREADABLE: preserve original directory') from exc
+    try:
+        before = stamp(os.fstat(fd))
+        found, fingerprint = [], 0
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                check_budget()
+                progress['entries'] += 1
+                if entry.name.endswith('.json'):
+                    path = root / entry.name
+                    first = os.stat(path, follow_symlinks=False)
+                    record = read_json(path)
+                    if not record or not isinstance(record.get('caller_surface_uuid'), str):
+                        raise ValueError('REQUEST_RECORD_UNREADABLE: do not create another request')
+                    last = os.stat(path, follow_symlinks=False)
+                    if stamp(first) != stamp(last):
+                        raise ValueError('REQUEST_RECOVERY_CHANGED: preserve original requests')
+                    fingerprint = (fingerprint + member(entry.name, last)) % (1 << 256)
+                    if record['caller_surface_uuid'] == caller_uuid:
+                        if record.get('target_surface') != supervisor or record.get('task_id', '') != task_id:
+                            raise ValueError('UNRESOLVED_IDLE_EPISODE: original request binding differs')
+                        found.append(dict(marker=record.get('marker'), attempt=1, record=str(path),
+                                          outcome='UNCONFIRMED_DO_NOT_RESEND',
+                                          at_epoch=record.get('created_at_epoch', 0)))
+                        progress['matching_requests'] = len(found)
+                        if len(found) > 1:
+                            raise ValueError('MULTIPLE_ORIGINAL_REQUESTS: explicit reconciliation required')
+                if progress['entries'] % MAX_REQUEST_SCAN == 0:
+                    publish()
+        publish()
+        # A fresh stream, without depending on an opaque cookie after close.
+        verification = 0
+        verification_fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        try:
+            with os.scandir(verification_fd) as entries:
+                for entry in entries:
+                    check_budget()
+                    progress['verification_entries'] += 1
+                    if entry.name.endswith('.json'):
+                        verification = (verification + member(
+                            entry.name, os.stat(root / entry.name, follow_symlinks=False))) % (1 << 256)
+                    if progress['verification_entries'] % MAX_REQUEST_SCAN == 0:
+                        publish()
+        finally:
+            os.close(verification_fd)
+        check_budget()
+        if (fingerprint != verification or progress['entries'] != progress['verification_entries']
+                or before != stamp(os.fstat(fd))
+                or before != stamp(os.stat(root, follow_symlinks=False))):
+            raise ValueError('REQUEST_RECOVERY_CHANGED: restart discovery; no input')
+        progress['status'] = 'COMPLETE_FOUND' if found else 'COMPLETE_ABSENT'
+        publish()
+        return found[0] if found else None
+    finally:
+        os.close(fd)
+
+
+def _pending_request(record, caller_uuid, supervisor, task_id):
+    """An exact durable pre-request intent avoids scanning unrelated history."""
+    intent = record.get('pending_request')
+    if (not isinstance(intent, dict) or intent.get('version') != 1
+            or not isinstance(intent.get('marker'), str)
+            or not re.fullmatch(PREFIX + r'_[0-9a-f]{16}', intent['marker'])):
+        raise ValueError('PENDING_REQUEST_INTENT_INVALID: preserve original state')
+    marker = intent['marker']
+    path = requests_dir() / (request_key(caller_uuid, marker) + '.json')
+    if not os.path.lexists(path):
+        # Intent precedes creation and the durable asks commit precedes any input.
+        # An explicit ask may finish creating this SAME marker; persist cannot send.
+        return None
+    original = _original_request(caller_uuid, supervisor, marker)
+    if (original.get('task_id', '') != task_id
+            or original.get('episode_id') != record['episode_id']):
+        raise ValueError('UNRESOLVED_IDLE_EPISODE: pending request binding differs')
+    return dict(marker=marker, attempt=1, record=str(path),
+                outcome='UNCONFIRMED_DO_NOT_RESEND', at_epoch=original.get('created_at_epoch', 0))
 
 
 def _stop_request(caller_uuid):
@@ -478,7 +569,7 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
         raise ValueError('UNREADABLE_IDLE_EPISODE: preserve original record')
     mailbox = Path(mailbox) if mailbox else mailbox_dir(caller_uuid)
     mailbox.mkdir(parents=True, exist_ok=True, mode=0o700)
-    record = dict(version=3, pid=os.getpid(), argv=' '.join(sys.argv),
+    record = dict(version=4, pid=os.getpid(), argv=' '.join(sys.argv),
                   caller_surface_uuid=caller_uuid, supervisor=supervisor,
                   executor_ref=executor_ref or caller_uuid, task_id=task_id,
                   mailbox=str(mailbox), transcript=str(transcript or ''),
@@ -494,7 +585,7 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
                ('caller_surface_uuid', 'supervisor', 'task_id', 'transcript')):
             raise ValueError('UNRESOLVED_IDLE_EPISODE: preserve original binding')
         record.update(previous)
-        record.update(version=3, pid=os.getpid(), argv=' '.join(sys.argv), monitoring=True,
+        record.update(version=4, pid=os.getpid(), argv=' '.join(sys.argv), monitoring=True,
                       interval_seconds=interval, poll_seconds=poll)
         started = float(record['started_epoch'])
         deadline = _finite(record.get('deadline_epoch', started + seconds), started + seconds,
@@ -523,9 +614,16 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
                 record['tail_position'] = tail.position()
                 write_json(path, record)
             if not record['asks']:
-                orphan = _orphan_request(caller_uuid, supervisor, task_id)
+                def recovery_checkpoint(progress):
+                    record['request_recovery'] = progress
+                    write_json(path, record)
+                orphan = (_pending_request(record, caller_uuid, supervisor, task_id)
+                          if 'pending_request' in record else
+                          _orphan_request(caller_uuid, supervisor, task_id,
+                                          checkpoint=recovery_checkpoint))
                 if orphan:
                     record.update(asks=[orphan], ask_count=1)
+                    record.pop('pending_request', None)
                     write_json(path, record)
             while ticks < tick_limit:
                 now = clock()
@@ -550,10 +648,16 @@ def run_loop(bridge, supervisor, caller_uuid, executor_ref='', task_id='', note=
                     break
                 last = record['asks'][-1] if record['asks'] else None
                 if last is None and send_once:
+                    if 'pending_request' not in record:
+                        record['pending_request'] = dict(
+                            version=1, marker=f'{PREFIX}_{secrets.token_hex(8)}')
+                        write_json(path, record)
                     request = prepare_ask(bridge, supervisor, caller_uuid, record['executor_ref'],
                                           task_id, note, 1, str(mailbox), clock,
-                                          episode_id=record['episode_id'])
+                                          episode_id=record['episode_id'],
+                                          marker=record['pending_request']['marker'])
                     record.update(ask_count=1, asks=[request])
+                    record.pop('pending_request', None)
                     write_json(path, record)  # 任何输入之前已持久化原 marker。
                     advance_ask(bridge, supervisor, caller_uuid, request, allow_send=True)
                 elif last and now - float(last.get('reconciled_epoch', 0)) >= interval:

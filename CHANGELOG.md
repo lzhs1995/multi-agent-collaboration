@@ -1,3 +1,14 @@
+## Unreleased
+
+- Persist the exact idle request marker before creating its request file and
+  sync the request directory before any send opportunity. A recovered request
+  remains read-only; an interrupted pre-creation intent keeps the same marker.
+- Replace the global 128-entry legacy recovery failure with constant-memory,
+  one-second streaming discovery under the existing finite invocation budget.
+  Verify complete directory/record stability before claiming absence. Persist
+  incomplete diagnostics; interruption restarts discovery and never authorizes
+  input or a portable cross-stream directory cursor.
+
 ## 0.4.67
 
 - Add an isolated restricted Word PDF lane for an exactly approved original
