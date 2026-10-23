@@ -99,7 +99,8 @@ def attempt_details(result, attempt_path, attempt, *, reconcile_only=False):
                        reuse_original_parameters=True,
                        controller_source=controller.get("source") if controller else None,
                        instruction="Use the original controller, payload, target and nonce; "
-                                   "observe the original attempt without resending."))
+                                   "submit-text requires the original --surface, --marker and --text "
+                                   "even with --reconcile-only. Observe the original attempt without resending."))
     events = attempt.get("events", [])
     rpc = [row for row in events if row.get("phase") == "NATIVE_INPUT_RESULT"]
     if rpc:

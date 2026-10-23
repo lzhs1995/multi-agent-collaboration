@@ -157,6 +157,12 @@ this read boundary before starting the command that generates a deliverable.
 A shell command that prints a review and generates the file before the model
 has read that printout does not establish this boundary.
 
+Before a final is frozen, communicate only its candidate path, byte/SHA pins,
+check scope and completion rules. Do not send provisional PASS totals or call
+unread output FULL-read. Record the actual read boundary and frozen result first;
+then report its verdict and counts. A specification or mock control is not a
+deployed fix or an accepted dissertation deliverable.
+
 Before reporting that a peer has not replied, inspect the original request's
 explicit absolute output or reply path and agreed subdirectory, then check the
 input version and exact bytes/SHA and FULL-read a matching result. Mtime is only

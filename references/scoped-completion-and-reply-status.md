@@ -54,6 +54,31 @@ receipt, referenced body reading, parent acceptance and resource RELEASE are
 separate. Freeze consumed finals; later changes use a new suffixed result with
 the predecessor pin and revised scope. No ACK-only task or new clock is needed.
 
+Capture the complete stdout **and** stderr and preserve the return code when
+executing `submit_argv`. The bridge's expected `rc=75 / NATIVE_PENDING` path
+can place the whole receipt on stderr with empty stdout. Keep both streams in
+separate original files; an empty stdout file is not evidence of zero input.
+Use `submit_capture_contract.original_reconcile_argv` for a later zero-input
+observation. It retains the original `--surface`, `--marker` and `--text`;
+all three remain required with `--reconcile-only`. Never resubmit on rc75.
+
+Before publishing a reply candidate, `scripts/executor_reply_preflight.py`
+accepts exact absolute `--state-file/--state-sha256` and
+`--body-file/--body-sha256` pairs. It checks the original WAITING episode,
+issued marker (including signed late markers), binding, supported status and
+continuing wait owner/deadline; it refuses a changed file or inode. This is a
+read-only structural diagnosis, not authentication, publication, body reading
+or consumption. Publish only through the authenticated original supervisor.
+
+`STANDBY`, `HOLD` and `WAIT` are prose instructions, not mailbox statuses. Use
+`status=WAITING_DEPENDENCY` with a concrete trigger. For a continuing wait,
+`owner` must equal the original supervisor and finite UTC epochs must satisfy
+`0 < next_due_epoch <= deadline_epoch`. After copying the issued binding and
+marker, use a trigger such as `Wait for the pinned patch review order, otherwise
+report availability once at the stated due time`; set both epochs to that actual
+due time. Preserve a refused reply and create a new candidate; do not overwrite
+historical replies or widen an old episode.
+
 Reply reminders describe the actual phase:
 
 | Recorded phase | Next action |

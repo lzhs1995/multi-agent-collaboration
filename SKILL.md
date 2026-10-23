@@ -24,6 +24,13 @@ for exact immutable body persistence without manual filename substitution.
 Planning and body preparation never send input. See
 [scoped completion](references/scoped-completion-and-reply-status.md).
 
+Reply candidates have a read-only exact-SHA preflight with explicit refusal
+reasons. Keep mailbox statuses from the existing contract; a prose STANDBY uses
+WAITING_DEPENDENCY plus its concrete wait condition. Capture complete stdout
+and stderr from completion submissions and reconcile rc75 with the original
+--surface, --marker and --text. Do not advertise provisional final counts before
+freezing and reading the result. These checks do not publish or consume replies.
+
 An authenticated original supervisor can inspect the exact two designated
 executor task/session scopes with `executor_reask.py coverage`. The read-only
 result separates missing enrollment, expired authority, unread replies and

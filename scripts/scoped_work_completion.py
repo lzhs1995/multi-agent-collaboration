@@ -173,6 +173,13 @@ def plan(work_order, work_order_sha256, report, report_sha256):
                 persist_body_file_contract='Replace argv[6] with a new absolute file containing exact UTF-8 body bytes',
                 persist_body_required=prepared['reference'] is not None,
                 declared_completion_channel='ORDINARY_NOTICE',
+                submit_capture_contract=dict(
+                    capture_stdout=True, capture_stderr=True,
+                    preserve_returncode=True, preserve_complete_streams=True,
+                    receipt_stream='stdout on success; stderr may contain the complete receipt on nonzero exit',
+                    rc75='NATIVE_PENDING: preserve the original attempt and reconcile only; never resubmit',
+                    original_reconcile_argv=submit_argv + ['--reconcile-only'],
+                    execution='Execute submit_argv directly with capture_output=True; do not pipe stdout alone'),
                 submit_command_template=command, submit_argv=submit_argv, input_operations=0,
                 acceptance=False, native_receipt=False, formal_callback=False,
                 replays_original_input=False, controller_source=str(source), controller_skill=controller_skill,

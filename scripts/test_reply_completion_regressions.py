@@ -265,6 +265,29 @@ class ScopedCompletionTests(unittest.TestCase):
         self.assertFalse(result['formal_callback'])
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
+    def test_submit_contract_preserves_both_streams_and_original_reconcile_text(self):
+        code, result = self.run_cli()
+        self.assertEqual(code, 0)
+        contract = result['submit_capture_contract']
+        self.assertTrue(contract['capture_stdout'])
+        self.assertTrue(contract['capture_stderr'])
+        self.assertTrue(contract['preserve_complete_streams'])
+        self.assertEqual(contract['original_reconcile_argv'], result['submit_argv'] + ['--reconcile-only'])
+        self.assertIn('never resubmit', contract['rc75'])
+        import cmux_bridge as bridge
+        out, err = io.StringIO(), io.StringIO()
+        pending = bridge.DispatchUnconfirmed('pending', state='NATIVE_PENDING',
+            details={'attempt':'exact-original-attempt', 'terminal_input_operations':2})
+        with patch.object(bridge, 'submit_text', side_effect=pending), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = bridge._cli_main(result['submit_argv'][3:])
+        self.assertEqual(code, 75)
+        self.assertEqual(out.getvalue(), '')
+        receipt = json.loads(err.getvalue())
+        self.assertEqual(receipt['details']['attempt'], 'exact-original-attempt')
+        self.assertEqual(receipt['details']['terminal_input_operations'], 2)
+        self.assertEqual(receipt['delivery_state'], 'NATIVE_PENDING')
+
     def test_generated_command_executes_actual_cli_with_exact_text_and_no_real_transport(self):
         # Execute the generated argv through the real public parser and
         # submit_text and actual journal inline/body checks. Replace only the
