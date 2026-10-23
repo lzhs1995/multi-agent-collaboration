@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.66.** Ready messages may be sent directly in either direction,
+**Version: 0.4.67.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -18,11 +18,23 @@ message; at most one recorded extra Enter may recover residual input after compa
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
 
+An exactly approved successor Word plan can use the separate
+[restricted PDF lane](references/word-restricted-pdf.md) for a new owned export
+while the expired legacy ticket remains quarantined. A restricted completion
+never claims ordinary Word/Zotero release or grants citation refresh.
+
 Scoped result plans retain their issued complete controller when CURRENT
 changes, reject conflicting output-path aliases and offer `--prepare-body`
 for exact immutable body persistence without manual filename substitution.
 Planning and body preparation never send input. See
 [scoped completion](references/scoped-completion-and-reply-status.md).
+
+Reply candidates have a read-only exact-SHA preflight with explicit refusal
+reasons. Keep mailbox statuses from the existing contract; a prose STANDBY uses
+WAITING_DEPENDENCY plus its concrete wait condition. Capture complete stdout
+and stderr from completion submissions and reconcile rc75 with the original
+--surface, --marker and --text. Do not advertise provisional final counts before
+freezing and reading the result. These checks do not publish or consume replies.
 
 An authenticated original supervisor can inspect the exact two designated
 executor task/session scopes with `executor_reask.py coverage`. The read-only
