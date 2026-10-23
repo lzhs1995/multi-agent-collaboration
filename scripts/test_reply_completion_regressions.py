@@ -223,9 +223,18 @@ class ScopedCompletionTests(unittest.TestCase):
                           outputs=dict(final_output=str(self.report_path),
                                        acceptance=str(self.root / 'ACCEPT.json'),
                                        progress_path=str(self.root / 'PROGRESS.json')))
-        canonical = self.root / '.agents/skills/multi-agent-collaboration'
+        canonical = self.root / 'original-controller'
         canonical.mkdir(parents=True)
         (canonical / 'SKILL.md').write_text('Offline canonical installed controller')
+        self.controller = canonical
+        scripts = canonical / 'scripts'
+        scripts.mkdir()
+        for name in ('cmux_bridge.py', 'cmux_prompt_reference.py', 'cmux_evidence_io.py'):
+            (scripts / name).write_bytes((Path(__file__).resolve().parent / name).read_bytes())
+        self.order['controller'] = str(canonical)
+        self.order['required_skill'] = dict(path=str(canonical / 'SKILL.md'),
+            bytes=(canonical / 'SKILL.md').stat().st_size,
+            sha256=hashlib.sha256((canonical / 'SKILL.md').read_bytes()).hexdigest())
         self.home = patch.object(Path, 'home', return_value=self.root)
         self.home.start()
         self.addCleanup(self.home.stop)
@@ -265,8 +274,8 @@ class ScopedCompletionTests(unittest.TestCase):
         self.write_order()
         code, result = self.run_cli()
         self.assertEqual(code, 0)
-        controller = self.root / '.agents/skills/multi-agent-collaboration/scripts'
-        shutil.copytree(Path(__file__).resolve().parent, controller)
+        controller = self.controller / 'scripts'
+        shutil.copytree(Path(__file__).resolve().parent, controller, dirs_exist_ok=True)
         argv = shlex.split(result['submit_command_template'])
         self.assertEqual(argv[:2], [str(Path(sys.executable).resolve()), '-BE'])
         script = textwrap.dedent('''\
@@ -279,7 +288,7 @@ class ScopedCompletionTests(unittest.TestCase):
             import cmux_message_journal as journal
             import cmux_native_delivery as native
             import cmux_prompt_reference as reference
-            private_home = Path(cli).parents[4]
+            private_home = Path(cli).parents[2]
             Path.home = classmethod(lambda cls: private_home)
             pin = dict(workspace_uuid='11111111-1111-4111-8111-111111111111',
                        caller_surface_uuid='22222222-2222-4222-8222-222222222222',
@@ -306,9 +315,12 @@ class ScopedCompletionTests(unittest.TestCase):
         notice_body.write_bytes(result['body'].encode('utf-8'))
         reference = result['body_reference']
         if reference is not None:
-            persist_argv = list(result['persist_body_argv_template'])
-            persist_argv[-1] = str(notice_body)
-            persisted = subprocess.run(persist_argv, capture_output=True, text=True, timeout=20)
+            persist_argv = list(result['persist_body_argv'])
+            self.assertEqual(result['persist_body_file_argument_index'], 6)
+            self.assertTrue(result['persist_body_template_requires_substitution'])
+            self.assertNotIn('<new-exact-notice-body-file>', persist_argv)
+            persisted = subprocess.run(persist_argv, input=result['persist_body_stdin'],
+                                       capture_output=True, text=True, timeout=20)
             self.assertEqual(persisted.returncode, 0, persisted.stderr)
             self.assertEqual(Path(reference['path']).read_bytes(), result['body'].encode('utf-8'))
         completed = subprocess.run(argv[:2] + ['-c', script] + argv[2:],
@@ -324,6 +336,100 @@ class ScopedCompletionTests(unittest.TestCase):
         self.assertEqual(observed['options']['wait_seconds'], 0.)
         self.assertEqual(observed['input_operations'], 0)
         self.assertTrue(observed['confirmed'])  # Only a fixture receipt, no live transport.
+
+    def test_issued_controller_survives_global_skill_switch(self):
+        current = self.root / '.agents/skills/multi-agent-collaboration'
+        current.mkdir(parents=True)
+        (current / 'SKILL.md').write_text('Unrelated new CURRENT release')
+        self.order['id'] = 'long-reviewed-work-' * 80
+        self.write_order()
+        code, result = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertEqual(result['controller_source'], str(self.controller))
+        self.assertEqual(result['submit_argv'][2], str(self.controller / 'scripts/cmux_bridge.py'))
+        self.assertEqual(result['persist_body_argv_template'][4], str(self.controller / 'scripts'))
+        self.assertEqual(result['persist_body_argv'][4], str(self.controller / 'scripts'))
+        self.assertTrue(result['controller_skill']['issued_pin_verified'])
+
+    def test_legacy_no_controller_uses_invoked_helper_not_global_link(self):
+        self.order.pop('controller')
+        self.order.pop('required_skill')
+        self.write_order()
+        code, result = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertEqual(result['controller_source'], str(Path(scoped.__file__).resolve().parent.parent))
+        self.assertFalse(result['controller_skill']['issued_pin_verified'])
+
+    def test_controller_alias_or_skill_pin_conflicts_refuse_zero_input(self):
+        original = dict(self.order)
+        for change in (dict(controller_source=str(self.root / 'foreign-controller')),
+                       dict(required_skill=dict(original['required_skill'], sha256='0' * 64)),
+                       dict(required_skill=dict(original['required_skill'], bytes=True)),
+                       dict(required_skill=dict(original['required_skill'], path=str(self.root / 'SKILL.md')))):
+            with self.subTest(change=change):
+                self.order = dict(original, **change)
+                self.write_order()
+                code, result = self.run_cli()
+                self.assertEqual(code, 2)
+                self.assertEqual(result['input_operations'], 0)
+                self.assertNotIn('submit_argv', result)
+
+    def test_progress_and_stage_output_aliases_accept_exact_same_paths(self):
+        original = dict(self.order)
+        base = original['outputs']
+        for outputs in (dict(base, progress=base['progress_path']),
+                        dict(final_output=base['final_output'], acceptance=base['acceptance'],
+                             progress=base['progress_path']),
+                        dict(final_output=base['final_output'], acceptance_output=base['acceptance'],
+                             progress_output=base['progress_path'])):
+            with self.subTest(outputs=outputs):
+                self.order = dict(original, outputs=outputs)
+                self.write_order()
+                self.assertEqual(self.run_cli()[0], 0)
+
+    def test_top_level_scoped_outputs_accept_without_rewriting_original_order(self):
+        paths = self.order.pop('outputs')
+        self.order.update(schema='spatial43-scoped-work-order-v4',
+                          acceptance_path=paths['acceptance'], progress_path=paths['progress_path'],
+                          final_report_path=paths['final_output'])
+        self.write_order()
+        before = self.order_path.read_bytes()
+        code, result = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.order_path.read_bytes(), before)
+        self.assertEqual(json.loads(result['body'])['report']['path'], paths['final_output'])
+
+    def test_conflicting_output_aliases_refuse_instead_of_choosing_one(self):
+        self.order['outputs']['progress'] = str(self.root / 'OTHER-PROGRESS.json')
+        self.write_order()
+        code, result = self.run_cli()
+        self.assertEqual(code, 2)
+        self.assertIn('progress output path aliases disagree', result['error'])
+        self.assertEqual(result['input_operations'], 0)
+
+    def test_prepare_body_cli_persists_exact_reference_without_manual_file_or_input(self):
+        self.order['id'] = 'exact-body-' * 90
+        self.write_order()
+        scripts = self.controller / 'scripts'
+        for name in ('cmux_prompt_reference.py', 'cmux_evidence_io.py'):
+            (scripts / name).write_bytes((Path(__file__).resolve().parent / name).read_bytes())
+        code, result = self.run_cli(self.arguments() + ['--prepare-body'])
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result['body_persisted'])
+        self.assertEqual(result['input_operations'], 0)
+        self.assertEqual(result['persistence_input_operations'], 0)
+        self.assertEqual(Path(result['body_reference']['path']).read_bytes(), result['body'].encode('utf-8'))
+        self.assertEqual(result['submit_argv'][2], str(self.controller / 'scripts/cmux_bridge.py'))
+        self.assertFalse(result['native_receipt'])
+
+    def test_prepare_body_failure_returns_zero_input_without_submission_arguments(self):
+        self.order['id'] = 'exact-body-' * 90
+        self.write_order()
+        with patch.object(scoped.subprocess, 'run', return_value=subprocess.CompletedProcess([], 2, b'', b'')):
+            code, result = self.run_cli(self.arguments() + ['--prepare-body'])
+        self.assertEqual(code, 2)
+        self.assertEqual(result['input_operations'], 0)
+        self.assertNotIn('submit_argv', result)
 
     def test_missing_or_colliding_acceptance_progress_final_paths_are_refused(self):
         original = dict(self.order)

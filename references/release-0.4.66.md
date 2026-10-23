@@ -32,6 +32,8 @@ python3.14 -BE /absolute/installed/source/scripts/executor_reask.py coverage \
 UUIDs for surfaces/workspaces use the canonical uppercase form. Native session
 IDs use canonical lowercase UUIDs. Duplicate peers, a changed scope SHA, a
 different foreground thread and malformed JSON refuse before claiming coverage.
+Both executor session IDs must be distinct from each other and from the
+supervisor's session. Duplicate sessions refuse before native observation.
 The command has a shared 30-second native observation budget and a ten-second
 slice per peer. A failed observation remains incomplete; the other peer is still
 considered within the remaining budget. Files and total inputs have size limits.
@@ -81,3 +83,23 @@ plans and attempts retain their original complete controller. Installation does
 not re-enroll any original episode, load every running client's hooks or prove
 an improvement in end-to-end dissertation work. Measure actual request/body/
 consume/result timing separately and retain timeout work that may have committed.
+
+Scoped completion plans use the issued controller when CURRENT changes.
+Supplied `controller`, `controller_source`, `completion_controller` and the
+parent of `required_skill.path` must agree. Issued SKILL.md bytes and SHA256
+are checked before planning. Orders without a controller retain the helper's
+own source. No new plan selects a different release from the global skill link.
+Existing uncertain attempts still retain their original controller and journal.
+
+Output compatibility covers `outputs.progress` / `progress_path`,
+`acceptance_output` / `progress_output`, and top-level `acceptance_path`,
+`progress_path`, `final_report_path`. Supplied aliases must agree; three stage
+paths stay separate, canonical and absolute. Original orders remain unchanged.
+
+Add `--prepare-body` to persist the exact long notice body through the issued
+controller and receive a ready `submit_argv`. This explicit operation writes
+only the immutable body and sends no input. Default planning still writes
+nothing. Programmatic callers can run `persist_body_argv` with exact UTF-8
+`persist_body_stdin`, then submit; no temporary filename is needed. The older
+file template remains supported with its substitution index explicitly set to
+6. Notice receipt, FULL reading, acceptance and task release remain separate.

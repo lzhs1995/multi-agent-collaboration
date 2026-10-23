@@ -81,7 +81,7 @@ def read_scope(path, expected_sha):
     peers = value.get('executors')
     if not isinstance(peers, list) or len(peers) != 2:
         raise ValueError('COVERAGE_EXACT_TWO_EXECUTORS_REQUIRED')
-    seen = set()
+    seen, sessions = set(), set()
     for peer in peers:
         if not isinstance(peer, dict):
             raise ValueError('COVERAGE_EXECUTOR_SCOPE_REQUIRED')
@@ -92,6 +92,9 @@ def read_scope(path, expected_sha):
         session = peer.get('session_id')
         if not isinstance(session, str) or str(uuid.UUID(session)) != session:
             raise ValueError('COVERAGE_EXECUTOR_SESSION_REQUIRED')
+        if session in sessions or session == value['supervisor_session_id']:
+            raise ValueError('COVERAGE_DISTINCT_ORIGINAL_EXECUTOR_SESSIONS_REQUIRED')
+        sessions.add(session)
         for key in ('task_id', 'overall_task'):
             text = peer.get(key)
             if (not isinstance(text, str) or len(text) > MAX_SCOPE_TEXT

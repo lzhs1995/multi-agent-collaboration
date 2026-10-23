@@ -9,6 +9,11 @@
   diagnostics. Keep asks, file posts, replies and reservations in the plan hash.
 - Label raw live observations separately from immutable reviewed scope. Preserve
   original 0.4.65 controller/issuer permissions through complete explicit pins.
+- Keep scoped completion commands on their issued controller and verify skill
+  pins. Accept the observed output-path aliases only when they agree. Add an
+  explicit `--prepare-body` path and ready stdin persistence arguments so long
+  result notices need no hand-filled temporary filename.
+- Refuse duplicate executor session IDs before native coverage observations.
 - Source diagnostics do not establish active-client loading, useful scientific
   delivery, all-session adoption or an overall efficiency improvement.
 

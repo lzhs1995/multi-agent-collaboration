@@ -18,6 +18,12 @@ message; at most one recorded extra Enter may recover residual input after compa
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
 
+Scoped result plans retain their issued complete controller when CURRENT
+changes, reject conflicting output-path aliases and offer `--prepare-body`
+for exact immutable body persistence without manual filename substitution.
+Planning and body preparation never send input. See
+[scoped completion](references/scoped-completion-and-reply-status.md).
+
 An authenticated original supervisor can inspect the exact two designated
 executor task/session scopes with `executor_reask.py coverage`. The read-only
 result separates missing enrollment, expired authority, unread replies and

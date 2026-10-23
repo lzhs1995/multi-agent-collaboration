@@ -21,14 +21,14 @@ Do not invent a harness task, nonce or reservation for an ordinary scoped review
 For an issued scoped order, `scripts/scoped_work_completion.py --work-order
 /absolute/order.json --work-order-sha256 SHA --report /absolute/result.json
 --report-sha256 SHA` reads both exact bodies and returns a zero-input ordinary
-notice plan. Its `submit_argv` uses the installed complete controller's actual
+notice plan. Its `submit_argv` uses the issued complete controller's actual
 `cmux_bridge.py submit-text --text` entry with bounded wire text as one argument,
 `-BE`, the original marker and a zero-second observation budget. Execute that
 argument list directly; `submit_command_template` is its shell-quoted display.
 The public bridge refuses raw text above its wire budget. When
 `persist_body_required` is true, first save the planner's exact `body` to a new
 absolute UTF-8 file, substitute that path in `persist_body_argv_template`, and
-execute that list through the same installed controller. Its existing
+execute that list through the same issued controller. Its existing
 `cmux_prompt_reference.persist` validates SHA and bytes, writes an immutable body
 once, and refuses a changed prior body. Only then execute `submit_argv`, which
 contains the short MESSAGE_REFERENCE_V2 notice. Planning writes no files or input;
@@ -37,6 +37,17 @@ helper checks that this is the declared final output; it does not
 establish authorization or send. It refuses formal harness packs, which retain
 their original `submit_completion_callback` route. An in-flight unknown notice
 is reconciled only through its original attempt and controller.
+
+From 0.4.66, `--prepare-body` explicitly persists the exact body and returns
+ready `submit_argv`; it never sends. Without this flag, planning has no writes.
+Alternatively execute `persist_body_argv` with the exact UTF-8
+`persist_body_stdin`, then `submit_argv`. The legacy file template has
+`persist_body_file_argument_index=6`; replace that placeholder before execution.
+An issued controller and `required_skill` pin override any later global skill
+link; conflicting aliases or changed skill bytes refuse before a plan.
+Observed output path aliases, including top-level scoped order paths, are
+accepted only when all supplied names agree and the three stages remain
+separate canonical absolute files. No original order is rewritten.
 
 An ordinary result notice is not a formal DONE callback. A notice's native
 receipt, referenced body reading, parent acceptance and resource RELEASE are

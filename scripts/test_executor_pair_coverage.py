@@ -110,6 +110,17 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(result['executors'][1]['status'], 'NO_EPISODE')
         self.assertFalse(result['registration_authorized'])
 
+    def test_duplicate_or_supervisor_executor_session_refuses_before_native_reads(self):
+        for session in (self.scope['executors'][0]['session_id'], SSESSION):
+            with self.subTest(session=session):
+                self.scope['executors'][1]['session_id'] = session
+                self.write_scope()
+                before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+                with self.assertRaisesRegex(ValueError, 'DISTINCT_ORIGINAL_EXECUTOR_SESSIONS'):
+                    self.run_coverage()
+                self.bind.assert_not_called()
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+
     def test_old_stopped_and_expired_episode_remain_uncovered_and_unchanged(self):
         for status in ('STOPPED', 'AUTHORITY_EXPIRED'):
             with self.subTest(status=status):
