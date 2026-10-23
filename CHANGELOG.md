@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.68
 
 - Persist the exact idle request marker before creating its request file and
   sync the request directory before any send opportunity. A recovered request
@@ -8,6 +8,9 @@
   Verify complete directory/record stability before claiming absence. Persist
   incomplete diagnostics; interruption restarts discovery and never authorizes
   input or a portable cross-stream directory cursor.
+
+- Preserve the complete original 0.4.67 controller, manifest, file-protocol issuer range and historical capabilities. Existing requests and reservations retain their original authority.
+- Disclose two nonblocking review limits: large or constantly changing legacy directories may repeatedly refuse recovery; first-pass path reads rely on final directory/member stability verification. No universal recovery, installation, client adoption or overall efficiency claim.
 
 ## 0.4.67
 

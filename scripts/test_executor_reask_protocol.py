@@ -841,11 +841,12 @@ class ProtocolTests(unittest.TestCase):
                                   file_protocol=protocol.descriptor(),
                                   scheduler=issuer(*self.releases[name][:2]),
                                   authorization='EXPLICIT_REASK_ENROLL_EXISTING')
-                    # The pinned original 0.4.65 and 0.4.66 issuer tables both
+                    # The pinned original 0.4.65 through 0.4.67 issuer tables
                     # excluded the three pre-descriptor v2 controllers. Preserve
                     # that actual issued authority in later schedulers.
                     excludes_v2 = name in ('0.4.65-0519487997af',
-                                           '0.4.66-56280c380856')
+                                           '0.4.66-56280c380856',
+                                           '0.4.67-42f7cdf65f35')
                     allowed = not (excludes_v2 and origin in REVIEWED_V2)
                     self.assertIs(protocol.supports_record(record, state, self.current_scheduler), allowed)
                     record['authorization'] = 'EXPLICIT_REASK_START'
