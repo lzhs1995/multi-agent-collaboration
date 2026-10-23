@@ -7,6 +7,7 @@ shared-write or resource ownership. Current same-workspace pair rules remain.
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import time
 from contextlib import ExitStack
@@ -15,10 +16,62 @@ from cmux_evidence_io import snapshot
 import cmux_native_delivery as native
 import executor_reask as reask
 import executor_ready as ready
+import executor_reask_protocol as protocol
 import executor_reask_scheduler as scheduler
 
 AUTH_SCHEMA = 'executor-successor-inquiry-authority-v1'
 PLAN_SCHEMA = 'executor-successor-inquiry-plan-v2'
+MAX_REVIEW_COMPONENTS = 32
+MAX_REVIEW_FIELDS = 128
+MAX_REVIEW_BYTES = 262144
+FIELD_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]{0,95}')
+
+
+class SuccessorDiagnosticError(ValueError):
+    """A refusal, with bounded zero-input details; never recovery authority."""
+    def __init__(self, reason, **details):
+        super().__init__(reason)
+        self.details = dict(reason=reason, input_operations=0,
+                            automatic_retry_authorized=False, **details)
+
+
+def _review_components(value):
+    """Hash top-level semantic fields without exposing pending payload bodies."""
+    if (len(value) > MAX_REVIEW_FIELDS
+            or any(not FIELD_NAME.fullmatch(key) for key in value)):
+        return dict(complete=False, fields={})
+    return dict(complete=True, fields={key: digest(item) for key, item in value.items()})
+
+
+def plan_difference(reviewed, current):
+    """Field names and hashes only, capped before traversing diagnostics."""
+    changes = []
+    for key in ('caller_surface_uuid', 'original_episode_id',
+                'original_state', 'original_enrollment', 'original_stop', 'target',
+                'live_pair', 'executor_identity', 'authorization',
+                'authorization_until_epoch', 'current_controller', 'original_controller',
+                'task_id', 'overall_task', 'resume_stopped', 'file_only',
+                'proactive_hook', 'reservation_inquiries'):
+        before, after = reviewed.get(key), current.get(key)
+        if before == after:
+            continue
+        item = dict(component=key)
+        if isinstance(before, dict) and isinstance(after, dict):
+            a, b = before.get('semantic_fields') or {}, after.get('semantic_fields') or {}
+            if (isinstance(a, dict) and isinstance(b, dict)
+                    and a.get('complete') is True and b.get('complete') is True
+                    and isinstance(a.get('fields'), dict) and isinstance(b.get('fields'), dict)
+                    and len(a['fields']) <= MAX_REVIEW_FIELDS and len(b['fields']) <= MAX_REVIEW_FIELDS):
+                aa, bb = a.get('fields', {}), b.get('fields', {})
+                fields = [k for k in sorted(set(aa) | set(bb)) if aa.get(k) != bb.get(k)]
+                item['changed_fields'] = [k if FIELD_NAME.fullmatch(k)
+                    else 'FIELD_SHA256_' + digest(k) for k in fields[:MAX_REVIEW_COMPONENTS]]
+                item['changed_fields_complete'] = len(fields) <= MAX_REVIEW_COMPONENTS
+            if 'semantic_sha256' in before or 'semantic_sha256' in after:
+                item.update(reviewed_semantic_sha256=before.get('semantic_sha256'),
+                            current_semantic_sha256=after.get('semantic_sha256'))
+        changes.append(item)
+    return changes
 
 # A scheduler observation must not invalidate a reviewed transition. Everything
 # else, including replies, input fences and authority, remains in the plan hash.
@@ -96,6 +149,7 @@ def _review_pin(pin, raw, *, state=False, episode=None, now=None):
                             for key, item in neutral.items())):
                 value['last_execution'] = neutral
     return dict(path=pin['path'], semantic_sha256=digest(value),
+        semantic_fields=_review_components(value),
         comparison='validated-poll-observations-v1')
 
 
@@ -104,12 +158,12 @@ def digest(value):
         separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
-def _pin(path, *, absent=False):
+def _pin(path, *, absent=False, limit=ready.MAX_JSON_BYTES):
     path = Path(path)
     if not path.is_absolute() or path.resolve() != path or path.is_symlink():
         raise ValueError('SUCCESSOR_CANONICAL_FILE_REQUIRED')
     try:
-        raw, _identity = snapshot(path, limit=ready.MAX_JSON_BYTES)
+        raw, _identity = snapshot(path, limit=limit)
     except FileNotFoundError:
         if absent:
             return dict(path=str(path), bytes=0, sha256='ABSENT'), None
@@ -208,7 +262,8 @@ def prepare_transition(plan, previous, live, *, now):
         resume_stopped=plan['resume_stopped'], observations=preimages)
     if (fresh != plan or not previous or previous.get('episode_id') != plan['original_episode_id']
             or _live_pair(live) != plan['live_pair']):
-        raise ValueError('SUCCESSOR_REVIEWED_PLAN_CHANGED')
+        raise SuccessorDiagnosticError('SUCCESSOR_REVIEWED_PLAN_CHANGED',
+            changes=plan_difference(plan, fresh), next_action='REVIEW_NEW_EXACT_PREVIEW_NO_AUTOMATIC_APPLY')
     state_raw = snapshot(reask.state_path(plan['caller_surface_uuid']), limit=ready.MAX_JSON_BYTES)[0]
     enrollment_raw = scheduler._raw(scheduler.enrollment_path(plan['caller_surface_uuid']))
     stop_raw = scheduler._raw(reask.stop_file(plan['caller_surface_uuid']))
@@ -273,10 +328,27 @@ def validate_commit(plan, previous, *, now, preimages):
         raise ValueError('SUCCESSOR_COMMIT_PREIMAGE_CHANGED_DURING_AUTHENTICATION')
 
 
-def register(caller, supervisor, auth_file, auth_sha, *, apply=False, plan_sha256='', now=None, resume_stopped=False):
+def register(caller, supervisor, auth_file, auth_sha, *, apply=False, plan_sha256='', now=None, resume_stopped=False,
+             reviewed_preview=None, reviewed_preview_sha256=''):
     realtime = now is None
     now = time.time() if now is None else now
     caller = scheduler.canonical_uuid(caller)
+    if reviewed_preview is None and reviewed_preview_sha256:
+        raise SuccessorDiagnosticError('SUCCESSOR_REVIEWED_PREVIEW_FILE_REQUIRED')
+    reviewed = None
+    if reviewed_preview is not None:
+        pin, raw = _pin(reviewed_preview, limit=MAX_REVIEW_BYTES)
+        if pin['sha256'] != reviewed_preview_sha256:
+            raise SuccessorDiagnosticError('SUCCESSOR_REVIEWED_PREVIEW_EXACT_SHA_REQUIRED')
+        preview = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_nonfinite_constant)
+        if (not isinstance(preview, dict) or preview.get('outcome') != 'SUCCESSOR_READ_ONLY_PLAN'
+                or not isinstance(preview.get('plan'), dict)
+                or preview['plan'].get('schema') != PLAN_SCHEMA
+                or preview['plan'].get('caller_surface_uuid') != caller
+                or digest(preview['plan']) != preview.get('plan_sha256')
+                or apply and preview['plan_sha256'] != plan_sha256):
+            raise SuccessorDiagnosticError('SUCCESSOR_REVIEWED_PREVIEW_PLAN_REQUIRED')
+        reviewed = preview['plan']
     observations = {}
     with ExitStack() as stack:
         try:
@@ -288,9 +360,16 @@ def register(caller, supervisor, auth_file, auth_sha, *, apply=False, plan_sha25
     sha = digest(plan)
     if not apply:
         return dict(outcome='SUCCESSOR_READ_ONLY_PLAN', plan=plan, plan_sha256=sha,
-            original_observations=observations, input_operations=0, registration_changed=False)
+            original_observations={key: dict(pin, role='LIVE_OBSERVATION', immutable_input=False)
+                                   for key, pin in observations.items()},
+            input_operations=0, registration_changed=False)
     if sha != plan_sha256:
-        raise ValueError('SUCCESSOR_REVIEWED_PLAN_SHA_REQUIRED')
+        raise SuccessorDiagnosticError('SUCCESSOR_REVIEWED_PLAN_SHA_REQUIRED',
+            supplied_plan_sha256=plan_sha256 if protocol.sha256_shape(plan_sha256) else 'INVALID',
+            current_plan_sha256=sha,
+            changes=plan_difference(reviewed, plan) if reviewed else [],
+            change_details='EXACT_REVIEWED_PREVIEW_REQUIRED' if reviewed is None else 'SEMANTIC_COMPONENT_HASHES',
+            next_action='REVIEW_NEW_EXACT_PREVIEW_NO_AUTOMATIC_APPLY')
     continuation = dict(enabled=True, overall_task=plan['overall_task'], owner=plan['target']['identity']['target_surface_uuid'],
         authorization_file=plan['authorization']['path'], until_epoch=plan['authorization_until_epoch'],
         reservation_inquiries=True, proactive_hook=True)

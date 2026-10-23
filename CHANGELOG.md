@@ -1,3 +1,17 @@
+## 0.4.66
+
+- Add authenticated, bounded read-only coverage for exactly two designated
+  original executor sessions and task scopes. Report absent/stopped episodes,
+  missing enrollment, changed identity/authority and snapshot drift separately
+  without starting, asking, consuming, registering or repairing work (#75).
+- Emit one structured successor refusal. An exact pinned original preview can
+  identify changed semantic fields and hashes; pending bodies stay out of the
+  diagnostics. Keep asks, file posts, replies and reservations in the plan hash.
+- Label raw live observations separately from immutable reviewed scope. Preserve
+  original 0.4.65 controller/issuer permissions through complete explicit pins.
+- Source diagnostics do not establish active-client loading, useful scientific
+  delivery, all-session adoption or an overall efficiency improvement.
+
 ## 0.4.65
 
 - Keep the ten-second file sweep budget while bounding each selected executor

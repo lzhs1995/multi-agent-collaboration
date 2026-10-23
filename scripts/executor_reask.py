@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -1348,8 +1349,15 @@ def _main(argv=None):
     successor_parser.add_argument('--authorization-sha256', required=True)
     successor_parser.add_argument('--apply', action='store_true')
     successor_parser.add_argument('--plan-sha256', default='')
+    successor_parser.add_argument('--reviewed-preview', type=Path,
+        help='optional exact original preview for bounded semantic refusal diagnostics; never authorizes stale apply')
+    successor_parser.add_argument('--reviewed-preview-sha256', default='')
     successor_parser.add_argument('--resume-stopped', action='store_true',
         help='requires explicit allow_resume_stopped=true in the pinned successor authorization')
+    coverage_parser = sub.add_parser('coverage',
+        help='read-only exact original two-executor enrollment and task scope; no tick, input or registration')
+    coverage_parser.add_argument('--scope-file', type=Path, required=True)
+    coverage_parser.add_argument('--scope-sha256', required=True)
     st = sub.add_parser('stop')
     st.add_argument('--reason', default='OPERATOR')
     e = sub.add_parser('enroll-existing', help='authenticate and register one existing episode; no tick or send')
@@ -1424,11 +1432,29 @@ def _main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 0 if result['outcome'] in ('WORK_CHECKPOINT_RECORDED', 'WORK_CHECKPOINT_ALREADY_RECORDED') else 2
     elif args.cmd == 'register-successor':
-        from executor_successor_registration import register
-        result = register(caller, args.supervisor, args.authorization_file, args.authorization_sha256,
-            apply=args.apply, plan_sha256=args.plan_sha256, resume_stopped=args.resume_stopped)
+        from executor_successor_registration import register, SuccessorDiagnosticError
+        try:
+            result = register(caller, args.supervisor, args.authorization_file, args.authorization_sha256,
+                apply=args.apply, plan_sha256=args.plan_sha256, resume_stopped=args.resume_stopped,
+                reviewed_preview=args.reviewed_preview, reviewed_preview_sha256=args.reviewed_preview_sha256)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            result = dict(outcome='SUCCESSOR_REGISTRATION_REFUSED', reason=str(exc)[:240],
+                error_type=type(exc).__name__, input_operations=0,
+                registration_changed='NOT_DETERMINED', automatic_retry_authorized=False)
+            if isinstance(exc, SuccessorDiagnosticError):
+                result['diagnostic'] = exc.details
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 0 if result['outcome'] in ('SUCCESSOR_READ_ONLY_PLAN', 'SUCCESSOR_INQUIRY_REGISTERED') else 2
+    elif args.cmd == 'coverage':
+        from executor_pair_coverage import coverage
+        try:
+            result = coverage(args.scope_file, args.scope_sha256, caller)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            result = dict(outcome='COVERAGE_REFUSED', reason=str(exc)[:240],
+                error_type=type(exc).__name__, input_operations=0, state_changes=0,
+                registration_authorized=False)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if result['outcome'] == 'EXACT_PAIR_COVERED' else 2
     else:
         state = status_snapshot(caller)
     result = summary(state)
