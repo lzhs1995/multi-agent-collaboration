@@ -39,3 +39,9 @@ The complete original 0.4.66 file producer and its historical issuer range are
 pinned for compatibility. No original attempt or controller is migrated. Source
 validation, release, installation, automatic client loading, useful delivery and
 overall task efficiency require separate evidence.
+
+The [restricted Word PDF lane](word-restricted-pdf.md) preserves the original
+expired ACTIVE ticket while using independent FIFO tables and a fixed source-
+pinned native child for new owned PDF work. Missing foreign document references
+remain UNKNOWN. Successful restricted cleanup never claims ordinary release or
+grants citation refresh.

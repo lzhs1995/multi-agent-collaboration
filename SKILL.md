@@ -18,6 +18,11 @@ message; at most one recorded extra Enter may recover residual input after compa
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
 
+An exactly approved successor Word plan can use the separate
+[restricted PDF lane](references/word-restricted-pdf.md) for a new owned export
+while the expired legacy ticket remains quarantined. A restricted completion
+never claims ordinary Word/Zotero release or grants citation refresh.
+
 Scoped result plans retain their issued complete controller when CURRENT
 changes, reject conflicting output-path aliases and offer `--prepare-body`
 for exact immutable body persistence without manual filename substitution.

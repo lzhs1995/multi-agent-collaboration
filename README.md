@@ -5,6 +5,10 @@ before publication, without sending, consuming or granting authority. New
 completion plans retain complete stdout/stderr and the original reconcile
 arguments. See [reply preflight](references/release-0.4.67.md).
 
+The [restricted Word PDF lane](references/word-restricted-pdf.md) permits new
+owned PDF work under an exact approved successor plan while preserving the
+original legacy quarantine and foreign UNKNOWN. It grants no citation refresh.
+
 Read-only exact-pair coverage now reports the two original executor scopes,
 missing enrollment, expired authority and changed observations. Successor
 refusals can explain semantic changes from an exact original preview without

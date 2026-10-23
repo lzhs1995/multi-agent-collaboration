@@ -1,5 +1,10 @@
 ## 0.4.67
 
+- Add an isolated restricted Word PDF lane for an exactly approved original
+  successor plan. Preserve legacy ACTIVE quarantine and resource requirements;
+  enforce distinct FIFO tickets, fixed source-pinned native templates, original
+  locks/22GiB admission and failure-pending/no-replay boundaries. Missing foreign
+  document metadata stays UNKNOWN; this grants no citation refresh.
 - Add a read-only exact-pinned mailbox reply preflight with concrete refusal
   reasons. Require actual issued markers, original bindings and an open
   continuing frontier; preserve existing statuses and live authority checks.
