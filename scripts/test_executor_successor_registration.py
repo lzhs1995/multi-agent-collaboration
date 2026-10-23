@@ -522,10 +522,86 @@ class SuccessorTests(unittest.TestCase):
         state['terminal_pending']['outcome'] = 'RECEIVED'
         reask.save(state)
         before = reask.state_path(CALLER).read_bytes()
-        with self.assertRaisesRegex(ValueError, 'REVIEWED_PLAN_SHA'):
-            self.cli_register(preview)
+        rc, result = self.cli_register(preview)
+        self.assertEqual(rc, 2)
+        self.assertEqual(result['outcome'], 'SUCCESSOR_REGISTRATION_REFUSED')
+        self.assertIn('REVIEWED_PLAN_SHA', result['reason'])
+        self.assertEqual(result['diagnostic']['input_operations'], 0)
         self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
         self.bridge._run.assert_not_called()
+
+    def test_exact_preview_explains_semantic_fields_without_exposing_pending_body(self):
+        preview = self.preview()
+        saved = self.home / 'reviewed-preview.json'
+        saved.write_text(json.dumps(preview))
+        preview_sha = hashlib.sha256(saved.read_bytes()).hexdigest()
+        state = reask.load(CALLER)
+        state['terminal_pending']['body'] = 'private-pending-body-must-not-appear'
+        state['asks'].append(dict(marker='new-original-ask'))
+        state['file_posts'] = 1
+        reask.save(state)
+        before = reask.state_path(CALLER).read_bytes()
+        with self.assertRaises(successor.SuccessorDiagnosticError) as caught:
+            successor.register(CALLER, NEW, self.auth, self.auth_sha, apply=True,
+                plan_sha256=preview['plan_sha256'], now=1101.,
+                reviewed_preview=saved, reviewed_preview_sha256=preview_sha)
+        details = caught.exception.details
+        changed = next(r for r in details['changes'] if r['component'] == 'original_state')
+        self.assertTrue({'asks', 'file_posts', 'terminal_pending'}.issubset(changed['changed_fields']))
+        self.assertNotIn('private-pending-body-must-not-appear', json.dumps(details))
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+        self.assertFalse(details['automatic_retry_authorized'])
+
+    def test_preview_raw_observations_are_separate_from_immutable_plan(self):
+        preview = self.preview()
+        self.assertTrue(all(p['role'] == 'LIVE_OBSERVATION' and p['immutable_input'] is False
+                            for p in preview['original_observations'].values()))
+        self.assertNotIn('role', preview['plan']['original_state'])
+        state = reask.load(CALLER)
+        state['check_count'] += 1
+        reask.save(state)
+        current = self.preview()
+        self.assertEqual(current['plan_sha256'], preview['plan_sha256'])
+        self.assertNotEqual(current['original_observations'], preview['original_observations'])
+
+    def test_cli_identity_refusal_is_one_bounded_json_document(self):
+        with patch.object(identity, 'authenticate', side_effect=ValueError('original Claude consumer changed')):
+            rc, result = self.cli_register()
+        self.assertEqual(rc, 2)
+        self.assertEqual(result['outcome'], 'SUCCESSOR_REGISTRATION_REFUSED')
+        self.assertEqual(result['input_operations'], 0)
+        self.assertFalse(result['automatic_retry_authorized'])
+        self.bridge._run.assert_not_called()
+
+    def test_changed_review_preview_sha_is_refused_before_mutation(self):
+        preview = self.preview()
+        saved = self.home / 'reviewed-preview.json'
+        saved.write_text(json.dumps(preview))
+        before = reask.state_path(CALLER).read_bytes()
+        with self.assertRaisesRegex(ValueError, 'PREVIEW_EXACT_SHA'):
+            successor.register(CALLER, NEW, self.auth, self.auth_sha, apply=True,
+                plan_sha256=preview['plan_sha256'], now=1101.,
+                reviewed_preview=saved, reviewed_preview_sha256='0' * 64)
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+
+    def test_unsafe_semantic_key_is_not_disclosed_in_preview_diagnostics(self):
+        state = reask.load(CALLER)
+        state['private payload key with spaces'] = 'private value'
+        reask.save(state)
+        preview = self.preview()
+        fields = preview['plan']['original_state']['semantic_fields']
+        self.assertEqual(fields, dict(complete=False, fields={}))
+
+    def test_change_diagnostic_is_bounded_and_handles_malformed_field_maps(self):
+        before = dict(original_state=dict(semantic_fields=dict(complete=True,
+            fields={f'field_{i}': '0' * 64 for i in range(100)})))
+        after = dict(original_state=dict(semantic_fields=dict(complete=True,
+            fields={f'field_{i}': '1' * 64 for i in range(100)})))
+        changes = successor.plan_difference(before, after)
+        self.assertEqual(len(changes[0]['changed_fields']), successor.MAX_REVIEW_COMPONENTS)
+        self.assertFalse(changes[0]['changed_fields_complete'])
+        before['original_state']['semantic_fields'] = ['not', 'a', 'map']
+        self.assertEqual(successor.plan_difference(before, after), [dict(component='original_state')])
 
 
 if __name__ == '__main__':

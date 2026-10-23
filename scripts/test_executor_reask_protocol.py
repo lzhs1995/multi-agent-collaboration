@@ -841,10 +841,13 @@ class ProtocolTests(unittest.TestCase):
                                   file_protocol=protocol.descriptor(),
                                   scheduler=issuer(*self.releases[name][:2]),
                                   authorization='EXPLICIT_REASK_ENROLL_EXISTING')
-                    self.assert_supported(state, record)
+                    # 0.4.65 preserved the actual 0.4.64 descriptor issuer range,
+                    # which excluded the three pre-descriptor v2 controllers.
+                    allowed = not (name == '0.4.65-0519487997af' and origin in REVIEWED_V2)
+                    self.assertIs(protocol.supports_record(record, state, self.current_scheduler), allowed)
                     record['authorization'] = 'EXPLICIT_REASK_START'
                     self.assertIs(protocol.supports_record(record, state, self.current_scheduler),
-                                  origin == name)
+                                   allowed and origin == name)
             state, record = self.episode(current=True)
             record.update(scheduler=issuer(*self.releases[name][:2]),
                           authorization='EXPLICIT_REASK_ENROLL_EXISTING')
@@ -912,7 +915,7 @@ class ProtocolTests(unittest.TestCase):
                               file_protocol=protocol.descriptor(),
                               scheduler=issuer(*self.releases[name][:2]),
                               authorization='EXPLICIT_REASK_ENROLL_EXISTING')
-                self.assert_supported(state, record)
+                self.assertIs(protocol.supports_record(record, state, self.current_scheduler), origin in allowed)
         state, record = self.episode(name)
         record['scheduler'] = self.current_scheduler
         record['authorization'] = 'EXPLICIT_REASK_ENROLL_EXISTING'
@@ -921,6 +924,28 @@ class ProtocolTests(unittest.TestCase):
         new_record['scheduler'] = issuer(*self.releases[name][:2])
         new_record['authorization'] = 'EXPLICIT_REASK_ENROLL_EXISTING'
         self.assertFalse(protocol.supports_record(new_record, new_state, self.current_scheduler))
+
+    def test_reviewed_0465_issuer_does_not_gain_unissued_controller_authority(self):
+        name = '0.4.65-0519487997af'
+        allowed = (REVIEWED_AT_0457 - {
+            '0.4.28-ae66245771d0', '0.4.30-ff75100795a9', '0.4.31-79ae83e9d5da'}) | {
+            '0.4.58-cf3f6175840b', '0.4.59-313dc8c3db1b', '0.4.60-c0db75b2228f',
+            '0.4.61-d14ae7c2b757', '0.4.62-4cd88749675a', '0.4.63-c40bc1d91623',
+            '0.4.64-f47f5fcfc0ac', name}
+        self.assertEqual(set(protocol.LEGACY_FILE_PROTOCOL[name]['controllers']), allowed)
+        for origin in REVIEWED:
+            with self.subTest(controller=origin):
+                state, record = self.episode(origin)
+                before = copy.deepcopy(state)
+                record.update(schema='executor-reask-enrollment-v2',
+                    file_protocol=protocol.descriptor(), scheduler=issuer(*self.releases[name][:2]),
+                    authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+                self.assertIs(protocol.supports_record(record, state, self.current_scheduler), origin in allowed)
+                self.assertEqual(state, before)
+        state, record = self.episode(current=True)
+        record.update(scheduler=issuer(*self.releases[name][:2]),
+            authorization='EXPLICIT_REASK_ENROLL_EXISTING')
+        self.assertFalse(protocol.supports_record(record, state, self.current_scheduler))
 
     def test_reviewed_v3_rechecks_complete_manifest_without_cached_trust(self):
         for name in REVIEWED_V3:

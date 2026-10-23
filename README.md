@@ -1,4 +1,9 @@
-# Current release: 0.4.65
+# Current release: 0.4.66
+
+Read-only exact-pair coverage now reports the two original executor scopes,
+missing enrollment, expired authority and changed observations. Successor
+refusals can explain semantic changes from an exact original preview without
+authorizing stale apply. See [pair diagnostics](references/release-0.4.66.md).
 
 File-only sweeps retain the ten-second budget and give each selected executor
 a finite time slice. Recent future-due and finished rows follow overdue work;

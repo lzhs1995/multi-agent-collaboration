@@ -744,6 +744,11 @@ plain `-B` launch against an already poisoned standard-library cache.
 
 ### Bounded transcript progress and work checkpoints (0.4.61)
 
+For exact two-executor scope inspection and semantic successor refusal details,
+use [0.4.66 diagnostics](release-0.4.66.md). Coverage is read-only and requires the
+original supervisor's authenticated foreground thread; a missing enrollment
+does not permit automatic registration. Raw live snapshots remain observations.
+
 The shared Tail polls at most256KiB and completes records up to8MiB. Larger
 partial records retain a small hash ledger across polls. A completed record is
 reread within that limit and every recorded chunk is verified before parsing.

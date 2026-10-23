@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.65.** Ready messages may be sent directly in either direction,
+**Version: 0.4.66.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -17,6 +17,19 @@ original receiver transcript proves reception. Do not repaste an uncertain
 message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
+
+Scoped result plans retain their issued complete controller when CURRENT
+changes, reject conflicting output-path aliases and offer `--prepare-body`
+for exact immutable body persistence without manual filename substitution.
+Planning and body preparation never send input. See
+[scoped completion](references/scoped-completion-and-reply-status.md).
+
+An authenticated original supervisor can inspect the exact two designated
+executor task/session scopes with `executor_reask.py coverage`. The read-only
+result separates missing enrollment, expired authority, unread replies and
+observation drift. Successor refusals can explain semantic field changes from
+an exact original preview; they never authorize stale apply or replay. See
+[exact pair diagnostics](references/release-0.4.66.md).
 
 File-only sweeps give each executor a finite slice inside the original
 ten-second budget. A slow slice rotates without blocking all later executors;
