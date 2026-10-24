@@ -1,4 +1,11 @@
-# Current release: 0.4.68
+# Current release: 0.4.69
+
+Recognize structured Codex HTTP status aliases and explicit billing/authentication
+failures without changing provider configuration. A separately reviewed ordinary
+message with two verified zero-input attempts has one explicit recovery through
+its complete original controller. Preserve its original payload, endpoints,
+locks and history; input, uncertainty or a used recovery slot forbids another
+send. See [0.4.69 recovery](references/release-0.4.69.md).
 
 Persist the exact idle-request marker before creation and sync its directory
 before input. Legacy recovery uses constant-memory, bounded discovery and a
