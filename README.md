@@ -1,4 +1,11 @@
-# Current release: 0.4.67
+# Current release: 0.4.68
+
+Persist the exact idle-request marker before creation and sync its directory
+before input. Legacy recovery uses constant-memory, bounded discovery and a
+fresh directory/member stability check. Interrupted scans retain diagnostics
+and restart; large or changing legacy directories may still refuse safely.
+Preserve complete original controllers and issuer authority. See
+[bounded request recovery](references/release-0.4.68.md).
 
 Validate a prospective mailbox reply against exact original episode/body pins
 before publication, without sending, consuming or granting authority. New
