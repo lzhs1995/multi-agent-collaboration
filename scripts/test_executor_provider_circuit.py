@@ -128,6 +128,14 @@ class CircuitTests(unittest.TestCase):
         self.assertTrue(self.apply([outcome(error=dict(message='unknown'))])['suppress'])
         self.assertFalse(self.apply([outcome('API_SUCCESS')])['suppress'])
 
+    def test_new_api_chinese_quota_messages_take_billing_precedence(self):
+        for text in ['该令牌额度已用尽', '用户额度不足']:
+            with self.subTest(text=text):
+                self.assertEqual(circuit.classify(dict(http_status=403, message=text)), 'BILLING')
+                self.assertEqual(circuit.classify(dict(statusCode=403, message=json.dumps(dict(error=dict(message=text)), ensure_ascii=False))), 'BILLING')
+                self.assertEqual(circuit.classify(dict(http_status=403, message='API key is disabled: ' + text)), 'BILLING')
+        self.assertEqual(circuit.classify(dict(http_status=403, message='forbidden')), 'AUTHENTICATION')
+
     def test_bare_403_and_quota_open_after_one_without_changing_endpoint(self):
         for error,failure in [(dict(statusCode=403),'AUTHENTICATION'),
                               (dict(http_status=403,message='user quota is not enough'),'BILLING')]:

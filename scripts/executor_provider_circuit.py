@@ -65,6 +65,7 @@ def classify(error):
         return 'AZURE_DIFFERENT_RESOURCE'
     if ('insufficient account balance' in folded or 'insufficient balance' in folded
             or 'user quota is not enough' in folded
+            or '该令牌额度已用尽' in folded or '用户额度不足' in folded
             or status == 402 or code in ('billing_error', 'insufficient_quota')):
         return 'BILLING'
     if ('api key is disabled' in folded or 'invalid api key' in folded
