@@ -291,13 +291,15 @@ class OrdinaryNoInputRecoveryTests(unittest.TestCase):
         self.two_refusals()
         original_read = cmux_evidence_io.read_bytes
         source = Path(self.args.controller)
-        for which in ['driver', 'version']:
+        for which in ['driver', 'version', 'next_version']:
             with self.subTest(which=which):
                 def changed(path):
                     if which == 'driver' and path == source / 'scripts/cmux_message_journal.py':
                         return original_read(path) + b'\n# changed driver'
                     if which == 'version' and path == source / 'VERSION':
                         return b'0.4.999\n'
+                    if which == 'next_version' and path == source / 'VERSION':
+                        return b'0.4.71\n'
                     return original_read(path)
                 with patch.object(cmux_evidence_io, 'read_bytes', side_effect=changed):
                     with self.assertRaisesRegex(ValueError, 'UNSUPPORTED_ORIGINAL_DRIVER'):

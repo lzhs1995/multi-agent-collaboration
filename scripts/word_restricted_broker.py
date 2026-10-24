@@ -1,4 +1,4 @@
-"""An isolated Word PDF queue. Legacy tickets and release predicates never change."""
+"""An isolated owned Word queue. Legacy tickets and release predicates never change."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,8 @@ from resource_broker import ResourceBusy, group_alive, os_lock
 
 RESOURCE = 'word-zotero'
 FLOOR = 22 * 1024**3
+PDF_SCOPE = 'OWNED_PDF_ONLY'
+REVISION_SCOPE = 'OWNED_REVISION_ROUNDTRIP'
 SERVICE_PINS = {
     'word_pdf_service.py': 'cbdee80cc5ac33565001ca221f7086ce2360292c27fa01329b761406f1e9bc77',
     'word_runtime.py': 'c700ef743e37532cebf3d10a0a78bb410920ddc1ca6280f10aaedf851a7b8458',
@@ -85,12 +87,18 @@ def native_identity():
     caller, proof = snapshot[0]['caller'], snapshot[-1]
     thread = (proof or {}).get('foreground', {}).get('thread_id')
     need(bool(thread), 'AUTHENTICATED_FOREGROUND_THREAD_REQUIRED')
-    return dict(workspace_uuid=caller['workspace_id'], surface_uuid=caller['surface_id'], session_id=thread)
+    return dict(workspace_uuid=caller['workspace_id'], surface_uuid=caller['surface_id'],
+                pane_uuid=caller['pane_id'], session_id=thread)
 
 
 def actor_matches(expected, actual):
-    return all(str(uuid.UUID(expected[k])) == str(uuid.UUID(actual[k]))
-               for k in ('workspace_uuid', 'surface_uuid', 'session_id'))
+    keys = ('workspace_uuid', 'surface_uuid', 'session_id')
+    if 'pane_uuid' in expected:
+        keys += ('pane_uuid',)
+    try:
+        return all(str(uuid.UUID(expected[k])) == str(uuid.UUID(actual[k])) for k in keys)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
 
 
 def locator_record(ref):
@@ -128,16 +136,30 @@ def approved_plan(contract):
     need('核收旧 Word 资源票' in plan_text and '不保存或关闭归属不明的' in plan_text,
          'APPROVED_PRESERVING_WORD_HANDOFF_REQUIRED')
     need(contract['successor']['session_id'] in Path(a['path']).name, 'APPROVED_SUCCESSOR_SESSION_REQUIRED')
+    if contract['scope'] == REVISION_SCOPE:
+        need(all('pane_uuid' in contract[k] for k in ('administrator', 'successor')),
+             'EXACT_REVISION_PANE_REQUIRED')
+        # Reuse an existing complete native manuscript plan. PDF-only approval
+        # cannot acquire write/accept/reject capabilities by changing a field.
+        need(all(text in plan_text for text in ('修订记录稿', '干净 DOCX', 'Word 原生导出 PDF')),
+             'APPROVED_OWNED_REVISION_DELIVERABLES_REQUIRED')
+        job = object_bytes(read_pin(contract['initial_job']))
+        need(job['schema'] == 'owned-initial-word-job-v1'
+             and actor_matches(contract['successor'], job['actor'])
+             and job.get('zotero_refresh') is False,
+             'EXACT_APPROVED_INITIAL_JOB_REQUIRED')
 
 
 def verify_closure(plan, *, running=False):
     """Complete source pins plus the two supported external service members."""
-    need(plan['operation'] == 'OWNED_PDF_ONLY', 'RESTRICTED_PDF_SCOPE_REQUIRED')
+    need(plan['operation'] in (PDF_SCOPE, REVISION_SCOPE), 'RESTRICTED_PDF_SCOPE_REQUIRED')
     need(type(plan['required_free_bytes']) is int and plan['required_free_bytes'] >= FLOOR, 'WORD_DISK_FLOOR_REQUIRED')
     source = Path(plan['controller_source'])
     need(source.is_absolute() and source.resolve(strict=True) == source, 'CONTROLLER_SOURCE_REQUIRED')
     closure = plan['controller_pins']
     required = {'word_restricted_broker.py', 'word_restricted_pdf.py', 'resource_broker.py', 'cmux_workspace_guard.py'}
+    if plan['operation'] == REVISION_SCOPE:
+        required.add('word_restricted_revision.py')
     need(required <= set(closure), 'COMPLETE_CONTROLLER_CLOSURE_REQUIRED')
     # Pin all Python members, not just the driver. The child compiles these
     # bytes directly instead of trusting a potentially unchecked pyc file.
@@ -173,6 +195,60 @@ def verify_closure(plan, *, running=False):
     for path, identity in plan['locks'].items():
         p = Path(path); s = p.lstat()
         need(not p.is_symlink() and stat.S_ISREG(s.st_mode) and [s.st_dev,s.st_ino] == identity, 'ORIGINAL_LOCK_IDENTITY_CHANGED')
+    if plan['operation'] == REVISION_SCOPE:
+        verify_revision_plan(plan, running=running)
+
+
+def verify_revision_plan(plan, *, running=False):
+    """The fixed child receives paths/data only, never a caller's adapter code."""
+    need(set(plan) == {'operation', 'actor', 'controller_source', 'controller_pins', 'service_pins',
+         'validator_pins', 'input', 'output', 'evidence_root', 'required_free_bytes', 'locks',
+         'initial_job', 'revision_outputs', 'stage_id', 'start_word_if_absent', 'directory_identities'},
+         'INITIAL_PLAN_FIELDS_REQUIRED')
+    need('pane_uuid' in plan['actor'], 'EXACT_REVISION_PANE_REQUIRED')
+    job = object_bytes(read_pin(plan['initial_job']))
+    need(set(job) <= {'schema', 'task_id', 'actor', 'run_dir', 'input', 'outputs', 'pdf_output',
+         'native_actions', 'zotero_refresh', 'final_paper_acceptance', 'validation_inputs', 'source_job'},
+         'INITIAL_JOB_FIELDS_REQUIRED')
+    need(job.get('schema') == 'owned-initial-word-job-v1' and bool(job.get('task_id'))
+         and actor_matches(plan['actor'], job['actor']), 'INITIAL_JOB_OWNER_REQUIRED')
+    need(job.get('native_actions') == ['PRESERVE_TRACKED', 'ACCEPT_ALL', 'REJECT_ALL', 'PDF_EXPORT']
+         and job.get('zotero_refresh') is False and job.get('final_paper_acceptance') is False,
+         'INITIAL_REVISION_CAPABILITIES_REQUIRED')
+    need(job['input'] == plan['input'], 'INITIAL_JOB_INPUT_REQUIRED')
+    run = Path(job['run_dir'])
+    need(run.is_absolute() and run.resolve(strict=True) == run and run.is_dir()
+         and run.stat().st_uid == os.getuid(), 'CANONICAL_OWNED_RUN_DIRECTORY_REQUIRED')
+    expected = {label: str(run / 'artifacts' / (label + '.docx'))
+                for label in ('tracked', 'accepted', 'rejected')}
+    need(job.get('outputs') == plan.get('revision_outputs') == expected,
+         'EXACT_INITIAL_REVISION_OUTPUTS_REQUIRED')
+    need(job.get('pdf_output') == plan['output'] == str(run / 'evidence' / 'accepted.pdf')
+         and plan['evidence_root'] == str(run / 'evidence' / 'restricted-native'),
+         'EXACT_INITIAL_REVISION_EVIDENCE_REQUIRED')
+    for path in expected.values():
+        p = Path(path)
+        need(p.parent.resolve(strict=True) == p.parent and not p.is_symlink()
+             and (running or not p.exists()), 'REVISION_OUTPUT_EXISTS_NO_REPLAY')
+    stage_id = plan.get('stage_id')
+    need(isinstance(stage_id, str) and uuid.UUID(stage_id).hex == stage_id,
+         'EXACT_INITIAL_STAGING_ID_REQUIRED')
+    stage = Path.home() / 'Library/Containers/com.microsoft.Word/Data/Documents/wordrev-pdf' / ('revision_' + stage_id)
+    need(stage.parent.resolve(strict=True) == stage.parent and not stage.is_symlink() and (running or not stage.exists()),
+         'REVISION_STAGING_EXISTS_NO_REPLAY')
+    expected_dirs = {str(run), str(run / 'artifacts'), str(run / 'evidence'), str(stage.parent)}
+    need(set(plan['directory_identities']) == expected_dirs, 'COMPLETE_INITIAL_DIRECTORY_IDENTITIES_REQUIRED')
+    for path, identity in plan['directory_identities'].items():
+        p = Path(path); s = p.lstat()
+        need(stat.S_ISDIR(s.st_mode) and not p.is_symlink() and p.resolve(strict=True) == p
+             and [s.st_dev, s.st_ino] == identity, 'INITIAL_DIRECTORY_IDENTITY_CHANGED')
+    need(type(plan.get('start_word_if_absent')) is bool, 'EXPLICIT_WORD_START_POLICY_REQUIRED')
+    need(Path(plan['input']['path']).suffix.lower() == '.docx', 'INITIAL_TRACKED_DOCX_REQUIRED')
+    need(set(job.get('validation_inputs', {})) == {'accepted', 'rejected'}, 'INITIAL_VALIDATION_INPUTS_REQUIRED')
+    for ref in job['validation_inputs'].values():
+        read_pin(ref)
+    if 'source_job' in job:
+        read_pin(job['source_job'])
 
 
 class RestrictedWordBroker:
@@ -229,7 +305,9 @@ class RestrictedWordBroker:
 
     def preview(self, ref):
         contract = object_bytes(read_pin(ref))
-        need(contract['schema'] == 'word-restricted-disposition-v1' and contract['scope'] == 'OWNED_PDF_ONLY', 'RESTRICTED_DISPOSITION_REQUIRED')
+        need((contract['schema'], contract['scope']) in (
+            ('word-restricted-disposition-v1', PDF_SCOPE),
+            ('word-restricted-disposition-v2', REVISION_SCOPE)), 'RESTRICTED_DISPOSITION_REQUIRED')
         approved_plan(contract)
         self.legacy(contract)
         return dict(outcome='RESTRICTED_WORD_READ_ONLY_PLAN', plan_sha256=digest(dict(contract=ref, legacy=contract['original_row_sha256'])),
@@ -248,15 +326,28 @@ class RestrictedWordBroker:
                 self.db.execute('CREATE TABLE IF NOT EXISTS word_restricted_dispositions (id TEXT PRIMARY KEY, original_ticket TEXT UNIQUE NOT NULL, contract TEXT NOT NULL, applied REAL NOT NULL)')
                 self.db.execute('CREATE TABLE IF NOT EXISTS word_restricted_tickets (id TEXT PRIMARY KEY, disposition TEXT NOT NULL, plan TEXT NOT NULL, status TEXT NOT NULL, requested REAL NOT NULL, token TEXT, expires REAL, nonce TEXT, parent_pid INTEGER, pgid INTEGER, invocations INTEGER NOT NULL DEFAULT 0, result TEXT)')
                 self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_restricted_word_writer ON word_restricted_tickets((1)) WHERE status IN ('ACTIVE','PENDING')")
-                need(self.db.execute('SELECT 1 FROM word_restricted_dispositions WHERE original_ticket=?', (contract['original_ticket'],)).fetchone() is None, 'ORIGINAL_DISPOSITION_EXISTS_NO_REPLAY')
                 identity = str(uuid.uuid4())
-                self.db.execute('INSERT INTO word_restricted_dispositions VALUES(?,?,?,?)', (identity, contract['original_ticket'], json.dumps(ref), time.time()))
+                if contract['scope'] == REVISION_SCOPE:
+                    # Each reviewed new job has a separate create-only authority.
+                    # Old PDF dispositions and their UNIQUE(original_ticket)
+                    # rule stay intact; future owned jobs do not require changing
+                    # a frozen disposition or releasing the quarantined ticket.
+                    self.db.execute('CREATE TABLE IF NOT EXISTS word_restricted_revision_dispositions (id TEXT PRIMARY KEY, original_ticket TEXT NOT NULL, job_sha256 TEXT UNIQUE NOT NULL, contract TEXT UNIQUE NOT NULL, applied REAL NOT NULL)')
+                    need(self.db.execute('SELECT 1 FROM word_restricted_revision_dispositions WHERE job_sha256=?',
+                         (contract['initial_job']['sha256'],)).fetchone() is None, 'INITIAL_JOB_AUTHORIZATION_EXISTS_NO_REPLAY')
+                    self.db.execute('INSERT INTO word_restricted_revision_dispositions VALUES(?,?,?,?,?)',
+                         (identity, contract['original_ticket'], contract['initial_job']['sha256'], json.dumps(ref), time.time()))
+                else:
+                    need(self.db.execute('SELECT 1 FROM word_restricted_dispositions WHERE original_ticket=?', (contract['original_ticket'],)).fetchone() is None, 'ORIGINAL_DISPOSITION_EXISTS_NO_REPLAY')
+                    self.db.execute('INSERT INTO word_restricted_dispositions VALUES(?,?,?,?)', (identity, contract['original_ticket'], json.dumps(ref), time.time()))
         return dict(disposition_id=identity, legacy_released=False, generic_consumers_unblocked=False, foreign_saved='UNKNOWN')
 
     def contract(self, disposition):
-        row = self.db.execute('SELECT contract FROM word_restricted_dispositions WHERE id=?', (disposition,)).fetchone()
-        need(row is not None, 'APPLIED_RESTRICTED_DISPOSITION_REQUIRED')
-        value = object_bytes(read_pin(json.loads(row[0])))
+        rows = list(self.db.execute('SELECT contract FROM word_restricted_dispositions WHERE id=?', (disposition,)))
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='word_restricted_revision_dispositions'").fetchone():
+            rows.extend(self.db.execute('SELECT contract FROM word_restricted_revision_dispositions WHERE id=?', (disposition,)))
+        need(len(rows) == 1, 'APPLIED_RESTRICTED_DISPOSITION_REQUIRED')
+        value = object_bytes(read_pin(json.loads(rows[0][0])))
         approved_plan(value); self.legacy(value)
         return value
 
@@ -264,9 +355,13 @@ class RestrictedWordBroker:
         contract = self.contract(disposition)
         plan = object_bytes(read_pin(plan_ref))
         need(actor_matches(contract['successor'], plan['actor']) and actor_matches(plan['actor'], native_identity()), 'ORIGINAL_AUTHORIZED_SUCCESSOR_REQUIRED')
+        self.plan_scope(contract, plan)
         verify_closure(plan)
         with self.transaction():
             self.contract(disposition)
+            if plan['operation'] == REVISION_SCOPE:
+                need(self.db.execute('SELECT 1 FROM word_restricted_tickets WHERE disposition=?',
+                     (disposition,)).fetchone() is None, 'INITIAL_JOB_ALREADY_REQUESTED_NO_REPLAY')
             need(self.db.execute("SELECT 1 FROM word_restricted_tickets WHERE plan=?", (json.dumps(plan_ref),)).fetchone() is None, 'ORIGINAL_PLAN_ALREADY_REQUESTED')
             identity = str(uuid.uuid4())
             self.db.execute("INSERT INTO word_restricted_tickets(id,disposition,plan,status,requested) VALUES(?,?,?,'WAITING',?)", (identity, disposition, json.dumps(plan_ref), time.time()))
@@ -277,11 +372,18 @@ class RestrictedWordBroker:
         need(row is not None, 'RESTRICTED_TICKET_REQUIRED')
         return dict(row)
 
+    @staticmethod
+    def plan_scope(contract, plan):
+        need(plan['operation'] == contract['scope'], 'EXACT_DISPOSITION_OPERATION_REQUIRED')
+        if plan['operation'] == REVISION_SCOPE:
+            need(plan['initial_job'] == contract['initial_job'], 'EXACT_DISPOSITION_INITIAL_JOB_REQUIRED')
+
     def require(self, ticket, token, *, child=False):
         row = self.get(ticket)
         need(row['status'] == 'ACTIVE' and token and row['token'] == token and row['expires'] > time.time(), 'ORIGINAL_RESTRICTED_LEASE_REQUIRED')
         plan = object_bytes(read_pin(json.loads(row['plan'])))
         contract = self.contract(row['disposition'])
+        self.plan_scope(contract, plan)
         verify_closure(plan, running=child)
         need(actor_matches(plan['actor'], contract['successor']), 'AUTHORIZED_SUCCESSOR_CHANGED')
         if child:
@@ -295,13 +397,13 @@ class RestrictedWordBroker:
         row = self.get(ticket)
         plan = object_bytes(read_pin(json.loads(row['plan'])))
         need(actor_matches(plan['actor'], native_identity()), 'ORIGINAL_SUCCESSOR_REQUIRED')
-        self.contract(row['disposition']); verify_closure(plan)
+        contract = self.contract(row['disposition']); self.plan_scope(contract, plan); verify_closure(plan)
         with os_lock(self.root / (hashlib.sha256(RESOURCE.encode()).hexdigest() + '.lock')):
             for path in plan['locks']:
                 with os_lock(path):
                     pass
             with self.transaction():
-                self.contract(row['disposition'])
+                self.plan_scope(self.contract(row['disposition']), plan)
                 verify_closure(plan)
                 need(self.db.execute("SELECT 1 FROM word_restricted_tickets WHERE status IN ('ACTIVE','PENDING')").fetchone() is None, 'RESTRICTED_WORD_WRITER_BUSY')
                 first = self.db.execute("SELECT id FROM word_restricted_tickets WHERE status='WAITING' ORDER BY requested,id LIMIT 1").fetchone()
@@ -318,7 +420,8 @@ class RestrictedWordBroker:
                 need(row['invocations'] == 0 and row['nonce'] is None and row['pgid'] is None, 'ORIGINAL_RUN_EXISTS_NO_REPLAY')
                 nonce = str(uuid.uuid4())
                 self.db.execute('UPDATE word_restricted_tickets SET invocations=1,nonce=?,parent_pid=? WHERE id=?', (nonce, os.getpid(), ticket))
-            argv = [str(Path(sys.executable).resolve()), '-BE', str(Path(plan['controller_source'])/'scripts/word_restricted_pdf.py'),
+            entrypoint = 'word_restricted_revision.py' if plan['operation'] == REVISION_SCOPE else 'word_restricted_pdf.py'
+            argv = [str(Path(sys.executable).resolve()), '-BE', str(Path(plan['controller_source'])/'scripts'/entrypoint),
                     '--root', str(self.root), '--ticket', ticket, '--token', token, '--nonce', nonce]
             try:
                 proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
@@ -334,6 +437,15 @@ class RestrictedWordBroker:
                                and report.get('pdf',{}).get('path') == plan['output'])
                     if success:
                         read_pin(report['pdf'])
+                        if plan['operation'] == REVISION_SCOPE:
+                            success = (report.get('operation') == REVISION_SCOPE
+                                       and report.get('initial_job') == plan['initial_job']
+                                       and set(report.get('revision_outputs', {})) == {'tracked', 'accepted', 'rejected'}
+                                       and report.get('zotero_refreshed') is False)
+                            if success:
+                                for label, ref in report['revision_outputs'].items():
+                                    need(ref['path'] == plan['revision_outputs'][label], 'REVISION_REPORT_PATH_CHANGED')
+                                    read_pin(ref)
                         verify_closure(plan,running=True)
                         self.contract(row['disposition'])
                 status = 'COMPLETE_WITH_FOREIGN_UNKNOWN' if success else 'PENDING'

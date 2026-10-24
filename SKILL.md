@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.69.** Ready messages may be sent directly in either direction,
+**Version: 0.4.70.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -38,6 +38,13 @@ An exactly approved successor Word plan can use the separate
 [restricted PDF lane](references/word-restricted-pdf.md) for a new owned export
 while the expired legacy ticket remains quarantined. A restricted completion
 never claims ordinary Word/Zotero release or grants citation refresh.
+
+An existing complete native manuscript approval can also bind one separate
+[owned initial revision job](references/word-restricted-revision.md). The fixed
+child preserves tracked revisions, accepts/rejects only new owned copies,
+performs save/close/reopen checks and exports the accepted Word PDF. PDF-only
+authority cannot grant this operation; source-contract validation, real native
+use and scientific acceptance remain separate.
 
 Scoped result plans retain their issued complete controller when CURRENT
 changes, reject conflicting output-path aliases and offer `--prepare-body`

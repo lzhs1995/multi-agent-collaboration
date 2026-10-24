@@ -1,3 +1,25 @@
+## 0.4.70
+
+- Add one separately approved owned initial revision job when an expired
+  ordinary Word ticket remains quarantined ACTIVE. Preserve original queue
+  tables and release predicates; share restricted FIFO and ACTIVE/PENDING
+  exclusion with the existing PDF lane.
+- Pin the complete original manuscript approval, job, actor pane/thread,
+  source closure, locks, directories and 22GiB floor. PDF-only approval cannot
+  grant revision writes. One job has one disposition and one request.
+- Use a fixed source-loaded `-BE` child for tracked/save/close/reopen,
+  accept-all/reject-all owned copies and the existing Word PDF export. A
+  missing Word process requires explicit one-launch policy and a fresh native
+  baseline. No arbitrary adapter, macro, Refresh or foreign save/close.
+- Preserve staging, pending state and the consumed invocation after native
+  uncertainty, including PDF timeouts. Do not retry or kill applications.
+- Retain the complete immutable0.4.69 file producer, its original controller
+  range and capabilities. No existing inquiry, callback or old send migrates.
+- Private controls verify queue and source/template boundaries. Successful
+  owned completion still awaits the parent's source-contract comparison;
+  installation, actual execution, all-client adoption and overall task
+  efficiency are separate and are not asserted here.
+
 ## 0.4.69
 
 - Recognize integer `httpStatusCode`/`http_status_code` aliases in Codex errors,
