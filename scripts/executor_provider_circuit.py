@@ -44,20 +44,32 @@ def classify(error):
             error = dict(error, **candidate)
     info = error.get('codex_error_info', error.get('codexErrorInfo'))
     code = error.get('code', error.get('type', ''))
-    status = error.get('http_status', error.get('statusCode'))
+    statuses = set()
+    for alias in ('http_status', 'statusCode', 'http_status_code', 'httpStatusCode'):
+        value = error.get(alias)
+        if type(value) is int:
+            statuses.add(value)
     if isinstance(info, dict):
         for value in info.values():
-            if isinstance(value, dict) and type(value.get('httpStatusCode')) is int:
-                status = value['httpStatusCode']
+            if isinstance(value, dict):
+                for alias in ('httpStatusCode', 'http_status_code'):
+                    status = value.get(alias)
+                    if type(status) is int:
+                        statuses.add(status)
+    # Conflicting structured aliases do not establish an HTTP outcome. A
+    # concrete billing/authentication code or message remains independently
+    # classifiable; an unknown error must not rearm an already-open circuit.
+    status = next(iter(statuses)) if len(statuses) == 1 else None
     folded = text.lower()
     if 'created under a different azure openai resource' in folded:
         return 'AZURE_DIFFERENT_RESOURCE'
-    if ('api key is disabled' in folded or 'invalid api key' in folded
-            or status == 401 or code in ('authentication_error', 'invalid_api_key')):
-        return 'AUTHENTICATION'
     if ('insufficient account balance' in folded or 'insufficient balance' in folded
+            or 'user quota is not enough' in folded
             or status == 402 or code in ('billing_error', 'insufficient_quota')):
         return 'BILLING'
+    if ('api key is disabled' in folded or 'invalid api key' in folded
+            or status in (401, 403) or code in ('authentication_error', 'invalid_api_key')):
+        return 'AUTHENTICATION'
     if (status == 429 or code in ('rate_limit_exceeded', 'rate_limit_error')
             or info in ('usageLimitExceeded', 'rateLimit')
             or 'rate limit exceeded' in folded):

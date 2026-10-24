@@ -94,6 +94,51 @@ class CircuitTests(unittest.TestCase):
         self.assertIsNone(circuit.classify(dict(message='queued input without API result')))
         self.assertTrue(self.apply([outcome(error=dict(message='API key is disabled'))])['suppress'])
 
+    def test_codex_integer_http_aliases_and_quota_precedence(self):
+        cases = [
+            (dict(codex_error_info=dict(http_connection_failed=dict(http_status_code=502))), 'UPSTREAM_502'),
+            (dict(codexErrorInfo=dict(httpConnectionFailed=dict(httpStatusCode=502))), 'UPSTREAM_502'),
+            (dict(http_status_code=503), 'UPSTREAM_503'),
+            (dict(statusCode=403), 'AUTHENTICATION'),
+            (dict(http_status=401), 'AUTHENTICATION'),
+            (dict(httpStatusCode=402), 'BILLING'),
+            (dict(http_status=403,message='user quota is not enough'), 'BILLING'),
+            (dict(message='user quota is not enough'), 'BILLING'),
+            (dict(message='HTTP 502 quoted; no structured status'), None),
+            (dict(http_status_code='502'), None),
+            (dict(httpStatusCode=True), None),
+            (dict(http_status=401,http_status_code=502), None),
+            (dict(codex_error_info=dict(http_connection_failed=dict(httpStatusCode=502,http_status_code=403))), None),
+            (dict(http_status_code=429), 'RATE_LIMIT'),
+            (dict(message=json.dumps(dict(error=dict(http_status_code=403,message='forbidden')))), 'AUTHENTICATION'),
+            (dict(http_status=403,message='API key is disabled: user quota is not enough'), 'BILLING')]
+        for error,expected in cases:
+            with self.subTest(error=error):
+                self.assertEqual(circuit.classify(error),expected)
+
+    def test_new_502_alias_opens_at_three_distinct_failures_and_real_success_rearms(self):
+        error=dict(codex_error_info=dict(http_connection_failed=dict(http_status_code=502)))
+        rows=[outcome(error=error) for _ in range(3)]
+        self.assertFalse(self.apply(rows[:2])['suppress'])
+        result=self.apply(rows)
+        self.assertTrue(result['suppress'])
+        self.assertEqual(result['failure_class'],'UPSTREAM_502')
+        self.assertIsNotNone(result['operator_status'])
+        self.assertIsNone(self.apply(rows)['operator_status'])
+        self.assertTrue(self.apply([outcome(error=dict(message='unknown'))])['suppress'])
+        self.assertFalse(self.apply([outcome('API_SUCCESS')])['suppress'])
+
+    def test_bare_403_and_quota_open_after_one_without_changing_endpoint(self):
+        for error,failure in [(dict(statusCode=403),'AUTHENTICATION'),
+                              (dict(http_status=403,message='user quota is not enough'),'BILLING')]:
+            with self.subTest(error=error):
+                self.state={}
+                result=self.apply([outcome(error=error)])
+                self.assertTrue(result['suppress'])
+                self.assertEqual(result['distinct_failures'],1)
+                self.assertEqual(result['failure_class'],failure)
+                self.assertEqual(self.state['provider_circuit']['endpoint'],circuit.endpoint(self.bound))
+
 
 class NativeObservationTests(unittest.TestCase):
     def setUp(self):

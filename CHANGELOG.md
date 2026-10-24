@@ -1,3 +1,23 @@
+## 0.4.69
+
+- Recognize integer `httpStatusCode`/`http_status_code` aliases in Codex errors,
+  including nested provider JSON. Explicit quota/balance text remains BILLING;
+  bare403 is AUTHENTICATION. Conflicting status aliases do not infer an HTTP
+  outcome. Preserve original endpoint, failure thresholds and real-success rearm.
+- Add read-only ordinary-message recovery preview and one explicit apply after
+  two complete proven NO_INPUT attempts. Bind the full-history SHA, original
+  native runtime/transcript, payload/body, existing locks and complete original
+  driver. Reserve the one recovery budget before a fresh third attempt; crashes,
+  further refusals and UNKNOWN never restore it.
+- Reject duplicate/nonstandard JSON, contradictory input evidence, changed
+  histories/endpoints/controllers and missing original runtime evidence. Keep
+  the reviewed0.4.58-0.4.69 original journal driver range explicit.
+- Preserve the complete immutable0.4.68 file producer, original issuer range
+  and capabilities. No old message, inquiry, callback or registration migrates.
+- Offline native-RPC controls cover one same-thread steer/start, durable fresh
+  fences and read-only reconciliation after uncertain input. They do not prove
+  installation, active-client adoption or overall task efficiency.
+
 ## 0.4.68
 
 - Persist the exact idle request marker before creating its request file and
