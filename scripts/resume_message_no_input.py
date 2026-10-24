@@ -26,7 +26,7 @@ KEYS = ('workspace_uuid', 'caller_surface_uuid', 'target_surface_uuid', 'target_
 # These complete releases share the reviewed protected ordinary-message driver.
 # Older/future driver formats require a separate compatibility review.
 DRIVER_SHA256 = '1157b5797077be2acd70bfa09f8fe95f8390254199127e5ce580c492462514db'
-SUPPORTED_DRIVERS = {'0.4.%d' % version: DRIVER_SHA256 for version in range(58, 70)}
+SUPPORTED_DRIVERS = {'0.4.%d' % version: DRIVER_SHA256 for version in range(58, 71)}
 
 
 def sha(raw):
