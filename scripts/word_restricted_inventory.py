@@ -90,6 +90,14 @@ end run
 '''
 
 
+def _unsaved_bare_reference(reference, name, saved):
+    # Word恢复稿可将显示名称当作posix full name返回；该值始终不当作文件路径。
+    return (saved == 'false' and reference == name and reference not in ('.', '..')
+            and 0 < len(reference) <= 4096
+            and not any(c in reference for c in ('/', '\\', ':'))
+            and all(ord(c) >= 32 and not 127 <= ord(c) <= 159 for c in reference))
+
+
 def parse(text):
     from word_restricted_broker import need
     lines = text.strip().splitlines()
@@ -99,11 +107,18 @@ def parse(text):
     counts = [int(v) for v in header[1:]]
     need(all(0 <= n <= 200 for n in counts), 'BOUNDED_NATIVE_INVENTORY_REQUIRED')
     result = dict(documents=[], windows=[], axapps=[], axwindows=[], active=[])
+    unresolved = []
     for line in lines[1:-1]:
         f = line.split('\t')
         if f[0] == 'DOC':
             need(len(f) == 5 and f[1].isdigit() and f[2] and f[3] and f[4] in ('true','false','UNKNOWN'), 'NATIVE_DOCUMENT_METADATA_REQUIRED')
-            need(f[3] == 'MISSING' or f[3].startswith('/'), 'ABSOLUTE_OR_MISSING_DOCUMENT_REFERENCE_REQUIRED')
+            if f[3] != 'MISSING' and not f[3].startswith('/'):
+                need(_unsaved_bare_reference(f[3], f[2], f[4]),
+                     'ABSOLUTE_OR_MISSING_DOCUMENT_REFERENCE_REQUIRED')
+                # 原始DOC行保持不变；显式记录未解析、未知归属和不可写。
+                unresolved.append(dict(document_index=f[1], raw_reference=f[3],
+                    reference_status='UNRESOLVED_UNSAVED_BARE_NAME',
+                    filesystem_path=None, ownership='UNKNOWN', writable=False))
             result['documents'].append(f[1:])
         elif f[0] == 'WIN':
             need(len(f) == 6 and f[1].isdigit() and f[4] in ('true','false'), 'NATIVE_WINDOW_METADATA_REQUIRED')
@@ -126,4 +141,13 @@ def parse(text):
          and len(result['axapps']) == 2, 'COMPLETE_NATIVE_WINDOW_SCOPE_REQUIRED')
     for app, count in result['axapps']:
         need(sum(x[0] == app for x in result['axwindows']) == int(count), 'NATIVE_AX_COUNT_MISMATCH')
+    for entry in unresolved:
+        reference = entry['raw_reference']
+        # 只接纳能唯一对应同一原生文档和窗口的显示引用；歧义继续拒绝。
+        need(sum(d[2] == reference for d in result['documents']) == 1
+             and sum(w[1] == reference for w in result['windows']) == 1,
+             'UNRESOLVED_NATIVE_REFERENCE_NOT_UNIQUE')
+    if unresolved:
+        # 生产消费者比较完整before/after；原始行和此分类都参加相等性检查。
+        result['unresolved_document_references'] = unresolved
     return result

@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.72.** Ready messages may be sent directly in either direction,
+**Version: 0.4.73.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -25,6 +25,13 @@ a separate read-only preview and exact-SHA original-actor closeout. It preserves
 the consumed invocation and original failure, never replays the run or releases
 the quarantined legacy ticket. A subsequent job needs separate approval.
 See [0.4.72](references/release-0.4.72.md).
+
+Word inventory retains a unique unsaved bare document name as an unresolved
+display reference, with no filesystem path, unknown ownership and no write
+permission. Its original document/window/active metadata remains in the complete
+before/after comparison. A proven original 0.4.72 read-only PRE AppleEvent
+timeout can close only its original restricted ticket through the exact-SHA
+original-actor recovery path. See [0.4.73](references/release-0.4.73.md).
 
 Continuity can diagnose a pinned same-turn non-HTTP Codex terminal error that
 explicitly reports an Azure item/resource mismatch. It preserves the original

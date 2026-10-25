@@ -6,6 +6,10 @@ fresh grant. An exactly approved original successor may use
 `OWNED_REVISION_ROUNDTRIP` for a separately pinned initial manuscript job.
 This is a distinct capability from the existing `OWNED_PDF_ONLY` lane.
 
+The original 0.4.72 read-only PRE timeout has a separate exact-SHA closeout.
+Unsaved bare document references remain unresolved, with unknown ownership
+and no write permission. See [0.4.73](release-0.4.73.md).
+
 The `word-restricted-disposition-v2` contract pins the original native user
 approval, its complete preceding plan, the quarantined ticket/resource
 preimages, both original process-group drain receipts and the accepted old
