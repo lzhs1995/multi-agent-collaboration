@@ -86,13 +86,19 @@ def plan(work_order, work_order_sha256, report, report_sha256):
     report_raw.decode('utf-8', errors='strict')
     if not isinstance(order, dict) or not isinstance(order.get('schema'), str):
         raise ValueError('issued scoped work order required')
+    # A domain-specific work-order schema can explicitly declare the ordinary
+    # result route. Keep the legacy scoped-schema fallback and reject actual
+    # formal task/callback bindings regardless of that declaration.
     if (order.get('completion_callback') or order.get('formal_harness_receipt') is True
-            or order.get('task_id') or 'scoped' not in order['schema']):
+            or order.get('completion_nonce') or order.get('callback_nonce')
+            or order.get('task_id')
+            or ('scoped' not in order['schema']
+                and order.get('completion_channel') != 'ORDINARY_NOTICE')):
         raise ValueError('formal harness task requires its original callback route')
     outputs = order.get('outputs', {})
     if not isinstance(outputs, dict):
         raise ValueError('issued output paths must be an object')
-    declared = _output_path(order, outputs, 'final', ('final_output', 'report', 'final_report_path'),
+    declared = _output_path(order, outputs, 'final', ('final_output', 'final_path', 'report', 'final_report_path'),
                             ('final_report_path',))
     marker = order.get('done_marker')
     owner = order.get('supervisor_surface_uuid')

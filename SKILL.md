@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.70.** Ready messages may be sent directly in either direction,
+**Version: 0.4.71.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -45,6 +45,11 @@ child preserves tracked revisions, accepts/rejects only new owned copies,
 performs save/close/reopen checks and exports the accepted Word PDF. PDF-only
 authority cannot grant this operation; source-contract validation, real native
 use and scientific acceptance remain separate.
+
+Domain work orders that explicitly declare `completion_channel=ORDINARY_NOTICE`
+can plan their exact result notice without renaming their schema. Original
+controller and output pins remain required; formal task IDs, callbacks or nonces
+retain their original callback route. See [0.4.71](references/release-0.4.71.md).
 
 Scoped result plans retain their issued complete controller when CURRENT
 changes, reject conflicting output-path aliases and offer `--prepare-body`

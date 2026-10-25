@@ -1,3 +1,23 @@
+## 0.4.71
+
+- Accept domain work-order schemas that explicitly declare the ordinary result
+  notice route. Preserve exact report/output/controller pins and the legacy
+  scoped-schema default; reject formal task, callback and nonce bindings.
+- Cover explicit domain acceptance, absent/invalid channels, disguised formal
+  bindings and legacy defaults through the actual zero-input CLI. An original
+  domain work order now plans without rewriting its order, report or controller.
+- Retain the complete immutable0.4.70 file producer, its original controller
+  range and capabilities. Existing notices, episodes and reservations retain
+  their original controllers and no-resend boundaries.
+- Register the unchanged protected ordinary-message driver for the complete
+  0.4.71 controller. Exact driver hashes still apply; unreviewed future versions
+  remain refused before any recovery input.
+- Accept the issued outputs.final_path alias while retaining conflicting-alias,
+  separate-path and formal callback checks; orders and reports stay unchanged.
+- Ignore consumed historical continuing replies in supervisor inbox fallback
+  discovery. Current and open replies keep their original authentication and
+  waiting contract; old controllers and pending input are not changed.
+
 ## 0.4.70
 
 - Add one separately approved owned initial revision job when an expired

@@ -1,4 +1,14 @@
-# Current release: 0.4.69
+# Current release: 0.4.71
+
+Domain work orders with an explicit `completion_channel=ORDINARY_NOTICE` now
+use the pinned scoped result planner without renaming their schema. Legacy
+scoped orders keep their default route; formal task, callback and nonce bindings
+remain refused. Planning sends no input and retains the issued complete
+controller. See [0.4.71](references/release-0.4.71.md).
+
+The [owned initial revision lane](references/word-restricted-revision.md)
+supports a separately approved tracked/accepted/rejected Word round trip and PDF
+while preserving an expired legacy ticket's quarantine.
 
 Recognize structured Codex HTTP status aliases and explicit billing/authentication
 failures without changing provider configuration. A separately reviewed ordinary

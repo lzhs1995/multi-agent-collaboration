@@ -265,6 +265,96 @@ class ScopedCompletionTests(unittest.TestCase):
         self.assertFalse(result['formal_callback'])
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
+    def test_explicit_ordinary_domain_schema_keeps_pins_and_original_controller(self):
+        self.order.update(schema='spatial43-v8g-increment-review-v22',
+                          work_id='spatial43-v8g-increment-review-20261025-c4546-v22')
+        self.write_order()
+        before = {p: p.read_bytes() for p in (self.order_path, self.report_path)}
+        with patch.object(scoped.subprocess, 'run', side_effect=AssertionError('planning must not submit')):
+            code, result = self.run_cli()
+        self.assertEqual(code, 0, result)
+        body = json.loads(result['body'])
+        self.assertEqual(body['report']['sha256'], hashlib.sha256(before[self.report_path]).hexdigest())
+        self.assertEqual(body['work_order']['sha256'], hashlib.sha256(before[self.order_path]).hexdigest())
+        self.assertEqual(result['target_surface_uuid'], self.order['supervisor_surface_uuid'])
+        self.assertEqual(result['controller_source'], str(self.controller))
+        self.assertEqual(result['submit_argv'][2], str(self.controller / 'scripts/cmux_bridge.py'))
+        self.assertEqual(result['input_operations'], 0)
+        self.assertFalse(result['body_persisted'])
+        self.assertFalse(result['formal_callback'])
+        self.assertFalse(result['native_receipt'])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_issued_final_path_alias_plans_without_rewriting_order(self):
+        self.order['outputs']['final_path'] = self.order['outputs'].pop('final_output')
+        self.write_order()
+        before = {p: p.read_bytes() for p in (self.order_path, self.report_path)}
+        with patch.object(scoped.subprocess, 'run', side_effect=AssertionError('planning must not submit')):
+            code, result = self.run_cli()
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['input_operations'], 0)
+        self.assertEqual(result['controller_source'], str(self.controller))
+        self.assertEqual(json.loads(result['body'])['report']['sha256'],
+                         hashlib.sha256(before[self.report_path]).hexdigest())
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_final_path_retains_alias_conflict_and_stage_separation_checks(self):
+        original = dict(self.order['outputs'])
+        cases = [
+            (dict(original, final_path=str(self.root / 'other-result.json')),
+             'final output path aliases disagree'),
+            (dict(final_path=str(self.report_path), acceptance=original['acceptance'],
+                  progress_path=str(self.report_path)), 'separate absolute paths'),
+        ]
+        for outputs, reason in cases:
+            with self.subTest(reason=reason):
+                self.order['outputs'] = outputs
+                self.write_order()
+                before = {p: p.read_bytes() for p in (self.order_path, self.report_path)}
+                code, result = self.run_cli()
+                self.assertEqual(code, 2, result)
+                self.assertIn(reason, result['error'])
+                self.assertEqual(result['input_operations'], 0)
+                self.assertNotIn('submit_argv', result)
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_domain_schema_requires_explicit_ordinary_channel(self):
+        original = dict(self.order, schema='spatial43-v8g-increment-review-v22')
+        for channel in (None, 'FORMAL_CALLBACK', 'ordinary_notice', True, {}):
+            with self.subTest(channel=channel):
+                self.order = dict(original)
+                if channel is None:
+                    self.order.pop('completion_channel')
+                else:
+                    self.order['completion_channel'] = channel
+                self.write_order()
+                code, result = self.run_cli()
+                self.assertEqual(code, 2)
+                self.assertEqual(result['input_operations'], 0)
+                self.assertNotIn('submit_argv', result)
+
+    def test_explicit_domain_notice_cannot_disguise_formal_completion(self):
+        original = dict(self.order, schema='spatial43-v8g-increment-review-v22')
+        for binding in (dict(task_id='formal-task'), dict(formal_harness_receipt=True),
+                        dict(completion_callback='DONE|formal|original'),
+                        dict(completion_nonce='original-completion-nonce'),
+                        dict(callback_nonce='original-callback-nonce')):
+            with self.subTest(binding=binding):
+                self.order = dict(original, **binding)
+                self.write_order()
+                code, result = self.run_cli()
+                self.assertEqual(code, 2)
+                self.assertEqual(result['input_operations'], 0)
+                self.assertNotIn('submit_argv', result)
+
+    def test_legacy_scoped_schema_without_explicit_channel_still_plans(self):
+        self.order.pop('completion_channel')
+        self.write_order()
+        code, result = self.run_cli()
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['declared_completion_channel'], 'ORDINARY_NOTICE')
+        self.assertEqual(result['input_operations'], 0)
+
     def test_submit_contract_preserves_both_streams_and_original_reconcile_text(self):
         code, result = self.run_cli()
         self.assertEqual(code, 0)
