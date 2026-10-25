@@ -18,3 +18,9 @@ again. See [the completion contract](scoped-completion-and-reply-status.md).
 The complete immutable0.4.70 file producer retains only the controllers and
 capabilities it originally supported. This adds no registration, consumption,
 reservation-release or resource authority to an existing episode.
+
+The protected ordinary-message driver is byte-identical to the reviewed
+0.4.70 driver. Explicit zero-input recovery therefore also recognizes the
+complete 0.4.71 controller with that exact driver hash. Unreviewed versions,
+including 0.4.72, still refuse before input. History, original-controller and
+single-use recovery checks remain unchanged.

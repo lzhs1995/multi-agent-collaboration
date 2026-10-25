@@ -9,6 +9,9 @@
 - Retain the complete immutable0.4.70 file producer, its original controller
   range and capabilities. Existing notices, episodes and reservations retain
   their original controllers and no-resend boundaries.
+- Register the unchanged protected ordinary-message driver for the complete
+  0.4.71 controller. Exact driver hashes still apply; unreviewed future versions
+  remain refused before any recovery input.
 
 ## 0.4.70
 
