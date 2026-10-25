@@ -13,6 +13,7 @@ import sys
 import time
 import uuid
 
+import cmux_workspace_guard as workspace_guard
 import word_restricted_broker as protocol
 from resource_broker import ResourceBusy, group_alive, os_lock
 
@@ -60,6 +61,39 @@ def directory_fact(path):
     protocol.need(stat.S_ISDIR(s.st_mode) and not path.is_symlink() and path.resolve(strict=True) == path,
                   'CANONICAL_ORIGINAL_EVIDENCE_REQUIRED')
     return [s.st_dev, s.st_ino, s.st_mtime_ns, s.st_ctime_ns]
+
+
+def resumed_identity(original, expected=None):
+    """Authenticate a resumed original thread without rewriting its old actor."""
+    identity, tree, _env, proof = workspace_guard.caller_snapshot()
+    caller = identity['caller']
+    thread = (proof or {}).get('foreground', {}).get('thread_id')
+    protocol.need(bool(thread), 'AUTHENTICATED_FOREGROUND_THREAD_REQUIRED')
+    current = dict(workspace_uuid=caller['workspace_id'], surface_uuid=caller['surface_id'],
+                   pane_uuid=caller['pane_id'], session_id=thread)
+    for key in ('workspace_uuid', 'pane_uuid', 'session_id'):
+        protocol.need(str(uuid.UUID(original[key])) == str(uuid.UUID(current[key])),
+                      'SAME_ORIGINAL_THREAD_WORKSPACE_PANE_REQUIRED')
+    original_surface = str(uuid.UUID(original['surface_uuid']))
+    current_surface = str(uuid.UUID(current['surface_uuid']))
+    protocol.need(current_surface != original_surface, 'DISTINCT_RESUMED_SURFACE_REQUIRED')
+    rows = []
+    protocol.need(type(tree.get('windows')) is list and bool(tree['windows']),
+                  'COMPLETE_RESUMED_TREE_REQUIRED')
+    for window in tree['windows']:
+        for workspace in window['workspaces']:
+            for pane in workspace['panes']:
+                for surface in pane['surfaces']:
+                    rows.append((str(uuid.UUID(surface['id'])), str(uuid.UUID(workspace['id'])),
+                                 str(uuid.UUID(pane['id']))))
+    protocol.need(not any(row[0] == original_surface for row in rows),
+                  'ORIGINAL_SURFACE_STILL_PRESENT')
+    protocol.need([row for row in rows if row[0] == current_surface] ==
+                  [(current_surface, str(uuid.UUID(current['workspace_uuid'])),
+                    str(uuid.UUID(current['pane_uuid'])))], 'EXACT_RESUMED_SURFACE_REQUIRED')
+    if expected is not None:
+        protocol.need(protocol.actor_matches(expected, current), 'RESUMED_ACTOR_CHANGED')
+    return current
 
 
 class PreinputRecovery:
@@ -144,17 +178,23 @@ class PreinputRecovery:
                         locks=plan['locks'], queue_lock=dict(path=str(queue_lock), identity=[s.st_dev, s.st_ino]))
         return snapshot
 
-    def preview(self, ticket):
+    def preview(self, ticket, *, resume_same_session=False):
         facts = self.facts(ticket)
+        if resume_same_session:
+            facts['resumed_actor'] = resumed_identity(facts['actor'])
         return dict(outcome='OWNED_PREINPUT_READ_ONLY_PLAN', plan_sha256=protocol.digest(facts),
                     facts=facts, input_operations=0, queue_changes=0, original_run_replay=False,
                     new_run_authorized=False, legacy_released=False, ordinary_word_release=False)
 
-    def apply(self, ticket, plan_sha256):
-        first = self.preview(ticket)
+    def apply(self, ticket, plan_sha256, *, resume_same_session=False):
+        first = self.preview(ticket, resume_same_session=resume_same_session)
         protocol.need(first['plan_sha256'] == plan_sha256, 'EXACT_PREINPUT_PLAN_REQUIRED')
         actor = first['facts']['actor']
-        protocol.need(protocol.actor_matches(actor, protocol.native_identity()), 'ORIGINAL_ACTOR_APPLY_REQUIRED')
+        resumed_actor = first['facts'].get('resumed_actor')
+        if resumed_actor is not None:
+            resumed_identity(actor, resumed_actor)
+        else:
+            protocol.need(protocol.actor_matches(actor, protocol.native_identity()), 'ORIGINAL_ACTOR_APPLY_REQUIRED')
         queue_lock = self.broker.root / (hashlib.sha256(protocol.RESOURCE.encode()).hexdigest() + '.lock')
         with ExitStack() as stack:
             def held_lock(path, expected):
@@ -166,9 +206,12 @@ class PreinputRecovery:
             held_lock(queue_lock, first['facts']['queue_lock']['identity'])
             for path in sorted(first['facts']['locks']):
                 held_lock(path, first['facts']['locks'][path])
-            fresh = self.preview(ticket)
+            fresh = self.preview(ticket, resume_same_session=resume_same_session)
             protocol.need(fresh['plan_sha256'] == plan_sha256, 'PREINPUT_PREIMAGE_CHANGED')
-            protocol.need(protocol.actor_matches(actor, protocol.native_identity()), 'ORIGINAL_ACTOR_APPLY_REQUIRED')
+            if resumed_actor is not None:
+                resumed_identity(actor, resumed_actor)
+            else:
+                protocol.need(protocol.actor_matches(actor, protocol.native_identity()), 'ORIGINAL_ACTOR_APPLY_REQUIRED')
             row = fresh['facts']['ticket']
             closeout = dict(schema='owned-preinput-terminal-v1', status=TERMINAL,
                             closed_epoch=time.time(), actor=actor, approved_plan_sha256=plan_sha256,
@@ -176,6 +219,9 @@ class PreinputRecovery:
                             original_invocations_preserved=True, original_run_replay=False,
                             new_run_authorized=False, legacy_released=False, ordinary_word_release=False,
                             application_inputs=0, final_paper_acceptance=False)
+            if resumed_actor is not None:
+                closeout['resumed_actor'] = resumed_actor
+                closeout['original_actor_preserved'] = True
             saved = dict(original_result=row['result'], preinput_closeout=closeout)
             with self.broker.transaction():
                 protocol.need(self.broker.get(ticket) == row, 'PREINPUT_TICKET_COMPARE_AND_SWAP_FAILED')
@@ -206,15 +252,20 @@ def main(argv=None):
     parser.add_argument('--root')
     parser.add_argument('--ticket', required=True)
     parser.add_argument('--plan-sha256')
+    parser.add_argument('--resume-same-session', action='store_true',
+                        help='Bind a fresh surface of the same original native thread, workspace and pane')
     args = parser.parse_args(argv)
     recovery = None
     try:
         protocol.need(sys.flags.ignore_environment and sys.dont_write_bytecode, 'PREINPUT_CLI_REQUIRES_BE')
         recovery = PreinputRecovery(args.root, readonly=args.command == 'preview')
-        result = recovery.preview(args.ticket) if args.command == 'preview' else recovery.apply(args.ticket, args.plan_sha256)
+        result = (recovery.preview(args.ticket, resume_same_session=args.resume_same_session)
+                  if args.command == 'preview' else recovery.apply(
+                      args.ticket, args.plan_sha256, resume_same_session=args.resume_same_session))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    except (ResourceBusy, ValueError, TypeError, KeyError, OSError, sqlite3.Error) as exc:
+    except (ResourceBusy, ValueError, TypeError, KeyError, OSError, sqlite3.Error,
+            workspace_guard.WorkspaceScopeError) as exc:
         print(json.dumps(dict(outcome='OWNED_PREINPUT_REFUSED', reason=str(exc), input_operations=0,
                               original_run_replay=False, new_run_authorized=False, legacy_released=False), ensure_ascii=False))
         return 2

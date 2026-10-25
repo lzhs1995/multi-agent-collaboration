@@ -52,6 +52,18 @@ class PreinputRecoveryTests(unittest.TestCase):
     def preview(self):
         return self.r.preview(self.ticket['id'])
 
+    def resumed_snapshot(self, actor=None, *, old_present=False):
+        actor = actor or {**self.actor, 'surface_uuid': str(uuid.uuid4())}
+        caller = dict(workspace_id=actor['workspace_uuid'], pane_id=actor['pane_uuid'],
+                      surface_id=actor['surface_uuid'])
+        surfaces = [dict(id=actor['surface_uuid'])]
+        if old_present:
+            surfaces.append(dict(id=self.actor['surface_uuid']))
+        tree = dict(windows=[dict(workspaces=[dict(id=actor['workspace_uuid'],
+                    panes=[dict(id=actor['pane_uuid'], surfaces=surfaces)])])])
+        proof = dict(foreground=dict(thread_id=actor['session_id']))
+        return dict(caller=caller), tree, {}, proof
+
     def test_preview_is_readonly_and_binds_complete_original_failure(self):
         before = list(self.broker.db.iterdump())
         value = self.preview()
@@ -129,6 +141,90 @@ class PreinputRecoveryTests(unittest.TestCase):
         with patch.object(protocol, 'native_identity', side_effect=[self.actor, {**self.actor, 'session_id': str(uuid.uuid4())}]):
             with self.assertRaisesRegex(ResourceBusy, 'ORIGINAL_ACTOR_APPLY'):
                 self.r.apply(self.ticket['id'], value['plan_sha256'])
+        self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+    def test_resumed_original_thread_cli_closes_without_rewriting_original_actor(self):
+        snapshot = self.resumed_snapshot()
+        argv = ['--root', str(self.broker.root), '--ticket', self.ticket['id'], '--resume-same-session']
+        with patch.object(recovery.workspace_guard, 'caller_snapshot', return_value=snapshot):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(recovery.main(['preview', *argv]), 0)
+            preview = json.loads(output.getvalue())
+            self.assertEqual(preview['facts']['actor'], self.actor)
+            self.assertNotEqual(preview['facts']['resumed_actor']['surface_uuid'], self.actor['surface_uuid'])
+            self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(recovery.main(['apply', *argv, '--plan-sha256', preview['plan_sha256']]), 0)
+        closed = json.loads(output.getvalue())['closeout']
+        self.assertEqual(closed['actor'], self.actor)
+        self.assertEqual(closed['resumed_actor'], preview['facts']['resumed_actor'])
+        after = self.broker.get(self.ticket['id'])
+        for key in self.before.keys() - {'status', 'result'}:
+            self.assertEqual(after[key], self.before[key], key)
+        self.assertEqual(json.loads(after['result'])['original_result'], self.before['result'])
+        self.assertEqual(self.f.f.legacy.get(self.f.f.original['id']), self.f.f.original)
+        self.assertFalse(closed['legacy_released'])
+        self.assertFalse(closed['new_run_authorized'])
+
+    def test_resumed_preview_cannot_use_another_thread_workspace_or_pane(self):
+        for key in ('workspace_uuid', 'pane_uuid', 'session_id'):
+            actor = {**self.actor, 'surface_uuid': str(uuid.uuid4()), key: str(uuid.uuid4())}
+            with self.subTest(key=key), patch.object(recovery.workspace_guard, 'caller_snapshot',
+                    return_value=self.resumed_snapshot(actor)), self.assertRaisesRegex(
+                        ResourceBusy, 'SAME_ORIGINAL_THREAD_WORKSPACE_PANE_REQUIRED'):
+                self.r.preview(self.ticket['id'], resume_same_session=True)
+        self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+    def test_old_surface_or_ambiguous_or_incomplete_current_tree_refuses_resumption(self):
+        old = self.resumed_snapshot(old_present=True)
+        duplicate = self.resumed_snapshot()
+        surfaces = duplicate[1]['windows'][0]['workspaces'][0]['panes'][0]['surfaces']
+        surfaces.append(copy.deepcopy(surfaces[0]))
+        missing = self.resumed_snapshot()
+        missing[1]['windows'] = []
+        unchanged = self.resumed_snapshot(self.actor)
+        for snapshot in (old, duplicate, missing, unchanged):
+            with self.subTest(snapshot=snapshot), patch.object(recovery.workspace_guard,
+                    'caller_snapshot', return_value=snapshot), self.assertRaises(ResourceBusy):
+                self.r.preview(self.ticket['id'], resume_same_session=True)
+        self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+    def test_resumed_hash_and_surface_switch_under_original_locks_are_refused(self):
+        snapshot = self.resumed_snapshot()
+        with patch.object(recovery.workspace_guard, 'caller_snapshot', return_value=snapshot):
+            preview = self.r.preview(self.ticket['id'], resume_same_session=True)
+            with self.assertRaisesRegex(ResourceBusy, 'EXACT_PREINPUT_PLAN'):
+                self.r.apply(self.ticket['id'], self.preview()['plan_sha256'], resume_same_session=True)
+        with patch.object(recovery.workspace_guard, 'caller_snapshot', side_effect=[
+                snapshot, snapshot, self.resumed_snapshot()]):
+            with self.assertRaisesRegex(ResourceBusy, 'PREINPUT_PREIMAGE_CHANGED'):
+                self.r.apply(self.ticket['id'], preview['plan_sha256'], resume_same_session=True)
+        self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+    def test_original_surface_reappearing_under_locks_keeps_pending(self):
+        snapshot = self.resumed_snapshot()
+        with patch.object(recovery.workspace_guard, 'caller_snapshot', return_value=snapshot):
+            preview = self.r.preview(self.ticket['id'], resume_same_session=True)
+        reappeared = copy.deepcopy(snapshot)
+        reappeared[1]['windows'][0]['workspaces'][0]['panes'][0]['surfaces'].append(
+            dict(id=self.actor['surface_uuid']))
+        with patch.object(recovery.workspace_guard, 'caller_snapshot', side_effect=[
+                snapshot, snapshot, reappeared]):
+            with self.assertRaisesRegex(ResourceBusy, 'ORIGINAL_SURFACE_STILL_PRESENT'):
+                self.r.apply(self.ticket['id'], preview['plan_sha256'], resume_same_session=True)
+        self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+    def test_unavailable_resumed_native_proof_is_structured_zero_input_refusal(self):
+        output = io.StringIO()
+        with patch.object(recovery.workspace_guard, 'caller_snapshot', side_effect=
+                recovery.workspace_guard.WorkspaceScopeError('unavailable original proof')), redirect_stdout(output):
+            self.assertEqual(recovery.main(['preview', '--root', str(self.broker.root),
+                '--ticket', self.ticket['id'], '--resume-same-session']), 2)
+        value = json.loads(output.getvalue())
+        self.assertEqual(value['outcome'], 'OWNED_PREINPUT_REFUSED')
+        self.assertEqual(value['input_operations'], 0)
         self.assertEqual(self.broker.get(self.ticket['id']), self.before)
 
     def test_any_application_intent_or_output_or_staging_preserves_pending(self):

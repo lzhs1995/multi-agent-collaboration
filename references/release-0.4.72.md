@@ -39,6 +39,18 @@ the original result and ticket; nonce, token, invocation and failure files remai
 A stale SHA, another actor, existing input, uncertain child or changed preimage
 refuses without authorizing another run.
 
+If that same native thread has resumed on a new surface, its owner can add
+`--resume-same-session` to both preview and apply. The fresh authenticated
+foreground thread, workspace and pane must equal the immutable original actor;
+the old surface must be absent from the complete live tree and the current
+surface must be unique there. Preview binds the separate resumed actor into
+its exact plan SHA. Apply repeats those checks under the original locks and
+preserves the original actor in the contract, ticket and saved result. The
+closeout records the resumed actor separately. An old surface still present,
+another thread/pane/workspace, a changed surface or unavailable native proof
+keeps the original ticket PENDING. This grants only the same pre-input failure
+closeout; any later new job requires its own current actor and approved scope.
+
 This is terminal closeout of one proven pre-input failure. It grants no replay,
 refund, application kill, foreign save/close, citation Refresh, legacy resource
 release or manuscript acceptance. A separately approved new job still needs its
