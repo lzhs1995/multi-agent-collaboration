@@ -9,8 +9,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -96,17 +98,81 @@ def bootstrap(args):
     return protocol,broker,plan_ref,plan
 
 
-def app_bindings():
+APPLICATION_BUNDLES = {
+    'Microsoft Word': ('/Applications/Microsoft Word.app', 'com.microsoft.Word'),
+    'Zotero': ('/Applications/Zotero.app', 'org.zotero.zotero'),
+}
+APPLICATION_FACTS = ('pid', 'birth', 'executable', 'file_identity')
+
+
+def app_binding(name, *, allow_absent=False, timeout=10):
+    """Bind a unique kernel process to the exact installed application bundle."""
     import cmux_daemon_identity as identity
-    result={}
-    for name in ('Microsoft Word','Zotero'):
-        found=subprocess.run(['/usr/bin/pgrep','-x',name],capture_output=True,text=True,timeout=10)
-        pids=found.stdout.split()
-        if found.returncode!=0 or len(pids)!=1 or not pids[0].isdigit():
-            raise RuntimeError('RUNNING_ORIGINAL_APPLICATION_REQUIRED:'+name)
-        fact=identity.process(int(pids[0]))
-        result[name]={k:fact[k] for k in ('pid','birth','executable','file_identity')}
-    return result
+    if name not in APPLICATION_BUNDLES:
+        raise RuntimeError('SUPPORTED_APPLICATION_REQUIRED')
+    bundle_name, bundle_id = APPLICATION_BUNDLES[name]
+    bundle = Path(bundle_name)
+    info = bundle / 'Contents/Info.plist'
+    if bundle.resolve(strict=True) != bundle or info.is_symlink() or info.parent.resolve(strict=True) != info.parent:
+        raise RuntimeError('CANONICAL_APPLICATION_BUNDLE_REQUIRED:' + name)
+    before = info.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 65536:
+        raise RuntimeError('BOUNDED_APPLICATION_PLIST_REQUIRED:' + name)
+    raw = info.read_bytes()
+    file_facts = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if file_facts(info.stat()) != file_facts(before):
+        raise RuntimeError('APPLICATION_BUNDLE_CHANGED:' + name)
+    value = plistlib.loads(raw)
+    executable = value.get('CFBundleExecutable')
+    if (value.get('CFBundleIdentifier') != bundle_id or not isinstance(executable, str)
+            or not executable or executable in ('.', '..') or Path(executable).name != executable
+            or any(c in executable for c in ('/', '\\', '\x00'))):
+        raise RuntimeError('EXACT_APPLICATION_EXECUTABLE_REQUIRED:' + name)
+    image = bundle / 'Contents/MacOS' / executable
+    if image.is_symlink() or image.resolve(strict=True) != image:
+        raise RuntimeError('CANONICAL_APPLICATION_EXECUTABLE_REQUIRED:' + name)
+    image_before = image.stat()
+    if not stat.S_ISREG(image_before.st_mode):
+        raise RuntimeError('REGULAR_APPLICATION_EXECUTABLE_REQUIRED:' + name)
+    expected_file = [image_before.st_dev, image_before.st_ino, image_before.st_size, image_before.st_mtime_ns]
+    deadline = time.monotonic() + timeout
+
+    def pids():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('APPLICATION_OBSERVATION_BUDGET_EXHAUSTED:' + name)
+        found = subprocess.run(['/usr/bin/pgrep', '-x', executable], capture_output=True,
+                               text=True, timeout=remaining)
+        values = found.stdout.split()
+        if found.returncode == 1 and not values and not found.stderr.strip():
+            return []
+        if found.returncode != 0 or len(values) != 1 or not values[0].isdigit() or int(values[0]) <= 0:
+            raise RuntimeError('RUNNING_ORIGINAL_APPLICATION_REQUIRED:' + name)
+        return [int(values[0])]
+
+    found = pids()
+    if not found:
+        if allow_absent and pids() == []:
+            if (file_facts(info.stat()) != file_facts(before) or info.read_bytes() != raw
+                    or file_facts(image.stat()) != file_facts(image_before)):
+                raise RuntimeError('APPLICATION_PID_OR_BUNDLE_CHANGED:' + name)
+            return None
+        raise RuntimeError('RUNNING_ORIGINAL_APPLICATION_REQUIRED:' + name)
+    fact = identity.process(found[0])
+    binding = {k: fact[k] for k in APPLICATION_FACTS}
+    if (binding['pid'] != found[0] or binding['executable'] != str(image)
+            or binding['file_identity'] != expected_file):
+        raise RuntimeError('APPLICATION_KERNEL_EXECUTABLE_MISMATCH:' + name)
+    fresh = identity.process(found[0])
+    if (pids() != found or {k: fresh[k] for k in APPLICATION_FACTS} != binding
+            or file_facts(info.stat()) != file_facts(before) or info.read_bytes() != raw
+            or file_facts(image.stat()) != file_facts(image_before)):
+        raise RuntimeError('APPLICATION_PID_OR_BUNDLE_CHANGED:' + name)
+    return binding
+
+
+def app_bindings():
+    return {name: app_binding(name) for name in APPLICATION_BUNDLES}
 
 
 def expected_script(session, stage):

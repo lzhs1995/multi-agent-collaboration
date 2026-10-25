@@ -1,3 +1,29 @@
+## 0.4.72
+
+- Classify only a pinned same-turn Codex task_complete error that explicitly
+  reports Azure item/resource mismatch without an HTTP status. Retain original
+  error/evidence and unknown HTTP, count distinct terminal outcomes, and choose
+  the original authorized peer mode without input, replay or automatic retry.
+  Generic, nonterminal, foreign and transport uncertainty remain unclassified;
+  a genuine later API success resets the request diagnostic.
+- Resolve the installed application bundle executable for Word and Zotero in
+  both owned revision startup and subsequent process guards. Retain unique
+  PID, process birth, exact kernel executable, file identity and stable rereads.
+- Add a read-only preview for the complete pinned 0.4.70 controller's exact
+  pre-input Zotero-binding refusal. Preserve PENDING for unknown input, outputs,
+  live/unknown children, changed evidence, controller pins or lock identities.
+- Only the original authenticated actor with the exact plan SHA may close that
+  one restricted ticket as FAILED_PREINPUT under the original locks and CAS.
+  Preserve original result, nonce and consumed invocation; no application input,
+  replay, invocation refund or legacy Word/Zotero release. A subsequent job needs
+  its own approval and FIFO admission.
+- Isolated process, queue and CLI controls plus an original read-only preview
+  verify the bounded repair. Native manuscript execution, source semantics,
+  client adoption and overall task efficiency require separate evidence.
+- Retain the unchanged protected ordinary-message driver for the exact 0.4.72
+  controller. Its original attempt, full-history and zero-input limits remain;
+  unreviewed future versions still cannot use this recovery.
+
 ## 0.4.71
 
 - Accept domain work-order schemas that explicitly declare the ordinary result
