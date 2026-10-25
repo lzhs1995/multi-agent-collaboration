@@ -5,6 +5,7 @@ callback, resource lease or original nonce. The same task and original panel
 survive mode changes. Native receipt/queue uncertainty is never an API outage.
 """
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -17,6 +18,60 @@ PERMANENT = {401, 402, 403}
 UNKNOWN = {'QUEUED', 'NATIVE_PENDING', 'COMPOSE_PENDING', 'IDENTITY_UNKNOWN',
            'TIMEOUT', 'NO_REPLY', 'TOOL_EXIT_ZERO'}
 SCHEMA = 'collaboration-continuity-v1'
+RESOURCE_MISMATCH = 'the requested item was created under a different azure openai resource'
+
+
+def native_request_configuration_failure(obs):
+    """Diagnose only the pinned, same-turn non-HTTP Codex terminal error."""
+    if (obs.get('kind') != 'API_ERROR' or obs.get('terminal') is not True
+            or obs.get('http_status') is not None):
+        return None
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('duplicate native outcome field')
+            value[key] = item
+        return value
+
+    raw = evidence(obs['evidence'])
+    try:
+        native = json.loads(raw, object_pairs_hook=unique)
+        if type(native) is not dict or native.get('type') != 'event_msg':
+            return None
+        payload = native.get('payload')
+        if (type(payload) is not dict or payload.get('type') != 'task_complete'
+                or payload.get('turn_id') != obs.get('attempt_id')):
+            return None
+        stamp = datetime.fromisoformat(native['timestamp'])
+        if (stamp.tzinfo is None or not math.isclose(stamp.timestamp(), obs['at_epoch'],
+                                                    rel_tol=0, abs_tol=0.000001)):
+            return None
+        for source in (native, payload):
+            for key in ('session_id', 'task_id'):
+                if key in source and source[key] != obs.get(key):
+                    return None
+        error = payload.get('error')
+        if type(error) is not dict or error.get('codex_error_info') != 'other':
+            return None
+        decoded = json.loads(error['message'], object_pairs_hook=unique)
+        detail = decoded.get('error') if type(decoded) is dict else None
+        if (type(detail) is not dict or detail.get('type') != 'invalid_request_error'
+                or not isinstance(detail.get('message'), str)
+                or RESOURCE_MISMATCH not in detail['message'].casefold()):
+            return None
+        aliases = ('http_status', 'httpStatusCode', 'http_status_code', 'status_code')
+        if any(source.get(key) is not None for source in (native, payload, error, decoded, detail)
+               for key in aliases):
+            return None
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError, OverflowError):
+        return None
+    return dict(category='REQUEST_CONFIGURATION', reason='AZURE_ITEM_RESOURCE_MISMATCH',
+                task_id=obs['task_id'], session_id=obs['session_id'],
+                attempt_id=obs['attempt_id'], evidence=obs['evidence'],
+                original_error=error, decoded_message=detail['message'], http_status=None,
+                retry_authorized=False, current_provider_health_proven=False)
 
 
 def evidence(pin):
@@ -75,6 +130,7 @@ def validate(value):
 
 def health(observations, now):
     state, consecutive, due, last = 'UNKNOWN', 0, None, None
+    request_failure = None
     for obs in sorted(observations, key=lambda o: o['at_epoch']):
         if obs['at_epoch'] > now:
             raise ValueError('future outcome cannot establish availability')
@@ -85,11 +141,20 @@ def health(observations, now):
             continue
         elif kind == 'API_SUCCESS':
             state, consecutive, due = 'AVAILABLE', 0, None
+            request_failure = None
         elif kind in ('PROCESS_EXITED', 'SESSION_LOST'):
             state, consecutive = 'UNAVAILABLE', 0
+            request_failure = None
         elif kind == 'API_ERROR' and obs.get('http_status') in PERMANENT:
             state, consecutive = 'UNAVAILABLE', 0
+            request_failure = None
+        elif kind == 'API_ERROR' and (failure := native_request_configuration_failure(obs)) is not None:
+            consecutive = consecutive + 1 if request_failure is not None else 1
+            state, due, request_failure = 'UNAVAILABLE', None, failure
         elif kind == 'API_ERROR' and obs.get('http_status') in RETRYABLE:
+            if request_failure is not None:
+                consecutive = 0
+            request_failure = None
             # A caller must not count a too-early duplicate attempt as progress
             # toward takeover. Native internal retries are one observed attempt.
             if due is not None and obs['at_epoch'] < due:
@@ -102,8 +167,11 @@ def health(observations, now):
             state = 'UNAVAILABLE' if consecutive >= 3 else 'RETRYING'
         else:
             state, consecutive, due = 'UNKNOWN', 0, None
+            request_failure = None
         last = obs
     return dict(state=state, consecutive_failures=consecutive,
+                failure_category='REQUEST_CONFIGURATION' if request_failure else None,
+                request_configuration_failure=request_failure,
                 retry_due_epoch=due if state == 'RETRYING' else None,
                 last_outcome_epoch=last['at_epoch'] if last else None,
                 observed_age_seconds=now-last['at_epoch'] if last else None)

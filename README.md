@@ -1,4 +1,11 @@
-# Current release: 0.4.71
+# Current release: 0.4.72
+
+Word and Zotero process bindings use the installed bundle executable, including
+the lowercase `zotero` name, with unique PID and stable kernel/file identities.
+An exact original 0.4.70 pre-input failure can be closed through a read-only
+plan and original-actor-only apply. The original invocation and failure remain;
+no run is replayed and the legacy Word ticket is not released. See
+[0.4.72](references/release-0.4.72.md).
 
 Domain work orders with an explicit `completion_channel=ORDINARY_NOTICE` now
 use the pinned scoped result planner without renaming their schema. Legacy

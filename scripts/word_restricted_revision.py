@@ -204,12 +204,8 @@ class Driver:
         return self.base.runner(argv, **kwargs)
 
     def _word_pid(self):
-        found = subprocess.run(['/usr/bin/pgrep', '-x', 'Microsoft Word'], capture_output=True, text=True, timeout=5)
-        if found.returncode == 1 and not found.stdout.strip():
-            return None
-        if found.returncode != 0 or len(found.stdout.split()) != 1 or not found.stdout.strip().isdigit():
-            raise RuntimeError('UNIQUE_WORD_PROCESS_REQUIRED')
-        return int(found.stdout.strip())
+        binding = self.native.app_binding('Microsoft Word', allow_absent=True, timeout=5)
+        return None if binding is None else binding['pid']
 
     def bind_apps(self):
         self.guard()
@@ -221,12 +217,7 @@ class Driver:
         # A single fixed background launch is part of the original approved Word
         # task. It cannot close or save restored/foreign documents. Host success
         # is followed by process binding and a complete native baseline.
-        import cmux_daemon_identity as identity
-        zotero = subprocess.run(['/usr/bin/pgrep', '-x', 'Zotero'], capture_output=True, text=True, timeout=5)
-        self.protocol.need(zotero.returncode == 0 and len(zotero.stdout.split()) == 1,
-                           'RUNNING_ORIGINAL_ZOTERO_REQUIRED')
-        before = identity.process(int(zotero.stdout.strip()))
-        before = {k: before[k] for k in ('pid', 'birth', 'executable', 'file_identity')}
+        before = self.native.app_binding('Zotero', timeout=5)
         self.save('word-launch-intent.json', {'argv': WORD_LAUNCH, 'plan': self.plan_ref,
                   'prior_word': 'NOT_RUNNING', 'zotero_binding': before, 'replay_allowed': False})
         row = self.guard()
