@@ -12,7 +12,8 @@ from unittest.mock import patch
 from resource_broker import ResourceBusy
 import word_preinput_recovery as recovery
 import word_restricted_broker as protocol
-from word_restricted_inventory import SCRIPT
+# Historical PRE evidence must retain its original script when CURRENT changes.
+SCRIPT = (Path(__file__).resolve().parent / 'fixtures/word-preinput-inventory-v1.applescript').read_text()
 import test_word_preinput_recovery as existing
 
 

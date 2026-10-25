@@ -73,12 +73,21 @@ set appProcesses to {wordProcess, zoteroProcess}
 repeat with i from 1 to 2
 set appName to item i of appNames
 tell (item i of appProcesses)
-set aws to windows
-set reportText to reportText & "AXAPP" & tab & (contents of appName) & tab & (count aws) & linefeed
-repeat with aw in aws
-set reportText to reportText & "AXWIN" & tab & (contents of appName) & tab & my clean(name of aw) & tab & my clean(role of aw) & tab & my clean(subrole of aw) & tab & ((value of attribute "AXModal" of aw) as text) & tab & ((value of attribute "AXMinimized" of aw) as text) & tab & (count sheets of aw) & linefeed
+set axCount to count windows
+if axCount > 200 then error "BOUNDED_AX_SCOPE_REQUIRED"
+set reportText to reportText & "AXAPP" & tab & (contents of appName) & tab & axCount & linefeed
+repeat with ai from 1 to axCount
+set aw to window ai
+set axTitle to my clean(value of attribute "AXTitle" of aw)
+set axRole to my clean(value of attribute "AXRole" of aw)
+set axSubrole to my clean(value of attribute "AXSubrole" of aw)
+set axModal to (value of attribute "AXModal" of aw) as text
+set axMinimized to (value of attribute "AXMinimized" of aw) as text
+set axSheets to count sheets of aw
+if my clean(value of attribute "AXTitle" of window ai) is not axTitle then error "AX_WINDOW_REFERENCE_CHANGED"
+set reportText to reportText & "AXWIN" & tab & (contents of appName) & tab & axTitle & tab & axRole & tab & axSubrole & tab & axModal & tab & axMinimized & tab & axSheets & linefeed
 end repeat
-if (count windows) is not (count aws) then error "AX_SET_CHANGED"
+if (count windows) is not axCount then error "AX_SET_CHANGED:" & (contents of appName) & ":" & axCount & ":" & (count windows)
 end tell
 end repeat
 set wordProcess to my boundProcess(wp, "com.microsoft.Word")

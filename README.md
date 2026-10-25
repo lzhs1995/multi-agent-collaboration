@@ -1,4 +1,11 @@
-# Current release: 0.4.73
+# Current release: 0.4.74
+
+The complete Word inventory uses current AX window indices and explicit
+attributes, retaining all metadata and UNKNOWN ownership. One exact original
+.73 PRE System Events -1728 reference failure can close its original restricted
+ticket through a source-bound read-only preview and original-actor apply.
+The historical cause remains unknown; no old run or legacy release is granted.
+See [0.4.74](references/release-0.4.74.md).
 
 Word recovery documents may report their unsaved display name as a relative
 reference. The inventory preserves a unique matching document/window as

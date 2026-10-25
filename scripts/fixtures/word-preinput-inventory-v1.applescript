@@ -1,0 +1,88 @@
+on boundProcess(thePID, expectedBundle)
+tell application "System Events"
+set candidates to every application process whose unix id is thePID
+if (count candidates) is not 1 then error "BOUND_PROCESS_NOT_UNIQUE"
+set procRef to item 1 of candidates
+if bundle identifier of procRef is not expectedBundle then error "BOUND_BUNDLE_MISMATCH"
+return procRef
+end tell
+end boundProcess
+on clean(v)
+set v to v as text
+if v contains tab or v contains linefeed or v contains return then error "UNSUPPORTED_METADATA_TEXT"
+return v
+end clean
+on run argv
+if (count argv) is not 2 then error "EXPECTED_WORD_ZOTERO_PIDS"
+set wp to (item 1 of argv) as integer
+set zp to (item 2 of argv) as integer
+if not (application "Microsoft Word" is running) then error "WORD_NOT_RUNNING"
+with timeout of 12 seconds
+tell application "System Events"
+set wordProcess to my boundProcess(wp, "com.microsoft.Word")
+set zoteroProcess to my boundProcess(zp, "org.zotero.zotero")
+end tell
+tell application "Microsoft Word"
+set dc to count documents
+set wc to count windows
+set reportText to "WORD_RESTRICTED_INVENTORY_V1" & tab & dc & tab & wc & linefeed
+repeat with di from 1 to dc
+set n to "MISSING"
+set p to "MISSING"
+set s to "UNKNOWN"
+try
+set d to document di
+try
+set v to name of d
+if (class of v) is text then set n to v
+end try
+try
+set v to posix full name of d
+if (class of v) is text and v is not "" then set p to v
+end try
+try
+set v to saved of d
+if (class of v) is boolean then set s to v as text
+end try
+end try
+set reportText to reportText & "DOC" & tab & di & tab & my clean(n) & tab & my clean(p) & tab & s & linefeed
+end repeat
+repeat with wi from 1 to wc
+set w to window wi
+set p to "MISSING"
+try
+set v to posix full name of (document of w)
+if (class of v) is text and v is not "" then set p to v
+end try
+set reportText to reportText & "WIN" & tab & wi & tab & my clean(p) & tab & my clean(name of w) & tab & ((visible of w) as text) & tab & my clean(window state of w) & linefeed
+end repeat
+set activePath to "MISSING"
+try
+if dc > 0 then
+set v to posix full name of active document
+if (class of v) is text and v is not "" then set activePath to v
+end if
+end try
+set reportText to reportText & "ACTIVE" & tab & my clean(activePath) & linefeed
+if (count documents) is not dc or (count windows) is not wc then error "WORD_SET_CHANGED"
+end tell
+tell application "System Events"
+set appNames to {"Microsoft Word", "Zotero"}
+set appProcesses to {wordProcess, zoteroProcess}
+repeat with i from 1 to 2
+set appName to item i of appNames
+tell (item i of appProcesses)
+set aws to windows
+set reportText to reportText & "AXAPP" & tab & (contents of appName) & tab & (count aws) & linefeed
+repeat with aw in aws
+set reportText to reportText & "AXWIN" & tab & (contents of appName) & tab & my clean(name of aw) & tab & my clean(role of aw) & tab & my clean(subrole of aw) & tab & ((value of attribute "AXModal" of aw) as text) & tab & ((value of attribute "AXMinimized" of aw) as text) & tab & (count sheets of aw) & linefeed
+end repeat
+if (count windows) is not (count aws) then error "AX_SET_CHANGED"
+end tell
+end repeat
+set wordProcess to my boundProcess(wp, "com.microsoft.Word")
+set zoteroProcess to my boundProcess(zp, "org.zotero.zotero")
+end tell
+return reportText & "END"
+end timeout
+end run
