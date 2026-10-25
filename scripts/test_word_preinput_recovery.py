@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import uuid
@@ -43,6 +44,11 @@ class PreinputRecoveryTests(unittest.TestCase):
             may_be_open=False, owned_document='None', retry_permitted=False, no_foreign_save_or_close=True)))
         self.actor = self.f.f.successor
         self.addCleanup(patch.stopall)
+        # Direct main() unit calls emulate the required production -BE launcher.
+        # Patch only this module's sys reference, never the test runner's flags.
+        self.cli_sys = SimpleNamespace(flags=SimpleNamespace(ignore_environment=True),
+                                       dont_write_bytecode=True)
+        patch.object(recovery, 'sys', self.cli_sys).start()
         patch.object(recovery, 'verify_original_source', return_value={'verified_private_fixture': True}).start()
         self.group = patch.object(recovery, 'group_alive', return_value=False).start()
         self.r = recovery.PreinputRecovery(self.broker.root, readonly=False)
@@ -102,6 +108,21 @@ class PreinputRecoveryTests(unittest.TestCase):
             self.assertEqual(refusal['outcome'], 'OWNED_PREINPUT_REFUSED')
             self.assertEqual(refusal['input_operations'], 0)
             self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+    def test_cli_missing_environment_or_bytecode_flag_refuses_before_opening_queue(self):
+        for name in ('ignore_environment', 'dont_write_bytecode'):
+            obj = self.cli_sys.flags if name == 'ignore_environment' else self.cli_sys
+            with self.subTest(flag=name), patch.object(obj, name, False), \
+                    patch.object(recovery, 'PreinputRecovery') as open_queue:
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(recovery.main(['preview', '--root', str(self.broker.root),
+                        '--ticket', self.ticket['id']]), 2)
+                value = json.loads(output.getvalue())
+                self.assertEqual(value['reason'], 'PREINPUT_CLI_REQUIRES_BE')
+                self.assertEqual(value['input_operations'], 0)
+                open_queue.assert_not_called()
+                self.assertEqual(self.broker.get(self.ticket['id']), self.before)
 
     def test_apply_preserves_invocation_nonce_result_and_legacy_and_cannot_replay(self):
         value = self.preview()
@@ -211,7 +232,7 @@ class PreinputRecoveryTests(unittest.TestCase):
         reappeared[1]['windows'][0]['workspaces'][0]['panes'][0]['surfaces'].append(
             dict(id=self.actor['surface_uuid']))
         with patch.object(recovery.workspace_guard, 'caller_snapshot', side_effect=[
-                snapshot, snapshot, reappeared]):
+                snapshot, snapshot, reappeared, reappeared]):
             with self.assertRaisesRegex(ResourceBusy, 'ORIGINAL_SURFACE_STILL_PRESENT'):
                 self.r.apply(self.ticket['id'], preview['plan_sha256'], resume_same_session=True)
         self.assertEqual(self.broker.get(self.ticket['id']), self.before)
