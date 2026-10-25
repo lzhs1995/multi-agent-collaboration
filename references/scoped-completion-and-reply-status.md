@@ -49,6 +49,14 @@ Observed output path aliases, including top-level scoped order paths, are
 accepted only when all supplied names agree and the three stages remain
 separate canonical absolute files. No original order is rewritten.
 
+From 0.4.71, a domain-specific work-order schema may use this planner when it
+explicitly declares `completion_channel=ORDINARY_NOTICE`. The schema need not
+contain the word `scoped`. Legacy scoped schemas may still omit the channel;
+formal task IDs, completion callbacks, completion nonces and callback nonces
+remain refused. Exact controller and output pins still apply. This accepts an
+ordinary route declaration; it grants no task or callback authority and never
+replays an earlier alternate notice.
+
 An ordinary result notice is not a formal DONE callback. A notice's native
 receipt, referenced body reading, parent acceptance and resource RELEASE are
 separate. Freeze consumed finals; later changes use a new suffixed result with

@@ -1,3 +1,15 @@
+## 0.4.71
+
+- Accept domain work-order schemas that explicitly declare the ordinary result
+  notice route. Preserve exact report/output/controller pins and the legacy
+  scoped-schema default; reject formal task, callback and nonce bindings.
+- Cover explicit domain acceptance, absent/invalid channels, disguised formal
+  bindings and legacy defaults through the actual zero-input CLI. An original
+  domain work order now plans without rewriting its order, report or controller.
+- Retain the complete immutable0.4.70 file producer, its original controller
+  range and capabilities. Existing notices, episodes and reservations retain
+  their original controllers and no-resend boundaries.
+
 ## 0.4.70
 
 - Add one separately approved owned initial revision job when an expired
