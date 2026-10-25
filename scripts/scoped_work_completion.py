@@ -98,7 +98,7 @@ def plan(work_order, work_order_sha256, report, report_sha256):
     outputs = order.get('outputs', {})
     if not isinstance(outputs, dict):
         raise ValueError('issued output paths must be an object')
-    declared = _output_path(order, outputs, 'final', ('final_output', 'report', 'final_report_path'),
+    declared = _output_path(order, outputs, 'final', ('final_output', 'final_path', 'report', 'final_report_path'),
                             ('final_report_path',))
     marker = order.get('done_marker')
     owner = order.get('supervisor_surface_uuid')

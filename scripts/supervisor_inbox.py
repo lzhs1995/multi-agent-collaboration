@@ -216,7 +216,7 @@ def answered(body, reply_path, scan=None):
                                     float(state.get('started_epoch', 0))):
         reply = ready.read_json(path)
         if (reply and reask.issued_marker(state, reply.get('marker'))
-                and replies.valid(reply, [reply['marker']], **binding)):
+                and reask.valid_reply(state, reply, [reply['marker']], **binding)):
             return True
     return False
 

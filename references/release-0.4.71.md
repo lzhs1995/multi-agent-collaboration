@@ -24,3 +24,15 @@ The protected ordinary-message driver is byte-identical to the reviewed
 complete 0.4.71 controller with that exact driver hash. Unreviewed versions,
 including 0.4.72, still refuse before input. History, original-controller and
 single-use recovery checks remain unchanged.
+
+An issued order may also name its final output as `outputs.final_path`. All
+supplied output aliases must still agree, and acceptance, progress and final
+paths remain separate. The planner never rewrites the issued order or report.
+
+The supervisor inbox's historical-reply fallback now uses the existing
+open-marker and continuing-wait validator. A consumed historical reply cannot
+hide a newer unanswered continuing inquiry. An authenticated current or open
+late reply still ends that wait; noncontinuing inquiries retain their behavior.
+Discovery remains file-only and never consumes a reply or changes its original
+controller, queued input, reservation or unknown delivery state. Real automatic
+exposure and original-executor reading/consumption require post-install evidence.

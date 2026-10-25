@@ -252,6 +252,31 @@ class InboxTest(unittest.TestCase):
         ready.write_json(Path(body['reply_mailbox']), reply)
         self.assertEqual(self.discover(), [])
 
+    def test_closed_late_reply_does_not_hide_new_continuing_inquiry(self):
+        state, path = self.request()
+        closed = reask.issue_marker(state, 1)
+        current = reask.issue_marker(state, reask.HISTORY + 2)
+        state.update(continuation={'enabled': True, 'overall_task': 'completed-overall-task'},
+                     replies_closed_through=1,
+                     attempt_count=reask.HISTORY + 2, asks=[dict(marker=current)])
+        reask.save(state)
+        reask.write_channels(state, current, 'continue original work', 62.0)
+        body = ready.read_json(path)
+        reply = dict(body['reply_template'], marker=closed, owner=SUP,
+                     next_due_epoch=120., deadline_epoch=120.,
+                     trigger='Original consumed waiting reply.')
+        reply_path = ready.mailbox_dir(CALLER) / (closed + '.json')
+        ready.write_json(reply_path, reply)
+        before = {p: p.read_bytes() for p in (path, reply_path, reask.state_path(CALLER))}
+        notices = self.discover()
+        self.assertEqual([notice['marker'] for notice in notices], [current])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        # An unconsumed open late reply still suppresses the current inquiry.
+        opened = reask.issue_marker(state, 2)
+        ready.write_json(ready.mailbox_dir(CALLER) / (opened + '.json'),
+                         dict(reply, marker=opened, trigger='Open original reply.'))
+        self.assertEqual(self.discover(now=161.), [])
+
     def test_symlink_and_oversized_request_are_not_read(self):
         _state, path = self.request()
         target = path.with_suffix('.source')

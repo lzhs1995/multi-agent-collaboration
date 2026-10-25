@@ -285,6 +285,39 @@ class ScopedCompletionTests(unittest.TestCase):
         self.assertFalse(result['native_receipt'])
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
+    def test_issued_final_path_alias_plans_without_rewriting_order(self):
+        self.order['outputs']['final_path'] = self.order['outputs'].pop('final_output')
+        self.write_order()
+        before = {p: p.read_bytes() for p in (self.order_path, self.report_path)}
+        with patch.object(scoped.subprocess, 'run', side_effect=AssertionError('planning must not submit')):
+            code, result = self.run_cli()
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['input_operations'], 0)
+        self.assertEqual(result['controller_source'], str(self.controller))
+        self.assertEqual(json.loads(result['body'])['report']['sha256'],
+                         hashlib.sha256(before[self.report_path]).hexdigest())
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_final_path_retains_alias_conflict_and_stage_separation_checks(self):
+        original = dict(self.order['outputs'])
+        cases = [
+            (dict(original, final_path=str(self.root / 'other-result.json')),
+             'final output path aliases disagree'),
+            (dict(final_path=str(self.report_path), acceptance=original['acceptance'],
+                  progress_path=str(self.report_path)), 'separate absolute paths'),
+        ]
+        for outputs, reason in cases:
+            with self.subTest(reason=reason):
+                self.order['outputs'] = outputs
+                self.write_order()
+                before = {p: p.read_bytes() for p in (self.order_path, self.report_path)}
+                code, result = self.run_cli()
+                self.assertEqual(code, 2, result)
+                self.assertIn(reason, result['error'])
+                self.assertEqual(result['input_operations'], 0)
+                self.assertNotIn('submit_argv', result)
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+
     def test_domain_schema_requires_explicit_ordinary_channel(self):
         original = dict(self.order, schema='spatial43-v8g-increment-review-v22')
         for channel in (None, 'FORMAL_CALLBACK', 'ordinary_notice', True, {}):
