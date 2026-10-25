@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import stat
 import sys
@@ -27,7 +28,65 @@ ORIGINAL_DRIVERS = {
     'word_restricted_revision.py': 'e4f6b1bd317cc1ec37f0a710ebc019aed78625acc91fe514a1352d40a547196c',
 }
 PREINPUT_REASON = 'RUNNING_ORIGINAL_ZOTERO_REQUIRED'
+INVENTORY_REASON = 'NATIVE_INVENTORY_UNAVAILABLE'
+# Published 0.4.72 source, including executable flags. Complete private copies
+# can retain their original plan paths without editing the old controller.
+INVENTORY_SOURCE_COUNT = 385
+INVENTORY_SOURCE_BYTES = 5508124
+INVENTORY_SOURCE_DIGEST = 'bf4cf132c5b8a7d30677ae4a1e9e260f0ddff3d076d94c594704b2075a7f1aad'
+INVENTORY_DRIVERS = {
+    'word_restricted_broker.py': '3c5a47a430fb693cd42695988844bf6ec032d8109f8b33c944feaaeb8bfcee2d',
+    'word_restricted_pdf.py': '80e26376616ec47b139afc7ab7e09fa1d8c4541bb6d41cf38a04b813e5b777d4',
+    'word_restricted_revision.py': '0988e835e661961c2f17e7c32a4a444a2bb25ca7feefd8f13abb3fd5158159b1',
+    'word_restricted_inventory.py': '0a50fb85b89f78d1b3bb092d62f569f279cba62b2c8c9f984cd04f5b2e737182',
+}
+INVENTORY_SCRIPT_SHA256 = 'c07e5b41ea7a060c4d483121bfbfddaad3a418cb77110bd3221225474c549957'
 TERMINAL = 'FAILED_PREINPUT'
+
+
+def verify_inventory_source(plan):
+    """Read a complete published original tree; never import or patch it."""
+    import executor_reask_protocol as releases
+    source = Path(plan['controller_source'])
+    protocol.need(source.is_absolute() and source.resolve(strict=True) == source
+                  and not source.is_symlink() and source.is_dir(),
+                  'SUPPORTED_ORIGINAL_PREINPUT_CONTROLLER_REQUIRED')
+    before = directory_fact(source)
+    paths = []
+    entries = 0
+    for path in source.rglob('*'):
+        entries += 1
+        protocol.need(entries <= 2048, 'BOUNDED_ORIGINAL_CONTROLLER_REQUIRED')
+        info = path.lstat()
+        protocol.need(not path.is_symlink() and (stat.S_ISDIR(info.st_mode)
+                      or stat.S_ISREG(info.st_mode)), 'REGULAR_ORIGINAL_CONTROLLER_REQUIRED')
+        if stat.S_ISREG(info.st_mode):
+            paths.append((path, info.st_size, os.access(path, os.X_OK)))
+    protocol.need(len(paths) == INVENTORY_SOURCE_COUNT
+                  and sum(size for _path, size, _executable in paths) == INVENTORY_SOURCE_BYTES,
+                  'COMPLETE_PUBLISHED_0472_CONTROLLER_REQUIRED')
+    files = {}
+    for path, size, executable in paths:
+        raw = releases._read_regular(path, size, executable=executable)
+        protocol.need(len(raw) == size, 'ORIGINAL_CONTROLLER_PIN_CHANGED')
+        files[path.relative_to(source).as_posix()] = dict(
+            bytes=size, sha256=hashlib.sha256(raw).hexdigest(), executable=executable)
+    protocol.need(protocol.digest(files) == INVENTORY_SOURCE_DIGEST
+                  and directory_fact(source) == before, 'PUBLISHED_0472_CONTROLLER_CHANGED')
+    members = {name[len('scripts/'):] for name in files
+               if name.startswith('scripts/') and name.endswith('.py')
+               and len(Path(name).parts) == 2}
+    protocol.need(members == set(plan['controller_pins']), 'COMPLETE_ORIGINAL_CONTROLLER_REQUIRED')
+    for name, ref in plan['controller_pins'].items():
+        approved = files.get('scripts/' + name)
+        protocol.need(approved is not None and ref['path'] == str(source / 'scripts' / name)
+                      and all(ref[k] == approved[k] for k in ('bytes', 'sha256')),
+                      'ORIGINAL_CONTROLLER_PIN_CHANGED')
+    protocol.need(all(plan['controller_pins'][name]['sha256'] == sha
+                      for name, sha in INVENTORY_DRIVERS.items()),
+                  'SUPPORTED_ORIGINAL_PREINPUT_DRIVER_REQUIRED')
+    return dict(members=len(files), source=str(source), published_tree_sha256=INVENTORY_SOURCE_DIGEST,
+                critical_drivers=INVENTORY_DRIVERS, preinput_reason=INVENTORY_REASON)
 
 
 def verify_original_source(plan):
@@ -35,6 +94,8 @@ def verify_original_source(plan):
     import executor_reask_protocol as releases
     source = Path(plan['controller_source'])
     expected = Path.home() / '.local/share/multi-agent-collaboration/releases' / ORIGINAL_RELEASE / 'source'
+    if source != expected:
+        return verify_inventory_source(plan)
     protocol.need(source == expected and source.resolve(strict=True) == source,
                   'SUPPORTED_ORIGINAL_PREINPUT_CONTROLLER_REQUIRED')
     files = releases._verify_release(source, ORIGINAL_MANIFEST)
@@ -61,6 +122,47 @@ def directory_fact(path):
     protocol.need(stat.S_ISDIR(s.st_mode) and not path.is_symlink() and path.resolve(strict=True) == path,
                   'CANONICAL_ORIGINAL_EVIDENCE_REQUIRED')
     return [s.st_dev, s.st_ino, s.st_mtime_ns, s.st_ctime_ns]
+
+
+def inventory_timeout_evidence(evidence):
+    """Accept only a failed original read-only PRE script with no Word launch."""
+    refs = {}
+    for name in ('PRE-inventory.json', 'application-bindings.json', 'pre.applescript'):
+        path = evidence / name
+        protocol.need(stat.S_ISREG(path.lstat().st_mode) and not path.is_symlink(),
+                      'REGULAR_ORIGINAL_INVENTORY_EVIDENCE_REQUIRED')
+        refs[name] = protocol.pin(path)
+    protocol.need(refs['pre.applescript']['sha256'] == INVENTORY_SCRIPT_SHA256,
+                  'ORIGINAL_READ_ONLY_INVENTORY_SCRIPT_REQUIRED')
+    pre = protocol.object_bytes(protocol.read_pin(refs['PRE-inventory.json']))
+    binding = protocol.object_bytes(protocol.read_pin(refs['application-bindings.json']))
+    protocol.need(set(pre) == {'returncode', 'stdout', 'stderr', 'apps'}
+                  and type(pre['returncode']) is int and pre['returncode'] == 1
+                  and pre['stdout'] == '' and isinstance(pre['stderr'], str),
+                  'EXACT_ORIGINAL_PRE_INVENTORY_FAILURE_REQUIRED')
+    diagnostic = re.escape(str(evidence / 'pre.applescript')) + (
+        r':\d+:\d+: execution error: Microsoft Word[^\r\n]*\(-1712\)\n?')
+    protocol.need(re.fullmatch(diagnostic, pre['stderr']) is not None,
+                  'EXACT_ORIGINAL_WORD_APPLEEVENT_TIMEOUT_REQUIRED')
+    protocol.need(set(binding) == {'bindings', 'word_launch_requested'}
+                  and binding['word_launch_requested'] is False
+                  and pre['apps'] == binding['bindings'], 'ORIGINAL_NO_LAUNCH_BINDING_REQUIRED')
+    apps = binding['bindings']
+    expected = {'Microsoft Word': '/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word',
+                'Zotero': '/Applications/Zotero.app/Contents/MacOS/zotero'}
+    protocol.need(isinstance(apps, dict) and set(apps) == set(expected),
+                  'COMPLETE_ORIGINAL_APPLICATION_BINDINGS_REQUIRED')
+    for app, executable in expected.items():
+        row = apps[app]
+        protocol.need(isinstance(row, dict) and set(row) == {'pid', 'birth', 'executable', 'file_identity'}
+                      and type(row['pid']) is int and row['pid'] > 0
+                      and isinstance(row['birth'], list) and len(row['birth']) == 2
+                      and all(type(v) is int and v >= 0 for v in row['birth'])
+                      and row['executable'] == executable
+                      and isinstance(row['file_identity'], list) and len(row['file_identity']) == 4
+                      and all(type(v) is int and v > 0 for v in row['file_identity']),
+                      'EXACT_ORIGINAL_APPLICATION_BINDING_REQUIRED')
+    return refs
 
 
 def resumed_identity(original, expected=None):
@@ -115,6 +217,7 @@ class PreinputRecovery:
         plan = protocol.object_bytes(protocol.read_pin(ref))
         protocol.need(plan.get('operation') == protocol.REVISION_SCOPE, 'OWNED_REVISION_PREINPUT_ONLY')
         original_source = verify_original_source(plan)
+        reason = original_source.get('preinput_reason', PREINPUT_REASON)
         contract = self.broker.contract(row['disposition'])
         self.broker.plan_scope(contract, plan)
         protocol.need(protocol.actor_matches(plan['actor'], contract['successor']), 'ORIGINAL_ACTOR_CHANGED')
@@ -142,20 +245,23 @@ class PreinputRecovery:
                       and Path(argv[0]).is_absolute() and argv[1:] == expected_tail,
                       'ORIGINAL_FIXED_CHILD_ARGV_REQUIRED')
         error = protocol.object_bytes(result['stderr'].encode('utf-8'))
-        protocol.need(error == dict(status='RESTRICTED_NATIVE_PENDING', reason=PREINPUT_REASON,
+        protocol.need(error == dict(status='RESTRICTED_NATIVE_PENDING', reason=reason,
                                     error_type='ResourceBusy', no_retry=True,
                                     no_foreign_save_or_close=True, legacy_released=False),
                       'SUPPORTED_PREINPUT_FAILURE_REQUIRED')
         evidence = Path(plan['evidence_root'])
         before = directory_fact(evidence)
-        protocol.need([p.name for p in evidence.iterdir()] == ['failure.json'],
+        expected_names = (['PRE-inventory.json', 'application-bindings.json', 'failure.json', 'pre.applescript']
+                          if reason == INVENTORY_REASON else ['failure.json'])
+        protocol.need(sorted(p.name for p in evidence.iterdir()) == expected_names,
                       'APPLICATION_EVIDENCE_PRESERVED')
         protocol.need(not (evidence / 'failure.json').is_symlink(), 'ORIGINAL_FAILURE_FILE_REQUIRED')
         failure_ref = protocol.pin(evidence / 'failure.json')
         failure = protocol.object_bytes(protocol.read_pin(failure_ref))
-        protocol.need(failure == dict(reason=PREINPUT_REASON, error_type='ResourceBusy',
+        protocol.need(failure == dict(reason=reason, error_type='ResourceBusy',
                     may_be_open=False, owned_document='None', retry_permitted=False,
                     no_foreign_save_or_close=True), 'EXACT_PREINPUT_FAILURE_RECORD_REQUIRED')
+        inventory_refs = inventory_timeout_evidence(evidence) if reason == INVENTORY_REASON else None
         paths = [*plan['revision_outputs'].values(), plan['output'],
                  str(Path.home() / 'Library/Containers/com.microsoft.Word/Data/Documents/wordrev-pdf' /
                      ('revision_' + plan['stage_id'])),
@@ -164,7 +270,7 @@ class PreinputRecovery:
             absent(path)
         protocol.need(not group_alive(row['pgid']), 'ORIGINAL_CHILD_ALIVE_OR_UNKNOWN')
         protocol.need(directory_fact(evidence) == before
-                      and [p.name for p in evidence.iterdir()] == ['failure.json'],
+                      and sorted(p.name for p in evidence.iterdir()) == expected_names,
                       'ORIGINAL_EVIDENCE_DIRECTORY_CHANGED')
         legacy, resource = self.broker.legacy(contract)
         queue_lock = self.broker.root / (hashlib.sha256(protocol.RESOURCE.encode()).hexdigest() + '.lock')
@@ -176,6 +282,8 @@ class PreinputRecovery:
                         original_group_empty=True, legacy_row_sha256=protocol.digest(legacy),
                         legacy_resource_sha256=protocol.digest(resource),
                         locks=plan['locks'], queue_lock=dict(path=str(queue_lock), identity=[s.st_dev, s.st_ino]))
+        if inventory_refs is not None:
+            snapshot['native_inventory_evidence'] = inventory_refs
         return snapshot
 
     def preview(self, ticket, *, resume_same_session=False):
@@ -231,6 +339,8 @@ class PreinputRecovery:
                               and protocol.digest(resource) == fresh['facts']['legacy_resource_sha256'],
                               'LEGACY_PREIMAGE_CHANGED')
                 protocol.read_pin(fresh['facts']['failure'])
+                for ref in fresh['facts'].get('native_inventory_evidence', {}).values():
+                    protocol.read_pin(ref)
                 protocol.need(directory_fact(fresh['facts']['evidence_directory']['path']) ==
                               fresh['facts']['evidence_directory']['identity'], 'ORIGINAL_EVIDENCE_DIRECTORY_CHANGED')
                 for path in fresh['facts']['absent_paths']:

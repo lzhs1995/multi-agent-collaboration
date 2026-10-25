@@ -1,4 +1,14 @@
-# Current release: 0.4.72
+# Current release: 0.4.73
+
+Word recovery documents may report their unsaved display name as a relative
+reference. The inventory preserves a unique matching document/window as
+unresolved, with `filesystem_path=null`, `ownership=UNKNOWN` and `writable=false`.
+The complete original metadata still participates in before/after checks.
+
+The original 0.4.72 read-only PRE AppleEvent timeout now has a supported exact-SHA
+closeout for its original restricted ticket. It verifies the complete original
+source, fixed read-only script, failure, child and locks; the original actor alone
+may apply. See [0.4.73](references/release-0.4.73.md).
 
 Word and Zotero process bindings use the installed bundle executable, including
 the lowercase `zotero` name, with unique PID and stable kernel/file identities.

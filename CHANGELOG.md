@@ -1,3 +1,29 @@
+## 0.4.73
+
+- Preserve a unique unsaved bare Word document/window reference as unresolved
+  display metadata. Keep original DOC/WIN/ACTIVE rows and classify it with no
+  filesystem path, unknown ownership and no write permission. Absolute and
+  MISSING references retain their existing representation; ambiguous, saved,
+  path-like and control-character references remain refused.
+- Extend exact pre-input closeout to the complete published 0.4.72 source,
+  including immutable private copies with the same 385 members, content and
+  executable flags. Verify every original controller pin without importing or
+  modifying the old controller.
+- Require the exact failed read-only PRE script, AppleEvent -1712 diagnostic,
+  empty stdout, original Word/Zotero bindings, no launch and all four original
+  evidence files. Preserve PENDING for uncertainty, child activity, extra stages,
+  outputs, staging, changed evidence or locks.
+- Reuse original-actor authentication, original locks, exact preview SHA and CAS
+  to close only that restricted ticket as FAILED_PREINPUT. Retain its consumed
+  invocation and complete original result; no application input, replay, third
+  request, legacy release or manuscript acceptance.
+- Isolated parser/consumer and closeout controls plus an original read-only
+  preview verify implementation boundaries. Native adoption, source semantics,
+  all-session coverage and whole-task efficiency require their own evidence.
+- Retain the byte-identical protected ordinary-message driver for the complete
+  0.4.73 controller. Original zero-input history, identity and one-use recovery
+  limits remain; changed drivers and future versions are refused.
+
 ## 0.4.72
 
 - Classify only a pinned same-turn Codex task_complete error that explicitly
