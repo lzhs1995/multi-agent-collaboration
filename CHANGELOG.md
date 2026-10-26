@@ -1,3 +1,26 @@
+## 0.4.75
+
+- Add an explicit `consume-resumed` preview/apply route for one exact file
+  reply after the original Claude session restarts. Require affirmative old-PID
+  exit, the same native session, workspace, surface, pane, TTY, executable,
+  transcript inode and historical boundary, plus actual resumed caller ancestry.
+- Authenticate the complete approved CURRENT release before preview and again
+  before commit. Apply requires the exact original-controller path, canonical
+  reply SHA and reviewed plan SHA; changed state, reply, process or authority
+  refuses before consumption. Preview creates no state, enrollment or lock.
+- Retain the old identity/controller/enrollment and complete pre-state bytes
+  in the receipt. Reuse existing consumption and continuing-rearm semantics;
+  preserve UNKNOWN input and reservations, with no input, replay or dispatch.
+- Preserve post-replace sync uncertainty. A receipt retry verifies its exact
+  scope and bytes, confirms only directory sync and keeps its original timestamp;
+  an already completed reply cannot be consumed or rearmed twice.
+- Retain the complete immutable .74 file-protocol producer and original issuer
+  range. Installation grants no old registration authority or automatic adoption.
+  This explicit operation does not fix client wakeup or all later inquiry hooks.
+- Register the byte-identical protected ordinary-message driver for complete
+  .75 controllers; retain exact history, identity and one-use recovery limits.
+  Changed drivers and the unreviewed .76 controller remain refused.
+
 ## 0.4.74
 
 - Read AX window metadata through current indices and explicit attributes,
