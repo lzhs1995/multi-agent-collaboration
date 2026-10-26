@@ -1,3 +1,21 @@
+## 0.4.74
+
+- Read AX window metadata through current indices and explicit attributes,
+  retaining complete Word/AX counts, modal and sheet checks, title stability
+  and UNKNOWN foreign ownership. Missing metadata still refuses the operation.
+- Bind one exact original .73 read-only PRE System Events -1728 failure to the
+  full 388-member published tree, original script, diagnostic location, window,
+  application bindings and four evidence files. Retain the .70/.72 profiles.
+- Reuse original-actor authentication, held locks, fresh exact preview SHA and
+  CAS for a no-input FAILED_PREINPUT closeout. No old RUN replay, legacy release,
+  invocation refund, third recovery ticket or manuscript acceptance.
+- A later read-only diagnostic did not reproduce the historical property
+  failure. Its underlying cause stays UNKNOWN; complete metadata observations
+  and source controls do not prove global native reliability or paper delivery.
+- Retain the byte-identical protected ordinary-message driver for complete
+  .74 controllers. Exact original history, source/driver identity and one-use
+  recovery limits remain; modified drivers and .75 stay refused.
+
 ## 0.4.73
 
 - Preserve a unique unsaved bare Word document/window reference as unresolved

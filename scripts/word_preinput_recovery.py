@@ -41,10 +41,37 @@ INVENTORY_DRIVERS = {
     'word_restricted_inventory.py': '0a50fb85b89f78d1b3bb092d62f569f279cba62b2c8c9f984cd04f5b2e737182',
 }
 INVENTORY_SCRIPT_SHA256 = 'c07e5b41ea7a060c4d483121bfbfddaad3a418cb77110bd3221225474c549957'
+AX_SOURCE_COUNT = 388
+AX_SOURCE_BYTES = 5537868
+AX_SOURCE_DIGEST = '9865984adecb074b7e7aabe4efa971f29e8fadcd55ccba36890bbd8e2e18a716'
+AX_DRIVERS = {
+    'word_restricted_broker.py': '3c5a47a430fb693cd42695988844bf6ec032d8109f8b33c944feaaeb8bfcee2d',
+    'word_restricted_pdf.py': '80e26376616ec47b139afc7ab7e09fa1d8c4541bb6d41cf38a04b813e5b777d4',
+    'word_restricted_revision.py': '0988e835e661961c2f17e7c32a4a444a2bb25ca7feefd8f13abb3fd5158159b1',
+    'word_restricted_inventory.py': 'b46b4668a477431e0ab8fec6c598d0ccbee757f58cc40abedf99d18722100d6b',
+}
+WORD_TIMEOUT_PROFILE = 'WORD_TIMEOUT_0472'
+AX_REFERENCE_PROFILE = 'SYSTEM_EVENTS_WINDOW_REFERENCE_0473'
+# Only this observed failure expression in the fixed original read-only script.
+# It is not a diagnosis of a permanent AX permission problem or a proven race.
+AX_REFERENCE_DIAGNOSTIC = ('System Events發生錯誤：無法取得「window "文件1  -  已復原" '
+                           'of application process "Microsoft Word"」。 (-1728)')
 TERMINAL = 'FAILED_PREINPUT'
 
 
 def verify_inventory_source(plan):
+    return verify_published_inventory_source(plan, count=INVENTORY_SOURCE_COUNT,
+        total=INVENTORY_SOURCE_BYTES, tree=INVENTORY_SOURCE_DIGEST,
+        drivers=INVENTORY_DRIVERS, release='0472', profile=WORD_TIMEOUT_PROFILE)
+
+
+def verify_ax_source(plan):
+    return verify_published_inventory_source(plan, count=AX_SOURCE_COUNT,
+        total=AX_SOURCE_BYTES, tree=AX_SOURCE_DIGEST, drivers=AX_DRIVERS,
+        release='0473', profile=AX_REFERENCE_PROFILE)
+
+
+def verify_published_inventory_source(plan, *, count, total, tree, drivers, release, profile):
     """Read a complete published original tree; never import or patch it."""
     import executor_reask_protocol as releases
     source = Path(plan['controller_source'])
@@ -62,17 +89,17 @@ def verify_inventory_source(plan):
                       or stat.S_ISREG(info.st_mode)), 'REGULAR_ORIGINAL_CONTROLLER_REQUIRED')
         if stat.S_ISREG(info.st_mode):
             paths.append((path, info.st_size, os.access(path, os.X_OK)))
-    protocol.need(len(paths) == INVENTORY_SOURCE_COUNT
-                  and sum(size for _path, size, _executable in paths) == INVENTORY_SOURCE_BYTES,
-                  'COMPLETE_PUBLISHED_0472_CONTROLLER_REQUIRED')
+    protocol.need(len(paths) == count
+                  and sum(size for _path, size, _executable in paths) == total,
+                  'COMPLETE_PUBLISHED_' + release + '_CONTROLLER_REQUIRED')
     files = {}
     for path, size, executable in paths:
         raw = releases._read_regular(path, size, executable=executable)
         protocol.need(len(raw) == size, 'ORIGINAL_CONTROLLER_PIN_CHANGED')
         files[path.relative_to(source).as_posix()] = dict(
             bytes=size, sha256=hashlib.sha256(raw).hexdigest(), executable=executable)
-    protocol.need(protocol.digest(files) == INVENTORY_SOURCE_DIGEST
-                  and directory_fact(source) == before, 'PUBLISHED_0472_CONTROLLER_CHANGED')
+    protocol.need(protocol.digest(files) == tree
+                  and directory_fact(source) == before, 'PUBLISHED_' + release + '_CONTROLLER_CHANGED')
     members = {name[len('scripts/'):] for name in files
                if name.startswith('scripts/') and name.endswith('.py')
                and len(Path(name).parts) == 2}
@@ -83,10 +110,10 @@ def verify_inventory_source(plan):
                       and all(ref[k] == approved[k] for k in ('bytes', 'sha256')),
                       'ORIGINAL_CONTROLLER_PIN_CHANGED')
     protocol.need(all(plan['controller_pins'][name]['sha256'] == sha
-                      for name, sha in INVENTORY_DRIVERS.items()),
+                      for name, sha in drivers.items()),
                   'SUPPORTED_ORIGINAL_PREINPUT_DRIVER_REQUIRED')
-    return dict(members=len(files), source=str(source), published_tree_sha256=INVENTORY_SOURCE_DIGEST,
-                critical_drivers=INVENTORY_DRIVERS, preinput_reason=INVENTORY_REASON)
+    return dict(members=len(files), source=str(source), published_tree_sha256=tree,
+                critical_drivers=drivers, preinput_reason=INVENTORY_REASON, failure_profile=profile)
 
 
 def verify_original_source(plan):
@@ -95,6 +122,12 @@ def verify_original_source(plan):
     source = Path(plan['controller_source'])
     expected = Path.home() / '.local/share/multi-agent-collaboration/releases' / ORIGINAL_RELEASE / 'source'
     if source != expected:
+        pins = plan['controller_pins']
+        protocol.need(isinstance(pins, dict), 'COMPLETE_ORIGINAL_CONTROLLER_REQUIRED')
+        inventory_pin = pins.get('word_restricted_inventory.py')
+        if (isinstance(inventory_pin, dict) and
+                inventory_pin.get('sha256') == AX_DRIVERS['word_restricted_inventory.py']):
+            return verify_ax_source(plan)
         return verify_inventory_source(plan)
     protocol.need(source == expected and source.resolve(strict=True) == source,
                   'SUPPORTED_ORIGINAL_PREINPUT_CONTROLLER_REQUIRED')
@@ -124,7 +157,7 @@ def directory_fact(path):
     return [s.st_dev, s.st_ino, s.st_mtime_ns, s.st_ctime_ns]
 
 
-def inventory_timeout_evidence(evidence):
+def inventory_timeout_evidence(evidence, profile=WORD_TIMEOUT_PROFILE):
     """Accept only a failed original read-only PRE script with no Word launch."""
     refs = {}
     for name in ('PRE-inventory.json', 'application-bindings.json', 'pre.applescript'):
@@ -140,10 +173,18 @@ def inventory_timeout_evidence(evidence):
                   and type(pre['returncode']) is int and pre['returncode'] == 1
                   and pre['stdout'] == '' and isinstance(pre['stderr'], str),
                   'EXACT_ORIGINAL_PRE_INVENTORY_FAILURE_REQUIRED')
-    diagnostic = re.escape(str(evidence / 'pre.applescript')) + (
-        r':\d+:\d+: execution error: Microsoft Word[^\r\n]*\(-1712\)\n?')
+    protocol.need(profile in (WORD_TIMEOUT_PROFILE, AX_REFERENCE_PROFILE),
+                  'SUPPORTED_ORIGINAL_INVENTORY_FAILURE_PROFILE_REQUIRED')
+    if profile == AX_REFERENCE_PROFILE:
+        diagnostic = (re.escape(str(evidence / 'pre.applescript')) +
+                      ':2817:2837: execution error: ' + re.escape(AX_REFERENCE_DIAGNOSTIC) + r'\n?')
+        rejection = 'EXACT_ORIGINAL_SYSTEM_EVENTS_WINDOW_REFERENCE_REQUIRED'
+    else:
+        diagnostic = re.escape(str(evidence / 'pre.applescript')) + (
+            r':\d+:\d+: execution error: Microsoft Word[^\r\n]*\(-1712\)\n?')
+        rejection = 'EXACT_ORIGINAL_WORD_APPLEEVENT_TIMEOUT_REQUIRED'
     protocol.need(re.fullmatch(diagnostic, pre['stderr']) is not None,
-                  'EXACT_ORIGINAL_WORD_APPLEEVENT_TIMEOUT_REQUIRED')
+                  rejection)
     protocol.need(set(binding) == {'bindings', 'word_launch_requested'}
                   and binding['word_launch_requested'] is False
                   and pre['apps'] == binding['bindings'], 'ORIGINAL_NO_LAUNCH_BINDING_REQUIRED')
@@ -261,7 +302,8 @@ class PreinputRecovery:
         protocol.need(failure == dict(reason=reason, error_type='ResourceBusy',
                     may_be_open=False, owned_document='None', retry_permitted=False,
                     no_foreign_save_or_close=True), 'EXACT_PREINPUT_FAILURE_RECORD_REQUIRED')
-        inventory_refs = inventory_timeout_evidence(evidence) if reason == INVENTORY_REASON else None
+        inventory_refs = (inventory_timeout_evidence(evidence, original_source.get('failure_profile', WORD_TIMEOUT_PROFILE))
+                          if reason == INVENTORY_REASON else None)
         paths = [*plan['revision_outputs'].values(), plan['output'],
                  str(Path.home() / 'Library/Containers/com.microsoft.Word/Data/Documents/wordrev-pdf' /
                      ('revision_' + plan['stage_id'])),
