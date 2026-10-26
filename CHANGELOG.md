@@ -12,6 +12,9 @@
 - A later read-only diagnostic did not reproduce the historical property
   failure. Its underlying cause stays UNKNOWN; complete metadata observations
   and source controls do not prove global native reliability or paper delivery.
+- Retain the byte-identical protected ordinary-message driver for complete
+  .74 controllers. Exact original history, source/driver identity and one-use
+  recovery limits remain; modified drivers and .75 stay refused.
 
 ## 0.4.73
 
