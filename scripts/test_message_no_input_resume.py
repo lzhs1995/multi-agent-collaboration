@@ -299,7 +299,7 @@ class OrdinaryNoInputRecoveryTests(unittest.TestCase):
                     if which == 'version' and path == source / 'VERSION':
                         return b'0.4.999\n'
                     if which == 'next_version' and path == source / 'VERSION':
-                        return b'0.4.75\n'
+                        return b'0.4.76\n'
                     return original_read(path)
                 with patch.object(cmux_evidence_io, 'read_bytes', side_effect=changed):
                     with self.assertRaisesRegex(ValueError, 'UNSUPPORTED_ORIGINAL_DRIVER'):

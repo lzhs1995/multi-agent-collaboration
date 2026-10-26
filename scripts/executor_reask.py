@@ -1334,6 +1334,12 @@ def _main(argv=None):
         sub.add_parser(name)
     consume_parser = sub.add_parser('consume')
     consume_parser.add_argument('--reply-sha256', default='')
+    resume_parser = sub.add_parser('consume-resumed',
+        help='read-only preview for one original file reply after the same Claude session restarts; no rebind')
+    resume_parser.add_argument('--original-controller', required=True)
+    resume_parser.add_argument('--reply-sha256', required=True)
+    resume_parser.add_argument('--apply', action='store_true')
+    resume_parser.add_argument('--plan-sha256', default='')
     sub.add_parser('observe-reply',
                    help='authenticated zero-input reply observation; no ask, count, consume or release')
     sync_parser = sub.add_parser('confirm-sync',
@@ -1419,6 +1425,13 @@ def _main(argv=None):
     elif args.cmd == 'consume':
         from executor_reask_lifecycle import consume
         state = consume(caller, args.reply_sha256)
+    elif args.cmd == 'consume-resumed':
+        from executor_reply_resume import evaluate
+        result = evaluate(caller, args.original_controller, args.reply_sha256,
+                          apply=args.apply, plan_sha256=args.plan_sha256)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if result['outcome'] in (
+            'RESUMED_REPLY_CONSUMPTION_PREVIEW', 'RESUMED_ORIGINAL_REPLY_CONSUMED') else 2
     elif args.cmd == 'observe-reply':
         from executor_reask_lifecycle import observe_reply
         state = observe_reply(caller)

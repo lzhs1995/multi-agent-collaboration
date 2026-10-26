@@ -221,77 +221,104 @@ def consume(caller, reply_sha256='', *, now=None):
                 'ORIGINAL_CONTROLLER_REQUIRED')
         from executor_reask_identity import authenticate
         consumer = authenticate(state)
-        if reask.stop_file(caller).exists():
-            stopped = reask.tick_locked(caller, now, file_only=True)
-            return _consume_result(stopped, 'STOPPED')
-        poll_authorization(state, now)
-        if state.get('state') != reask.ANSWERED:
-            reask.save(state)
-            return _consume_result(state, 'STOPPED' if state.get('state') == reask.STOPPED
-                                   else 'NOT_ANSWERED')
-        reply = state['reply']
-        continuing = bool(state.get('continuation'))
-        if not reply_sha256 or reply_sha256 != reply.get('body_sha256'):
-            raise ValueError('read the complete reply body and supply its exact --reply-sha256')
-        body = reply.get('body', {})
-        if reask.reply_record(body, reply['source'])['body_sha256'] != reply_sha256:
-            raise ValueError('stored reply body changed')
-        # Validate every prospective scheduling value before writing a durable
-        # consumption receipt. Optional TASK fields do not bypass this check.
-        if not isinstance(body, dict):
-            raise ValueError('stored reply body must be an object')
-        for name in ('next_due_epoch', 'deadline_epoch'):
-            if name in body:
-                require_epoch(body[name], 'reply.' + name)
-        next_due = None
-        if continuing:
-            next_due = max(require_epoch(state.get('next_due_epoch', now), 'state.next_due_epoch'),
-                           body.get('next_due_epoch', now))
-        marker = reply.get('marker') or body.get('marker', '')
-        receipt = dict(schema='executor-reply-consumed-v1', caller_surface_uuid=caller,
-                       supervisor=state['supervisor'], task_id=state['task_id'],
-                       episode_id=state['episode_id'], marker=marker,
-                       detected_epoch=reply.get('at_epoch'), consumed_epoch=now,
-                       body_sha256=reply.get('body_sha256'), body=body,
-                       consumption='EXPLICIT_FOREGROUND_EXECUTOR_ACK',
-                       executor_authentication=consumer)
-        for key in ('canonical_body_sha256', 'body_sha256_encoding', 'raw_sha256',
-                    'raw_bytes', 'raw_scope', 'source_identity', 'transcript_record'):
-            if key in reply:
-                receipt[key] = copy.deepcopy(reply[key])
-        path = reask.root() / 'consumed' / ready.digest(caller) / (ready.digest(
-            state['episode_id'] + ':' + marker) + '.json')
-        prior = ready.read_json(path)
-        if prior:
-            if any(prior.get(k) != receipt[k] for k in ('episode_id', 'marker', 'body_sha256')):
-                raise ValueError('original consumption receipt mismatch')
-            prior_consumer = prior.get('executor_authentication', {})
-            if any(prior_consumer.get(key) != consumer[key] for key in (
-                    'schema', 'provider', 'session_id', 'process', 'identity_sha256', 'episode_id')):
-                raise ValueError('original consumption identity proof mismatch')
-            require_epoch(prior.get('consumed_epoch'), 'original consumed_epoch')
-            receipt = prior
-            now = prior['consumed_epoch']
-        else:
-            # A post-replace sync failure surfaces as COMMITTED_SYNC_UNKNOWN; a
-            # retry then finds this exact receipt as `prior`, never a new one.
-            reask.durable_write_json(path, receipt)
-        state.update(state=reask.CONSUMED, reply_consumed_epoch=now)
-        state['reply_history'] = (state.get('reply_history', []) + [dict(
-            marker=marker, status=reply['status'], detected_epoch=reply.get('at_epoch'),
-            consumed_epoch=now, body_sha256=reply.get('body_sha256'), receipt=str(path))])[-reask.HISTORY:]
-        state['replies_closed_through'] = state.get('attempt_count', 0)
-        if continuing:
-            # TASK/DISPATCHED text is only a reply. The formal task reservation
-            # below pauses inquiries; a mailbox assertion cannot dispatch work.
-            state['state'] = reask.WAITING
-            state['rearm_count'] = state.get('rearm_count', 0) + 1
-            state['next_due_epoch'] = max(now, next_due)
-            state['last_reply'] = reply
-            state['reply'] = None
-        reask.write_channels(state, marker, 'reply explicitly consumed', now, status=reask.CONSUMED)
+        return _consume_authenticated_locked(caller, state, consumer, reply_sha256, now)
+
+
+def _consume_authenticated_locked(caller, state, consumer, reply_sha256, now):
+    """Shared receipt semantics; each entrypoint authenticates under the lock first."""
+    import executor_reask as reask
+    if reask.stop_file(caller).exists():
+        stopped = reask.tick_locked(caller, now, file_only=True)
+        return _consume_result(stopped, 'STOPPED')
+    poll_authorization(state, now)
+    if state.get('state') != reask.ANSWERED:
         reask.save(state)
-        return _consume_result(state, 'REPLY_CONSUMED', receipt=receipt, receipt_path=path)
+        return _consume_result(state, 'STOPPED' if state.get('state') == reask.STOPPED
+                               else 'NOT_ANSWERED')
+    reply = state['reply']
+    continuing = bool(state.get('continuation'))
+    if not reply_sha256 or reply_sha256 != reply.get('body_sha256'):
+        raise ValueError('read the complete reply body and supply its exact --reply-sha256')
+    body = reply.get('body', {})
+    if reask.reply_record(body, reply['source'])['body_sha256'] != reply_sha256:
+        raise ValueError('stored reply body changed')
+    # Validate every prospective scheduling value before writing a durable
+    # consumption receipt. Optional TASK fields do not bypass this check.
+    if not isinstance(body, dict):
+        raise ValueError('stored reply body must be an object')
+    for name in ('next_due_epoch', 'deadline_epoch'):
+        if name in body:
+            require_epoch(body[name], 'reply.' + name)
+    next_due = None
+    if continuing:
+        next_due = max(require_epoch(state.get('next_due_epoch', now), 'state.next_due_epoch'),
+                       body.get('next_due_epoch', now))
+    marker = reply.get('marker') or body.get('marker', '')
+    receipt = dict(schema='executor-reply-consumed-v1', caller_surface_uuid=caller,
+                   supervisor=state['supervisor'], task_id=state['task_id'],
+                   episode_id=state['episode_id'], marker=marker,
+                   detected_epoch=reply.get('at_epoch'), consumed_epoch=now,
+                   body_sha256=reply.get('body_sha256'), body=body,
+                   consumption='EXPLICIT_FOREGROUND_EXECUTOR_ACK',
+                   executor_authentication=consumer)
+    for key in ('canonical_body_sha256', 'body_sha256_encoding', 'raw_sha256',
+                'raw_bytes', 'raw_scope', 'source_identity', 'transcript_record'):
+        if key in reply:
+            receipt[key] = copy.deepcopy(reply[key])
+    path = reask.root() / 'consumed' / ready.digest(caller) / (ready.digest(
+        state['episode_id'] + ':' + marker) + '.json')
+    prior = ready.read_json(path)
+    if prior:
+        if any(prior.get(k) != receipt[k] for k in ('episode_id', 'marker', 'body_sha256')):
+            raise ValueError('original consumption receipt mismatch')
+        prior_consumer = prior.get('executor_authentication', {})
+        if any(prior_consumer.get(key) != consumer[key] for key in (
+                'schema', 'provider', 'session_id', 'process', 'identity_sha256', 'episode_id')):
+            raise ValueError('original consumption identity proof mismatch')
+        for key in ('source', 'original_identity', 'pre_state', 'reviewed_plan_sha256'):
+            if key in consumer and prior_consumer.get(key) != consumer[key]:
+                raise ValueError('original consumption proof changed: ' + key)
+        require_epoch(prior.get('consumed_epoch'), 'original consumed_epoch')
+        expected_receipt = receipt
+        receipt = prior
+        now = prior['consumed_epoch']
+        if consumer.get('scope') == 'EXACT_ANSWERED_FILE_REPLY_ONLY':
+            for key in ('schema', 'caller_surface_uuid', 'supervisor', 'task_id',
+                        'body', 'detected_epoch', 'consumption', 'canonical_body_sha256',
+                        'body_sha256_encoding', 'raw_sha256', 'raw_bytes', 'raw_scope',
+                        'source_identity', 'transcript_record'):
+                if prior.get(key) != expected_receipt.get(key):
+                    raise ValueError('original resumed receipt scope changed: ' + key)
+            # A resumed retry may finish a receipt whose original replacement
+            # became visible before directory fsync failed. Verify those exact
+            # bytes and retry only fsync; never rewrite the original receipt.
+            raw = read_bytes(path, limit=ready.MAX_JSON_BYTES)
+            if raw != reask._candidate_bytes(receipt):
+                raise ValueError('original resumed receipt bytes changed')
+            try:
+                ready.sync_directory(path.parent)
+            except OSError as exc:
+                raise reask.CommittedSyncUnknown(path, hashlib.sha256(raw).hexdigest(), exc) from exc
+    else:
+        # A post-replace sync failure surfaces as COMMITTED_SYNC_UNKNOWN; a
+        # retry then finds this exact receipt as `prior`, never a new one.
+        reask.durable_write_json(path, receipt)
+    state.update(state=reask.CONSUMED, reply_consumed_epoch=now)
+    state['reply_history'] = (state.get('reply_history', []) + [dict(
+        marker=marker, status=reply['status'], detected_epoch=reply.get('at_epoch'),
+        consumed_epoch=now, body_sha256=reply.get('body_sha256'), receipt=str(path))])[-reask.HISTORY:]
+    state['replies_closed_through'] = state.get('attempt_count', 0)
+    if continuing:
+        # TASK/DISPATCHED text is only a reply. The formal task reservation
+        # below pauses inquiries; a mailbox assertion cannot dispatch work.
+        state['state'] = reask.WAITING
+        state['rearm_count'] = state.get('rearm_count', 0) + 1
+        state['next_due_epoch'] = max(now, next_due)
+        state['last_reply'] = reply
+        state['reply'] = None
+    reask.write_channels(state, marker, 'reply explicitly consumed', now, status=reask.CONSUMED)
+    reask.save(state)
+    return _consume_result(state, 'REPLY_CONSUMED', receipt=receipt, receipt_path=path)
 
 
 def _observe_result(state, status, **facts):
