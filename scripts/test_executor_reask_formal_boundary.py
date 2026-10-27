@@ -173,6 +173,19 @@ class FormalBoundaryTests(unittest.TestCase):
         self.assertNotIn('controller', stopped)
         self.assert_preserved(original, stopped)
 
+    def test_formal_stop_preview_reports_reason_without_writing_original(self):
+        original = self.fixture(continuing=True)
+        ready.write_json(reask.stop_file(CALLER), {'reason': 'TASK_COMPLETE'})
+        files_before = self.files()
+        preview = copy.deepcopy(original)
+        self.assertTrue(lifecycle.apply_boundary(preview, self.marker(), 'RESERVED',
+                                                 1001., publish=False))
+        self.assertEqual(preview['state'], reask.STOPPED)
+        self.assertEqual(preview['exit_reason'], 'OPERATOR_STOP')
+        self.assertEqual(preview['operator_stop_reason'], 'TASK_COMPLETE')
+        self.assertEqual(self.files(), files_before)
+        self.assertEqual(reask.load(CALLER), original)
+
     def test_original_controller_conflict_does_not_disable_the_barrier(self):
         original = self.fixture(continuing=True)
         original['continuation']['controller']['source'] = '/another/original-release'

@@ -219,6 +219,37 @@ class ReaskTest(Base):
         ready.write_json(reask.stop_file(CALLER), dict(reason='OPERATOR'))
         state = reask.tick(CALLER, 2000.0, Sender())
         self.assertEqual(state['state'], reask.STOPPED)
+        self.assertEqual(state['exit_reason'], 'OPERATOR_STOP')
+        self.assertEqual(state['operator_stop_reason'], 'OPERATOR')
+
+    def test_stop_cli_reason_is_reported_and_later_record_does_not_rewrite_state(self):
+        self.begin()
+        state = reask.load(CALLER)
+        state['reason'] = 'MANUAL'
+        original_controller = copy.deepcopy(state['controller'])
+        state['terminal_pending'] = {'outcome': 'UNKNOWN', 'marker': 'original'}
+        reask.save(state)
+        stopped = reask.stop(CALLER, reason='TASK_COMPLETE 原任务完成')
+        self.assertEqual(stopped['exit_reason'], 'OPERATOR_STOP')
+        self.assertEqual(stopped['operator_stop_reason'], 'TASK_COMPLETE 原任务完成')
+        self.assertEqual(reask.summary(stopped)['operator_stop_reason'], stopped['operator_stop_reason'])
+        self.assertEqual(stopped['reason'], 'MANUAL')
+        self.assertEqual(stopped['controller'], original_controller)
+        self.assertEqual(stopped['terminal_pending'], state['terminal_pending'])
+        before = reask.state_path(CALLER).read_bytes()
+        ready.write_json(reask.stop_file(CALLER), {'reason': 'a later unrelated reason'})
+        reask.tick(CALLER, 3000.0, Sender())
+        self.assertEqual(reask.state_path(CALLER).read_bytes(), before)
+
+    def test_malformed_stop_still_stops_without_inventing_reason(self):
+        self.begin()
+        reask.stop_file(CALLER).write_bytes(b'{broken json')
+        stopped = reask.tick(CALLER, 2000.0, Sender())
+        self.assertEqual(stopped['state'], reask.STOPPED)
+        self.assertEqual(stopped['exit_reason'], 'OPERATOR_STOP')
+        self.assertIsNone(stopped['operator_stop_reason'])
+        self.assertEqual(stopped['operator_stop_record_status'], 'UNREADABLE')
+
 
     def test_terminal_error_still_counts_file_round(self):
         self.begin()

@@ -54,6 +54,18 @@ def stop_file(caller):
     return root() / (ready.digest(caller) + '.stop.json')
 
 
+def operator_stop_details(caller):
+    """Report the recorded reason; it never controls stopping or grants authority.
+
+    A malformed/unreadable stop still ends the episode. Already stopped
+    episodes are never backfilled from a later replacement of this file.
+    """
+    record = ready.read_json(stop_file(caller))
+    reason = record.get('reason') if isinstance(record, dict) else None
+    return dict(operator_stop_reason=reason if isinstance(reason, str) else None,
+                operator_stop_record_status='READ' if isinstance(record, dict) else 'UNREADABLE')
+
+
 def config_path():
     return root() / 'config.json'
 
@@ -968,7 +980,8 @@ def poll_locked(state, now, *, file_only=False):
     """No input: operator stop, new authenticated binding, then exact reply."""
     caller = state['caller_surface_uuid']
     if stop_file(caller).exists() and state['state'] != STOPPED:
-        state.update(state=STOPPED, stopped_epoch=now)
+        state.update(state=STOPPED, stopped_epoch=now, exit_reason='OPERATOR_STOP',
+                     **operator_stop_details(caller))
         if state.get('continuation'):
             state['continuation']['status'] = 'STOPPED'
         last = state['asks'][-1]['marker'] if state['asks'] else ''
@@ -1040,7 +1053,8 @@ def tick_locked(caller, now=None, send=default_send, *, file_only=False, file_re
     if stop_file(caller).exists():
         if state.get('state') != STOPPED:
             preserve_legacy_snapshot(state, file_record)
-            state.update(state=STOPPED, stopped_epoch=now, exit_reason='OPERATOR_STOP')
+            state.update(state=STOPPED, stopped_epoch=now, exit_reason='OPERATOR_STOP',
+                         **operator_stop_details(caller))
             if state.get('continuation'):
                 state['continuation']['status'] = 'STOPPED'
             marker = state['asks'][-1]['marker'] if state.get('asks') else ''
@@ -1226,6 +1240,7 @@ def summary(state, *, verification=None):
     from executor_proactive_hook import reply_observation
     result['reply_observation'] = reply_observation(state)
     for key in ('registration_observation', 'registration_error_type', 'input_operations', 'intent',
+                'operator_stop_reason', 'operator_stop_record_status',
                 'consume_result', 'observe_result', 'runner_returned', 'run_return_reason',
                 'wait_boundary', 'status_observation'):
         if key in state:
