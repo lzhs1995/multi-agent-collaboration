@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.76.** Ready messages may be sent directly in either direction,
+**Version: 0.4.77.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -37,6 +37,18 @@ before committing live state. Stop observations retain their original operator
 reason. Supported direct shell/rtk ancestry and canonical thesis entrypoints
 remain required; timing samples do not prove model wakeup or body consumption.
 See [0.4.76](references/release-0.4.76.md).
+
+Only explicitly opted-in new initial Word jobs may use
+`tracked_validation.mode=DUAL_VIEW_SEMANTIC_V1`. Both source views are checked
+before any native application call and again after the tracked save/reopen,
+before accepting or rejecting revisions. Clean outputs retain the zero-revision
+gate and must match their corresponding source views. Raw revision headers are
+reported separately; old jobs keep exact header equality. Complete table
+structure, effective formatting, settings, live fields and media are protected.
+Only an exactly declared running-story PAGE field may replace its cache with
+1–12 canonical positive decimal digits; a final accepted cache cannot be empty.
+This does not prove pagination, authorize Refresh or replay an old ticket.
+See [the semantic Word contract](references/word-semantic-contract.md).
 
 After the original Claude session restarts, a separate explicit exact-reply
 consumer can authenticate its later native process without changing the old

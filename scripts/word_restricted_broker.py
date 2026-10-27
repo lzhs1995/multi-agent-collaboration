@@ -208,8 +208,12 @@ def verify_revision_plan(plan, *, running=False):
     need('pane_uuid' in plan['actor'], 'EXACT_REVISION_PANE_REQUIRED')
     job = object_bytes(read_pin(plan['initial_job']))
     need(set(job) <= {'schema', 'task_id', 'actor', 'run_dir', 'input', 'outputs', 'pdf_output',
-         'native_actions', 'zotero_refresh', 'final_paper_acceptance', 'validation_inputs', 'source_job'},
+         'native_actions', 'zotero_refresh', 'final_paper_acceptance', 'validation_inputs', 'source_job',
+         'tracked_validation'},
          'INITIAL_JOB_FIELDS_REQUIRED')
+    if 'tracked_validation' in job:
+        import word_semantic_contract
+        word_semantic_contract.validate_policy(job['tracked_validation'])
     need(job.get('schema') == 'owned-initial-word-job-v1' and bool(job.get('task_id'))
          and actor_matches(plan['actor'], job['actor']), 'INITIAL_JOB_OWNER_REQUIRED')
     need(job.get('native_actions') == ['PRESERVE_TRACKED', 'ACCEPT_ALL', 'REJECT_ALL', 'PDF_EXPORT']
