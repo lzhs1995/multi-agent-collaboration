@@ -1,3 +1,21 @@
+## 0.4.76
+
+- Create/validate the canonical private file mailbox after identity precommit
+  and before publishing live registration state; retain operator stop reasons
+  without rewriting already stopped historical evidence.
+- Add an explicit exact-SHA original-actor closeout for a completed .75 tracked
+  save round trip that stopped on ORIGINAL_REVISION_HEADERS_CHANGED. Preserve
+  original result, plan, invocation and stage bytes; change only the restricted
+  failure status with a separate transactional receipt. Ordinary Word release,
+  manuscript acceptance, citation Refresh and replay remain unauthorized.
+- Add a bounded read-only MODEL_CONTEXT_CONSUMED observer over exact Claude
+  2.1.303 API request/response and full native body/hash result chains, including
+  every parallel result. Existing native-user receipts and controllers remain
+  unchanged; this is not an automatic hook or S2 consumer acceptance.
+- Record complete original .75 compatibility pins and preserve its issuer
+  scope. Document direct supported shell/rtk ancestry, separate receipt/read
+  facts, measured progress gaps and canonical thesis skill resolution.
+
 ## 0.4.75
 
 - Add an explicit `consume-resumed` preview/apply route for one exact file
