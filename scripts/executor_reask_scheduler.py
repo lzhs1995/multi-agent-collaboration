@@ -439,6 +439,10 @@ def _commit(state, pins, previous, registration_raw, *, authorization, original,
             raise ValueError('inquiry state changed during preparation')
         if precommit_check is not None:
             precommit_check()
+        # The supervisor must be able to write the first issued reply with a
+        # plain file create. File publishers must not be relied on to create
+        # the canonical mailbox after registration has already succeeded.
+        secure_directory(Path(candidate['mailbox']))
         reask.save(candidate)
         _post_commit(tx, directory)
         ready.write_json(path, prepared)

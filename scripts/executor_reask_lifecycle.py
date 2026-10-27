@@ -604,7 +604,8 @@ def apply_boundary(state, marker, event, now, *, observed=False, publish=True,
         # poll or rewrite an already-terminal episode's reason/timestamps.
         return _release_reservation(state, reservation, now, publish=publish)
     if reask.stop_file(state['caller_surface_uuid']).exists() and not preview_resume:
-        _boundary_stop(state, 'OPERATOR_STOP', now, publish=publish)
+        _boundary_stop(state, 'OPERATOR_STOP', now, publish=publish,
+                       **reask.operator_stop_details(state['caller_surface_uuid']))
         if event == 'RELEASED':
             _release_reservation(state, reservation, now, publish=publish)
         return state != before

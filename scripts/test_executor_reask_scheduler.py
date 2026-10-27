@@ -62,6 +62,15 @@ class SchedulerTests(unittest.TestCase):
         scheduler.enroll(state, self.live(caller), now=1000.)
         return state
 
+    def register_new(self):
+        # Registration is a foreground operation with read-only identity checks.
+        # The background sweep retains the transport-forbidden outer fixture.
+        with patch.object(ready, '_bridge') as foreground:
+            foreground.return_value.pin_workspace.return_value = self.live()
+            result = scheduler.start(self.live(), task_id='original-task', now=1000.)
+            foreground.return_value.pin_workspace.assert_called_with(SUP, caller_uuid=CALLER)
+        return result
+
     def test_schedule_continues_after_finite_foreground_run_and_respects_due_time(self):
         self.enroll()
         clock = [1001.]
@@ -231,6 +240,46 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(self.transport.return_value.mock_calls,
                          [call.pin_workspace(SUP, caller_uuid=CALLER)] * 2)
         self.assertEqual(reask.load(CALLER)['episode_id'], state['episode_id'])
+
+    def test_registered_mailbox_accepts_first_plain_supervisor_reply(self):
+        # A plain create does not silently make parents like ready.write_json.
+        state = self.register_new()
+        mailbox = Path(state['mailbox'])
+        self.assertTrue(mailbox.is_dir())
+        self.assertEqual(mailbox.stat().st_mode & 0o777, 0o700)
+        self.assertTrue(scheduler.registered(state))
+        scheduler.sweep(now=1001.)
+        current = ready.read_json(reask.inbox_path(reask.load(CALLER)))
+        reply_path = Path(current['reply_mailbox'])
+        reply = dict(current['reply_template'], trigger='The pinned review is ready.')
+        reply_path.write_text(json.dumps(dict(reply, task_id='another-task')))
+        self.assertEqual(scheduler.sweep(now=1002.)['episodes'][0]['status'], reask.WAITING)
+        reply_path.write_text(json.dumps(reply))
+        self.assertEqual(scheduler.sweep(now=1003.)['episodes'][0]['status'], reask.ANSWERED)
+        self.transport.assert_not_called()
+
+    def test_mailbox_failure_cannot_commit_registration_or_send(self):
+        mailbox = ready.mailbox_dir(CALLER)
+        mailbox.parent.mkdir(parents=True)
+        mailbox.write_text('Keep the conflicting original file.')
+        before = mailbox.read_bytes()
+        result = self.register_new()
+        self.assertEqual(result['outcome'], 'REGISTRATION_UNCOMMITTED', result)
+        self.assertIsNone(reask.load(CALLER))
+        self.assertEqual(mailbox.read_bytes(), before)
+        self.transport.assert_not_called()
+
+    def test_insecure_existing_mailbox_is_preserved_and_registration_refused(self):
+        mailbox = ready.mailbox_dir(CALLER)
+        mailbox.mkdir(parents=True, mode=0o755)
+        mailbox.chmod(0o755)
+        original = mailbox / 'original-reply.json'
+        original.write_bytes(b'{"original":"preserved"}')
+        result = self.register_new()
+        self.assertEqual(result['outcome'], 'REGISTRATION_UNCOMMITTED', result)
+        self.assertIsNone(reask.load(CALLER))
+        self.assertEqual(mailbox.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(original.read_bytes(), b'{"original":"preserved"}')
 
     def test_cli_file_only_continuation_still_requires_explicit_authorization(self):
         self.transport.side_effect = None
