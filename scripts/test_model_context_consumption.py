@@ -362,7 +362,16 @@ class ContextConsumptionTests(unittest.TestCase):
                 if change == 'attempt': attempt.write_bytes(attempt.read_bytes() + b' ')
                 if change == 'body': self.body_path.write_bytes(b'changed')
                 if change == 'transcript':
-                    data = self.transcript.read_bytes(); self.transcript.unlink(); self.transcript.write_bytes(data)
+                    data = self.transcript.read_bytes()
+                    original = self.transcript.stat()
+                    # Keep the original inode allocated while making its
+                    # replacement; unlink/recreate may reuse it on Linux.
+                    replacement = self.transcript.with_name('replacement.jsonl')
+                    replacement.write_bytes(data)
+                    changed = replacement.stat()
+                    self.assertNotEqual((changed.st_dev, changed.st_ino),
+                                        (original.st_dev, original.st_ino))
+                    replacement.replace(self.transcript)
                 if change == 'symlink':
                     data = self.transcript.read_bytes(); other = self.home / 'other.jsonl'; other.write_bytes(data)
                     self.transcript.unlink(); self.transcript.symlink_to(other)
