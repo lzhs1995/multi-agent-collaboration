@@ -53,9 +53,17 @@ def empty_claude_input(screen):
     if not prompts:
         return False
     start = prompts[-1]
-    if start == 0 or not re.fullmatch(r'─{8,}', rows[start - 1].strip()):
+    if start == 0:
         return False
-    border = rows[start - 1].strip()
+    upper = rows[start - 1].strip()
+    if re.fullmatch(r'─{8,}', upper):
+        border = upper
+    elif re.fullmatch(r'─{8,} ultracode ─', upper):
+        # The measured Claude 2.1.303 label occupies part of the upper rule.
+        # The lower rule remains bare and has the same terminal width.
+        border = '─' * len(upper)
+    else:
+        return False
     end = next((i for i in range(start + 1, len(rows)) if rows[i].strip() == border), None)
     if end is None:
         return False

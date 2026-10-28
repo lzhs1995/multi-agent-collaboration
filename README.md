@@ -1,4 +1,9 @@
-# Current release: 0.4.74
+# Current release: 0.4.79
+
+Protected terminal delivery recognizes the measured Claude 2.1.303 `ultracode`
+empty input frame. Its complete upper and lower rules must have the same width,
+and the body must be empty. Native identity and registry draft/dialog checks
+remain required. See [0.4.79](references/release-0.4.79.md).
 
 The complete Word inventory uses current AX window indices and explicit
 attributes, retaining all metadata and UNKNOWN ownership. One exact original

@@ -31,9 +31,9 @@ class ProtectedSubmitTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, json.dumps(self.input_state), '')
         return subprocess.CompletedProcess(argv, self.rc, json.dumps(self.ack) if self.ack is not None else '', self.stderr)
 
-    def send(self, screen='Compacting context'):
+    def send(self, screen='Compacting context', provider=None):
         return direct.send_once(self.text, self.marker, recheck=lambda: None,
-            preflight=lambda: bridge.require_prompt_free('target'),
+            preflight=lambda: bridge.require_prompt_free('target', provider=provider),
             emit=lambda phase, *args: self.events.append({'phase': phase}),
             submit=lambda text: bridge.submit_text_protected('target', text),
             paste=Mock(side_effect=AssertionError('no raw fallback')),
@@ -208,6 +208,105 @@ class ProtectedSubmitTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
             direct.require_prompt_state(state, 'TARGET', 'WORKSPACE')
 
+
+    def ultracode_frame(self):
+        return (Path(__file__).parent / 'fixtures/claude303-ultracode-empty.txt').read_text()
+
+    def rejected_frame_has_no_input_intents(self, screen):
+        self.input_state.update(agent=False, lifecycle='unknown', blocks_typing=False, state='empty')
+        self.run.reset_mock()
+        self.events.clear()
+        self.keys.clear()
+        with patch.object(bridge, 'read_screen', return_value=screen):
+            with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
+                self.send(provider='claude')
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.keys, [])
+
+    def test_measured_ultracode_empty_frame_uses_protected_submit(self):
+        self.input_state.update(agent=False, lifecycle='unknown')
+        with patch.object(bridge, 'read_screen', return_value=self.ultracode_frame()):
+            result = self.send(provider='claude')
+        self.assertEqual(self.run.call_count, 2)
+        self.assertTrue(result['protected_submit'])
+        self.assertEqual(result['input_operations'], 2)
+        self.assertEqual(self.keys, [])
+
+    def test_ultracode_draft_refuses_before_all_input_intents(self):
+        self.input_state.update(agent=False, lifecycle='unknown')
+        screen = self.ultracode_frame().replace('❯\u00a0\n', '❯ unfinished user question\n')
+        with patch.object(bridge, 'read_screen', return_value=screen):
+            with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
+                self.send(provider='claude')
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.keys, [])
+
+    def test_ultracode_continuation_refuses_before_all_input_intents(self):
+        self.input_state.update(agent=False, lifecycle='unknown')
+        screen = self.ultracode_frame().replace('❯\u00a0\n', '❯\u00a0\nuser continuation\n')
+        with patch.object(bridge, 'read_screen', return_value=screen):
+            with self.assertRaisesRegex(RuntimeError, 'PROMPT_STATE_UNKNOWN'):
+                self.send(provider='claude')
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.events, [])
+
+    def test_ultracode_requires_both_complete_width_matched_rules(self):
+        rows = self.ultracode_frame().splitlines()
+        prompt = max(i for i, row in enumerate(rows) if row.lstrip().startswith('❯'))
+        for edit in ('upper_missing', 'lower_missing', 'lower_shorter', 'lower_longer'):
+            value = list(rows)
+            if edit == 'upper_missing':
+                del value[prompt - 1]
+            elif edit == 'lower_missing':
+                del value[prompt + 1]
+            elif edit == 'lower_shorter':
+                value[prompt + 1] = value[prompt + 1][:-1]
+            else:
+                value[prompt + 1] += '─'
+            with self.subTest(edit=edit):
+                screen = '\n'.join(value)
+                self.assertFalse(direct.empty_claude_input(screen))
+                self.rejected_frame_has_no_input_intents(screen)
+
+    def test_ultracode_does_not_accept_other_labels_with_the_same_width(self):
+        rows = self.ultracode_frame().splitlines()
+        prompt = max(i for i, row in enumerate(rows) if row.lstrip().startswith('❯'))
+        width = len(rows[prompt - 1])
+        for label in ('Ultracode', 'ultrathink', 'ultracodeX', 'unknown', 'ultracode extra'):
+            value = list(rows)
+            value[prompt - 1] = '─' * (width - len(label) - 3) + ' ' + label + ' ─'
+            with self.subTest(label=label):
+                self.assertEqual(len(value[prompt - 1]), width)
+                screen = '\n'.join(value)
+                self.assertFalse(direct.empty_claude_input(screen))
+                self.rejected_frame_has_no_input_intents(screen)
+
+    def test_ultracode_label_spelling_and_internal_spacing_are_exact(self):
+        screen = self.ultracode_frame()
+        for upper in (' ultracode  ─', '  ultracode ─', ' ultracode ──',
+                      ' ultracode\u00a0─', ' ultracode\t─'):
+            with self.subTest(upper=upper):
+                changed = screen.replace(' ultracode ─', upper)
+                self.assertFalse(direct.empty_claude_input(changed))
+                self.rejected_frame_has_no_input_intents(changed)
+
+    def test_ultracode_frame_never_overrides_registry_draft_or_dialog(self):
+        self.input_state.update(agent=False, blocks_typing=True, state='dialog')
+        with patch.object(bridge, 'read_screen', side_effect=AssertionError('registry blocks input')):
+            with self.assertRaisesRegex(RuntimeError, 'PROMPT_NOT_EMPTY'):
+                self.send(provider='claude')
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.events, [])
+
+    def test_ultracode_uses_last_frame_and_rejects_hidden_body_characters(self):
+        screen = self.ultracode_frame()
+        self.assertTrue(direct.empty_claude_input(screen))
+        for changed in (screen + '\n❯ second user draft',
+                        screen.replace('❯\u00a0\n', '❯\u00a0\u200b\n')):
+            self.assertFalse(direct.empty_claude_input(changed))
+            self.rejected_frame_has_no_input_intents(changed)
 
     def test_measured_claude303_frame_has_positive_and_negative_draft_controls(self):
         template = (Path(__file__).parent / 'fixtures/claude303-reviewer-input.txt').read_text()
