@@ -284,15 +284,24 @@ idle Stop 只持久化一次状态并允许结束；未求派不能拦截 Stop�
 hook提示和主管正文读取分别验收；该调度不能唤醒空闲模型。主管按原模板回
 mailbox，再核新派单边界；不重复已接受callback，不重开科研审轮。
 
-### 同一 pane 的原生 Codex 维护通信
+### 同一 pane 的 Codex 维护通信
 
-0.4.28 的 `successor-rebind-v2` 可显式固定 `transport=codex_native_same_pane_v1`。
+`successor-rebind-v2` 可显式固定 `transport=codex_native_same_pane_v1`。
 授权记录与 artifact 必须同时绑定不同的 `caller_thread_id`、`target_thread_id`，
 以及双方 workspace/surface/pane UUID。只允许同工作区同 pane 的两个不同 surface。
 调用者必须通过当前原生 foreground 线程认证，接收者必须仍是指定 Codex 进程和线程。
-随后沿已认证 control socket 单次 steer/start，保留原 EOF/NATIVE_INPUT_INTENT；
-接收不确定只观察原次。此授权拒绝全部终端 paste/send/key，也不放宽普通侧窗格规则。
-旧 controller、回调与 UNKNOWN 不迁移。安装、自动 hook 与真实原生收发另行验收。
+
+当前新消息使用 `native-user-marker-v1` 合同，优先沿已认证 control socket 单次
+steer/start。只有原生方法不可用且尚未产生输入意图时，才允许同一原次降级为
+受保护的终端粘贴/提交；同 pane 的精确 UUID、线程与原输入锁仍须核验。降级前
+检查真实草稿/对话框；拒绝或未知结果只核原次，不盲按 Enter、不重新粘贴。
+单独的同 pane `transport` 字段不撤销这个现行降级合同。完整规则见
+[直接通信与原生核验](verified-compose-delivery.md)。
+
+历史 0.4.28 原次的 native-only 合同继续拒绝终端 paste/send/key；不能通过补写
+现行 receipt contract 使旧次获得降级权限。已有 NATIVE_INPUT_INTENT、RPC 超时
+或不确定结果也不允许降级。保留原 EOF、controller、回调与 UNKNOWN，不迁移或
+重放。安装、自动 hook、通知收件、完整正文读取与业务接受分别验收。
 
 ### 继任握手的时间与证据
 
