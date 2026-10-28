@@ -1,3 +1,13 @@
+## 0.4.79
+
+- Recognize the exact measured `ultracode` upper input rule for authenticated
+  Claude 2.1.303, requiring a complete bare lower rule at the same width.
+- Cover actual protected-send preflight, nonempty and hidden body text,
+  continuation lines, missing or mismatched rules, unknown labels and registry
+  drafts/dialogs. Preserve the original R83 NO_INPUT result and its controller.
+- Register .79 only with the existing exact protected-message driver SHA;
+  keep changed drivers and the next .80 version refused before input.
+
 ## 0.4.78
 
 - Add a separate opt-in sequential context observer for complete immediate

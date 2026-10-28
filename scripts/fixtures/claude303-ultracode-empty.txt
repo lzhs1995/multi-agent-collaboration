@@ -1,0 +1,35 @@
+       ons-20261028.json
+
+  接下来（20:07Z，台北 04:07 自动续跑）
+  1. 全量通过后，写验证记录、派生 u22 脚本、做准备。
+  2. 用 mg cx agentrouter-a 和 mg cc linxi -k linxi-s1 建 u22 工作区，三条 lane 先停在执行前，保留原 Claude settings 和 bypass。
+  3. 把三条 lane 的 UUID 交给 40 加排除，拿到 40 的回执后放行，真实实测才开始。
+
+  预计时间（按 u21 实测推算）
+  - 放行：约 20:50–21:50Z（台北 04:50–05:50），主要取决于 40 加排除、回执的速度。
+  - 实测跑到终态：放行后约 2.5 小时，之后裁定约 1 小时。
+  - 业务总量（33 task/192 communication）和 JEV 15 对的总完成时间，现在估不准。JEV consumer 要等 E2 标注冻结，u22 不用 JEV。
+  - 风险：linxi-s1 10-27 出过 403。实测中出现新的 401/403 就停下来告诉你。
+
+  另外：我原本想删两个日志文件，被安全检查拦下了。这两个文件当时还不存在，我改用了新文件名，没有需要你手动删的东西。
+
+❯ /effort 
+  ⎿  Ultracode on (this session only): dynamic workflows on every task. Effort stays max.
+
+✻ Baked for 3h 46m 33s · done 3:44 AM
+
+✻ Running scheduled task (Oct 29 3:44am)
+
+✽ Stewing… (2m 0s)
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ultracode ─
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  [Opus 5.5] │ u2078/r13 git:(ops/local-gemma-route-c-20260813* ↑13) │ ⏱️  1110h 2m
+  上下文 ████░░░░░░ 37%
+  1 CLAUDE.md | 5 MCPs | 7 钩子
+  ✓ Edit ×7 | ✓ Bash ×6 | ✓ Read ×3 | ✓ Write ×2 | +2 more
+  ◐ general-purpose: Recompute R8 C2598 sha mapping (2s)
+  ✓ Plan [opus-5]: Replan Zotero bibliography task (<1s)
+  ✓ general-purpose [opus-5]: placeholder (<1s)
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

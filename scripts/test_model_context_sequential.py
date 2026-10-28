@@ -98,7 +98,7 @@ class SequentialConsumptionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'EXACT_FULL_BODY_READ_CALL'):
             original.correlate(rows, f.binding, f.fence, f.wire, f.ref, f.body)
 
-    def test_release78_driver_requires_original_exact_bytes_and_refuses_future(self):
+    def test_reviewed_release_drivers_require_original_exact_bytes_and_refuse_future(self):
         import resume_message_no_input as recovery
         root = Path(sequential.__file__).resolve().parent.parent
         source = self.fixture.home / 'release-driver'
@@ -106,10 +106,11 @@ class SequentialConsumptionTests(unittest.TestCase):
         driver = (root / 'scripts/cmux_message_journal.py').read_bytes()
         self.assertEqual(original.digest(driver), recovery.DRIVER_SHA256)
         (source / 'scripts/cmux_message_journal.py').write_bytes(driver)
-        (source / 'VERSION').write_bytes(b'0.4.78\n')
-        value = recovery.original_driver(source, original.evidence)
-        self.assertEqual(value['version'], '0.4.78')
-        (source / 'VERSION').write_bytes(b'0.4.79\n')
+        for version in ('0.4.78', '0.4.79'):
+            (source / 'VERSION').write_bytes((version + '\n').encode())
+            value = recovery.original_driver(source, original.evidence)
+            self.assertEqual(value['version'], version)
+        (source / 'VERSION').write_bytes(b'0.4.80\n')
         with self.assertRaisesRegex(ValueError, 'UNSUPPORTED_ORIGINAL_DRIVER'):
             recovery.original_driver(source, original.evidence)
         (source / 'VERSION').write_bytes(b'0.4.78\n')
