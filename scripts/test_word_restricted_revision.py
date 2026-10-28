@@ -268,13 +268,14 @@ class OwnedRevisionTests(unittest.TestCase):
         driver.base.guard = lambda: {'expires': time.time() + 1800}
         return driver
 
-    def semantic_job(self, *, page=False):
+    def semantic_job(self, *, page=False, extra_pr='', styles=None):
         job, _ref = self.job('semantic')
-        body = ('<w:p><w:r><w:rPr><w:b/><w:rPrChange w:id="10"><w:rPr><w:b w:val="0"/>'
+        direct = '<w:pPr>' + extra_pr + '</w:pPr>' if extra_pr else ''
+        body = ('<w:p>' + direct + '<w:r><w:rPr><w:b/><w:rPrChange w:id="10"><w:rPr><w:b w:val="0"/>'
                 '</w:rPr></w:rPrChange></w:rPr><w:t>正文</w:t></w:r></w:p>')
         body += semantic_fixtures.table().replace('<w:tcPr>', '<w:tcPr><w:tcPrChange w:id="11">'
                   '<w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr></w:tcPrChange>', 1)
-        raw = semantic_fixtures.pack(body=body, footer=semantic_fixtures.page() if page else None)
+        raw = semantic_fixtures.pack(body=body, footer=semantic_fixtures.page() if page else None, styles=styles)
         with zipfile.ZipFile(io.BytesIO(raw)) as z:
             source_parts = {n: z.read(n) for n in z.namelist()}
         source_parts['word/settings.xml'] = semantic_fixtures.x('<w:settings/>')
@@ -351,6 +352,70 @@ class OwnedRevisionTests(unittest.TestCase):
         self.assertEqual(bind.call_count, 0)
         self.assertEqual(native_call.call_count, 0)
         self.assertFalse(Path(plan['revision_outputs']['tracked']).exists())
+
+    def formatting_failure(self, kind, *, after_save):
+        if kind == 'indent':
+            job, _ref = self.semantic_job(extra_pr='<w:ind w:firstLine="420" w:firstLineChars="0"/>')
+            part = 'word/document.xml'
+            def change(tree):
+                tree.find('.//' + semantics.W + 'ind').set(semantics.W + 'firstLine', '0')
+        else:
+            # Only the target paragraph uses this style. Unrelated table-cell
+            # paragraphs must not catch the mutation and mask a broken merge.
+            styles = semantic_fixtures.x('<w:styles><w:style w:type="paragraph" w:styleId="Normal" w:default="1"/>'
+                '<w:style w:type="paragraph" w:styleId="Tabbed"><w:pPr><w:tabs>'
+                '<w:tab w:val="left" w:pos="1000"/></w:tabs></w:pPr></w:style></w:styles>')
+            job, _ref = self.semantic_job(extra_pr='<w:pStyle w:val="Tabbed"/><w:tabs><w:tab w:val="left" w:pos="2000"/></w:tabs>', styles=styles)
+            part = 'word/styles.xml'
+            def change(tree):
+                tree.find('.//' + semantics.W + 'tab').set(semantics.W + 'pos', '3000')
+        if not after_save:
+            expected = Path(job['validation_inputs']['rejected']['path'])
+            expected.write_bytes(semantic_fixtures.mutate(expected.read_bytes(), change, part))
+            job['validation_inputs']['rejected'] = protocol.pin(expected)
+        ref = self.f.write('formatting-source-job.json', job)
+        plan, plan_ref = self.plan(job, ref, kind)
+        driver = self.driver(plan, plan_ref)
+        if not after_save:
+            with (patch.object(pdf, 'load_external') as external,
+                  patch.object(driver, 'bind_apps') as bind,
+                  patch.object(driver.base, 'observe', side_effect=AssertionError('format change reached native PRE')),
+                  patch.object(revision.subprocess, 'run') as native_call):
+                with self.assertRaisesRegex(ResourceBusy, 'TRACKED_SOURCE_VIEW_SEMANTICS_CHANGED'):
+                    driver.execute()
+            self.assertEqual(external.call_count, 0)
+            self.assertEqual(bind.call_count, 0)
+            self.assertEqual(native_call.call_count, 0)
+        else:
+            driver.root.mkdir()
+            revision.owned_path(plan, 'tracked').parent.mkdir()
+            calls = []
+            def corrupt(label, parts):
+                if label == 'tracked':
+                    tree = parts[part]
+                    if not isinstance(tree, ET.Element):
+                        tree = ET.fromstring(tree)
+                    change(tree)
+                    parts[part] = tree
+            with patch.object(revision.subprocess, 'run', side_effect=self.semantic_native(plan, calls, corrupt=corrupt)):
+                with self.assertRaisesRegex(ResourceBusy, 'TRACKED_SOURCE_VIEW_SEMANTICS_CHANGED'):
+                    driver.roundtrip('tracked', job['input'])
+            self.assertEqual(calls, [('tracked', stage) for stage in revision.STAGES])
+        self.assertFalse(Path(plan['revision_outputs']['tracked']).exists())
+        self.assertFalse(Path(plan['revision_outputs']['accepted']).exists())
+        self.assertFalse(Path(plan['revision_outputs']['rejected']).exists())
+
+    def test_semantic_zero_indent_change_is_blocked_before_native(self):
+        self.formatting_failure('indent', after_save=False)
+
+    def test_semantic_inherited_tab_change_is_blocked_before_native(self):
+        self.formatting_failure('tabs', after_save=False)
+
+    def test_semantic_saved_zero_indent_change_stops_before_accept_reject(self):
+        self.formatting_failure('indent', after_save=True)
+
+    def test_semantic_saved_inherited_tab_change_stops_before_accept_reject(self):
+        self.formatting_failure('tabs', after_save=True)
 
     def test_semantic_roundtrip_accepts_header_reserialization_with_both_views_intact(self):
         job, ref = self.semantic_job(); plan, plan_ref = self.plan(job, ref)

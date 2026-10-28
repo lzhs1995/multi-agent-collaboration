@@ -366,6 +366,39 @@ class Package:
         return [self.default_p] + [s.find(W + "pPr") for s in self.chain(sid)] + [direct]
 
     @staticmethod
+    def merge_tabs(previous, current):
+        """Tabs accumulate by position; clear removes only that inherited stop."""
+        need(not current.attrib, "UNKNOWN_TABS_ATTRIBUTE")
+        stops = {} if previous is None else {
+            int(t.get(W + "pos")): deepcopy(t) for t in previous
+        }
+        seen = set()
+        for tab in current:
+            need(tab.tag == W + "tab" and not len(tab)
+                 and not (tab.text or "").strip(), "UNKNOWN_TAB_CONTENT")
+            need(set(tab.attrib) <= {W + "pos", W + "val", W + "leader"},
+                 "UNKNOWN_TAB_ATTRIBUTE")
+            raw = tab.get(W + "pos", "").strip()
+            need(re.fullmatch(r"[+-]?[0-9]+", raw) is not None,
+                 "INTEGER_TAB_POSITION_REQUIRED")
+            position = int(raw)
+            need(-31680 <= position <= 31680, "WORD_TAB_POSITION_OUT_OF_RANGE")
+            need(position not in seen, "AMBIGUOUS_TAB_POSITION")
+            seen.add(position)
+            kind = tab.get(W + "val")
+            need(kind in {"clear", "left", "start", "center", "right", "end",
+                          "decimal", "bar", "num"}, "UNKNOWN_TAB_TYPE")
+            if kind == "clear":
+                stops.pop(position, None)
+            else:
+                stop = deepcopy(tab)
+                stop.set(W + "pos", str(position))
+                stops[position] = stop
+        merged = ET.Element(W + "tabs")
+        merged.extend(stops[p] for p in sorted(stops))
+        return merged
+
+    @staticmethod
     def merge_nodes(layers, excluded=()):
         result = {}
         for layer in layers:
@@ -375,7 +408,9 @@ class Package:
                 name = local(child.tag)
                 if name in excluded:
                     continue
-                if name in {"ind", "spacing", "rFonts", "numPr"} and name in result:
+                if name == "tabs":
+                    result[name] = Package.merge_tabs(result.get(name), child)
+                elif name in {"ind", "spacing", "rFonts", "numPr"} and name in result:
                     previous = result[name]
                     previous.attrib.update(child.attrib)
                     for item in child:
@@ -429,18 +464,27 @@ class Package:
              "UNKNOWN_INDENT_ATTRIBUTE")
         def side(a, b):
             for key in (b + "Chars", a + "Chars"):
-                if key in attrs:
-                    return ["twips", 0] if attrs[key] == 0 else ["chars", attrs[key]]
+                if attrs.get(key, 0):
+                    return ["chars", attrs[key]]
             return ["twips", attrs.get(b, attrs.get(a, 0))]
         if attrs.get("hangingChars", 0):
             first = ["chars", -attrs["hangingChars"]]
         elif attrs.get("hanging", 0):
             first = ["twips", -attrs["hanging"]]
-        elif "firstLineChars" in attrs:
-            first = ["twips", 0] if attrs["firstLineChars"] == 0 else ["chars", attrs["firstLineChars"]]
+        elif attrs.get("firstLineChars", 0):
+            first = ["chars", attrs["firstLineChars"]]
         else:
             first = ["twips", attrs.get("firstLine", 0)]
-        return {"left": side("left", "start"), "right": side("right", "end"), "first": first}
+        result = {"left": side("left", "start"), "right": side("right", "end"), "first": first}
+        # MS-OI29500 2.1.44 proves zero/reset and nonzero inheritance for
+        # start/end/firstLine/hanging Chars. Legacy left/right zero aliases
+        # with nonzero lengths remain conservatively protected, not proved
+        # interchangeable with the absence of those aliases.
+        legacy_zero = {name: attrs[name] for name in ("left", "right")
+                       if attrs.get(name + "Chars") == 0 and attrs.get(name, 0)}
+        if legacy_zero:
+            result["legacy_zero_lengths"] = legacy_zero
+        return result
 
     def paragraph_properties(self, p, story):
         cached = self._paragraph_cache.get((id(p), story))
@@ -459,6 +503,8 @@ class Package:
         result = {}
         for name, node in combined.items():
             if name == "ind":
+                continue
+            if name == "tabs" and not len(node):
                 continue
             result[name] = boolean(node) if name in P_BOOL else self.raw_node(node, story)
         # Missing alignment defaults to Word's left, not an unknown style.

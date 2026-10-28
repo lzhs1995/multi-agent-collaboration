@@ -7,6 +7,10 @@
 - Preserve full table structure, inherited paragraph/run formatting, layout and
   field settings, referenced notes, live fields, custom properties/XML and media. Resolve supported
   property history in one traversal; unsupported revision shapes fail closed.
+- Honor Word's zero-character indentation reset and inherited nonzero precedence.
+  Accumulate custom tab stops across style/direct layers, apply positional
+  overrides and clear, and reject ambiguous single-layer duplicate positions.
+  Preserve conservative legacy zero-alias length checks and valid serialization.
 - Permit cache updates only for exactly pinned complex PAGE fields in referenced
   headers/footers. Protect the instruction and formatting, reject zero/leading
   zero/nonnumeric caches, and require a nonempty positive final accepted cache.

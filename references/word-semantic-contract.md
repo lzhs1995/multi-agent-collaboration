@@ -52,6 +52,26 @@ remains unspecified, distinct from an explicit false value. Ordinary characters
 can ignore inactive bCs only when no complex-script, rtl, bidi or cs-font-hint
 setting forces complex rendering. Unrecognized scripts keep that comparison.
 
+Character-unit indentation follows Word's
+[MS-OI29500 2.1.44 implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/138732dc-507a-4164-af66-808c2fd9f2f9):
+a zero `startChars`, `endChars`, `firstLineChars` or `hangingChars` clears
+earlier values of that attribute and leaves the applicable length indent in
+effect. An inherited nonzero character indent still overrides a later length
+value; changing only that overridden length can be a valid serialization.
+The note does not establish the zero behavior of legacy `leftChars`/`rightChars`.
+Their coexistence with nonzero legacy lengths remains conservatively compared;
+it is not treated as equivalent to deleting those zero aliases. Pure zero
+defaults and nonzero-character serialization equivalences remain supported.
+
+[Custom tab stops are additive through the style hierarchy](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.tabs?view=openxml-3.0.1).
+The comparison accumulates positions, applies later definitions at the same
+position, and lets `clear` remove only its position. Empty tabs retain inherited
+stops; a materialized equivalent set and numeric/order serialization compare
+equally. Conflicting duplicate positions in one layer, unknown tab content and
+Word positions outside its documented -31680 to 31680 twip range refuse rather
+than losing properties. Hanging indentation remains independently protected,
+including its implicit tab-stop effect.
+
 Layout/field settings and webSettings are retained. Revision-session ids, proof
 state, zoom, document ids and the save template's tracking/markup controls are
 separate from endpoint semantics. The driver independently requires tracking

@@ -13,6 +13,13 @@ PAGE caches accept only bounded canonical positive decimal digits, with a
 nonempty final accepted cache. Tracking/markup state and raw revision headers
 are recorded separately. Unsupported revision shapes refuse safely.
 
+Zero character-unit indentation follows Word's documented reset/inheritance
+rules. Custom tab stops accumulate across layers with position overrides and
+clear; an empty direct set cannot erase inherited stops. Legacy zero aliases
+with nonzero lengths and ambiguous duplicate positions remain conservative.
+Endpoint and actual driver controls reject format changes before native loading
+and before tracked output can proceed to accept/reject.
+
 This does not reopen the failed original CMA ticket, authorize Zotero Refresh,
 change ordinary FIFO or release foreign documents. Native rendering, actual
 adoption and scientific acceptance require separate evidence. Existing attempts

@@ -143,6 +143,132 @@ class SemanticTests(unittest.TestCase):
         self.assert_same(a, b)
         self.assert_changed(a, pack(body=para(pr='<w:ind w:firstLineChars="100" w:firstLine="420"/>')))
 
+    def test_zero_character_indents_cannot_hide_length_changes(self):
+        for attr in ('firstLine', 'hanging', 'start', 'end', 'left', 'right'):
+            with self.subTest(attr=attr):
+                styles = x('<w:styles/>')
+                a = pack(body=para(pr='<w:ind w:' + attr + 'Chars="0" w:' + attr + '="720"/>'), styles=styles)
+                b = pack(body=para(pr='<w:ind w:' + attr + 'Chars="0" w:' + attr + '="0"/>'), styles=styles)
+                self.assert_changed(a, b)
+
+    def test_zero_character_indents_use_remaining_lengths(self):
+        for attr in ('firstLine', 'hanging', 'start', 'end'):
+            with self.subTest(attr=attr):
+                styles = x('<w:styles/>')
+                pr = '<w:ind w:' + attr + '="720"'
+                a = pack(body=para(pr=pr + ' w:' + attr + 'Chars="0"/>'), styles=styles)
+                b = pack(body=para(pr=pr + '/>'), styles=styles)
+                self.assert_same(a, b)
+
+    def test_nonzero_character_indents_allow_overridden_length_serialization(self):
+        for attr in ('firstLine', 'hanging', 'start', 'end', 'left', 'right'):
+            with self.subTest(attr=attr):
+                styles = x('<w:styles/>')
+                pr = '<w:ind w:' + attr + 'Chars="200" w:' + attr + '="'
+                a = pack(body=para(pr=pr + '720"/>'), styles=styles)
+                b = pack(body=para(pr=pr + '360"/>'), styles=styles)
+                self.assert_same(a, b)
+                self.assert_changed(a, mutate(b, lambda r: r.find('.//' + W + 'ind').set(W + attr + 'Chars', '100')))
+
+    def test_later_zero_clears_inherited_character_indent(self):
+        for attr in ('firstLine', 'hanging', 'start', 'end'):
+            with self.subTest(attr=attr):
+                styles = x('<w:styles><w:style w:type="paragraph" w:styleId="Base">'
+                    '<w:pPr><w:ind w:' + attr + 'Chars="200" w:' + attr + '="420"/></w:pPr>'
+                    '</w:style><w:style w:type="paragraph" w:styleId="Child" w:default="1">'
+                    '<w:basedOn w:val="Base"/><w:pPr><w:ind w:' + attr + 'Chars="0"/></w:pPr>'
+                    '</w:style></w:styles>')
+                a = pack(body=para(pr='<w:ind w:' + attr + '="720"/>'), styles=styles)
+                b = pack(body=para(pr='<w:ind w:' + attr + '="720"/>'), styles=x('<w:styles/>'))
+                self.assert_same(a, b)
+                self.assert_changed(a, mutate(a, lambda r: r.find('.//' + W + 'ind').set(W + attr, '360')))
+
+    def test_inherited_nonzero_characters_override_later_lengths(self):
+        for attr in ('firstLine', 'hanging', 'start', 'end'):
+            with self.subTest(attr=attr):
+                styles = x('<w:styles><w:docDefaults><w:pPrDefault><w:pPr>'
+                    '<w:ind w:' + attr + 'Chars="200" w:' + attr + '="420"/>'
+                    '</w:pPr></w:pPrDefault></w:docDefaults>'
+                    '<w:style w:type="paragraph" w:styleId="Normal" w:default="1">'
+                    '<w:pPr><w:ind w:' + attr + '="600"/></w:pPr></w:style></w:styles>')
+                a = pack(body=para(pr='<w:ind w:' + attr + '="720"/>'), styles=styles)
+                b = pack(body=para(pr='<w:ind w:' + attr + '="360"/>'), styles=styles)
+                self.assert_same(a, b)
+                self.assert_changed(a, mutate(b, lambda r: r.find('.//' + W + 'ind').set(W + attr + 'Chars', '100'), 'word/styles.xml'))
+
+    @staticmethod
+    def tab_styles(stops):
+        return x('<w:styles><w:style w:type="paragraph" w:styleId="Normal" w:default="1">'
+                 '<w:pPr><w:tabs>' + stops + '</w:tabs></w:pPr></w:style></w:styles>')
+
+    def test_direct_tabs_do_not_hide_other_inherited_positions(self):
+        styles = self.tab_styles('<w:tab w:val="left" w:pos="1000"/>')
+        a = pack(body=para(pr='<w:tabs><w:tab w:val="left" w:pos="2000"/></w:tabs>'), styles=styles)
+        b = mutate(a, lambda r: r.find('.//' + W + 'tab').set(W + 'pos', '3000'), 'word/styles.xml')
+        self.assert_changed(a, b)
+
+    def test_materialized_accumulated_tabs_are_equivalent(self):
+        first = '<w:tab w:val="left" w:pos="1000"/>'
+        second = '<w:tab w:val="right" w:pos="2000" w:leader="dot"/>'
+        a = pack(body=para(pr='<w:tabs>' + second + '</w:tabs>'), styles=self.tab_styles(first))
+        b = pack(body=para(pr='<w:tabs>' + first + second + '</w:tabs>'), styles=x('<w:styles/>'))
+        self.assert_same(a, b)
+        self.assert_changed(a, mutate(b, lambda r: r.findall('.//' + W + 'tab')[1].set(W + 'leader', 'hyphen')))
+
+    def test_empty_tabs_do_not_clear_inherited_stops(self):
+        styles = self.tab_styles('<w:tab w:val="left" w:pos="1000"/>')
+        self.assert_same(pack(body=para(pr='<w:tabs/>'), styles=styles), pack(body=para(), styles=styles))
+
+    def test_tab_clear_removes_only_its_inherited_position(self):
+        first = '<w:tab w:val="left" w:pos="1000"/>'
+        second = '<w:tab w:val="right" w:pos="2000"/>'
+        a = pack(body=para(pr='<w:tabs><w:tab w:val="clear" w:pos="1000"/></w:tabs>'), styles=self.tab_styles(first + second))
+        b = pack(body=para(pr='<w:tabs>' + second + '</w:tabs>'), styles=x('<w:styles/>'))
+        self.assert_same(a, b)
+        self.assert_changed(a, pack(body=para(), styles=self.tab_styles(first + second)))
+        self.assert_changed(a, mutate(a, lambda r: r.find('.//' + W + 'tab').set(W + 'pos', '2000')))
+
+    def test_tab_clear_survives_multiple_style_layers(self):
+        first = '<w:tab w:val="left" w:pos="1000"/>'
+        second = '<w:tab w:val="right" w:pos="2000"/>'
+        styles = x('<w:styles><w:style w:type="paragraph" w:styleId="Base">'
+            '<w:pPr><w:tabs>' + first + second + '</w:tabs></w:pPr></w:style>'
+            '<w:style w:type="paragraph" w:styleId="Child" w:default="1"><w:basedOn w:val="Base"/>'
+            '<w:pPr><w:tabs><w:tab w:val="clear" w:pos="1000"/></w:tabs></w:pPr></w:style></w:styles>')
+        a = pack(body=para(pr='<w:tabs><w:tab w:val="center" w:pos="3000"/></w:tabs>'), styles=styles)
+        b = pack(body=para(pr='<w:tabs>' + second + '<w:tab w:val="center" w:pos="3000"/></w:tabs>'), styles=x('<w:styles/>'))
+        self.assert_same(a, b)
+
+    def test_tab_order_and_numeric_position_serialization_are_equivalent(self):
+        first = '<w:tab w:val="left" w:pos="1000"/>'
+        second = '<w:tab w:val="right" w:pos="2000"/>'
+        a = pack(body=para(pr='<w:tabs>' + first + second + '</w:tabs>'), styles=x('<w:styles/>'))
+        b = pack(body=para(pr='<w:tabs>' + second + first.replace('1000', '+01000') + '</w:tabs>'), styles=x('<w:styles/>'))
+        self.assert_same(a, b)
+
+    def test_later_tab_position_overrides_keep_other_inherited_stops(self):
+        styles = self.tab_styles('<w:tab w:val="left" w:pos="1000"/><w:tab w:val="center" w:pos="2000"/>')
+        direct = '<w:tab w:val="right" w:pos="1000"/>'
+        a = pack(body=para(pr='<w:tabs>' + direct + '</w:tabs>'), styles=styles)
+        b = pack(body=para(pr='<w:tabs>' + direct + '<w:tab w:val="center" w:pos="2000"/></w:tabs>'), styles=x('<w:styles/>'))
+        self.assert_same(a, b)
+        self.assert_changed(a, mutate(a, lambda r: r.findall('.//' + W + 'tab')[1].set(W + 'val', 'left'), 'word/styles.xml'))
+
+    def test_ambiguous_duplicate_tab_positions_are_refused(self):
+        styles = x('<w:styles/>')
+        a = pack(body=para(pr='<w:tabs><w:tab w:val="left" w:pos="1000"/><w:tab w:val="right" w:pos="+01000"/></w:tabs>'), styles=styles)
+        with self.assertRaisesRegex(sem.SemanticError, 'AMBIGUOUS_TAB_POSITION'):
+            sem.snapshot(a)
+
+    def test_legacy_zero_alias_with_length_is_not_assumed_equivalent(self):
+        styles = x('<w:styles/>')
+        for attr in ('left', 'right'):
+            with self.subTest(attr=attr):
+                self.assert_same(pack(body=para(pr='<w:ind w:' + attr + 'Chars="0" w:' + attr + '="0"/>'), styles=styles),
+                                 pack(body=para(), styles=styles))
+                self.assert_changed(pack(body=para(pr='<w:ind w:' + attr + 'Chars="0" w:' + attr + '="720"/>'), styles=styles),
+                                    pack(body=para(pr='<w:ind w:' + attr + '="720"/>'), styles=styles))
+
     def test_inherited_font_size_change_is_rejected(self):
         a = pack()
         b = mutate(a, lambda r: r.find('.//' + W + 'sz').set(W + 'val', '22'), 'word/styles.xml')
