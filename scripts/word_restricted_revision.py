@@ -183,9 +183,42 @@ class Driver:
         self.runtime = None
         self.root_identity = None
         self.stage_identity = None
+        self.initial_job = self.protocol.object_bytes(self.protocol.read_pin(plan['initial_job']))
+        self.semantic_policy = self.initial_job.get('tracked_validation')
+        self.semantic_module = None
+        if self.semantic_policy is not None:
+            import word_semantic_contract
+            word_semantic_contract.validate_policy(self.semantic_policy)
+            self.semantic_module = word_semantic_contract
 
     def save(self, name, value):
         return self.base.save(name, value)
+
+    def verify_semantic_views(self, source, name):
+        inputs = {label: self.protocol.read_pin(ref)
+                  for label, ref in self.initial_job['validation_inputs'].items()}
+        source_bytes = self.protocol.read_pin(source)
+        result = self.semantic_module.verify_views(source_bytes, inputs, self.semantic_policy)
+        self.protocol.read_pin(source)
+        for ref in self.initial_job['validation_inputs'].values():
+            self.protocol.read_pin(ref)
+        receipt = self.save(name, dict(result, source=source,
+                            validation_inputs=self.initial_job['validation_inputs'],
+                            policy=self.semantic_policy))
+        self.protocol.need(result['all_pass'], 'TRACKED_SOURCE_VIEW_SEMANTICS_CHANGED')
+        return receipt
+
+    def verify_clean_view(self, saved, label):
+        ref = self.initial_job['validation_inputs'][label]
+        source_bytes, output_bytes = self.protocol.read_pin(ref), self.protocol.read_pin(saved)
+        result = self.semantic_module.compare(source_bytes, output_bytes,
+                  expected_accept=(label == 'accepted'), actual_accept=(label == 'accepted'),
+                  page_fields=self.semantic_policy['page_cache_fields'][label],
+                  require_page_cache=(label == 'accepted'))
+        self.protocol.read_pin(ref); self.protocol.read_pin(saved)
+        receipt = self.save(label + '/source-view-semantics.json', dict(result, source=ref, output=saved))
+        self.protocol.need(result['all_pass'], 'CLEAN_SOURCE_VIEW_SEMANTICS_CHANGED')
+        return receipt
 
     def guard(self):
         row = self.base.guard()
@@ -301,15 +334,32 @@ class Driver:
         self.may_be_open = False
         self.protocol.need(self.protocol.pin(target) == saved, 'REOPEN_CHANGED_SAVED_FILE')
         after = revision_headers(target)
+        semantics = None
+        if self.semantic_module is not None:
+            display = self.semantic_module.revision_display_state(self.protocol.read_pin(saved))
+            self.save(label + '/revision-display-state.json', dict(display, output=saved))
+            self.protocol.need(display['track_revisions'] == (label == 'tracked')
+                               and display['markup_hidden'], 'NATIVE_REVISION_DISPLAY_STATE_CHANGED')
         if label == 'tracked':
-            self.protocol.need(after == before, 'ORIGINAL_REVISION_HEADERS_CHANGED')
+            if self.semantic_module is None:
+                self.protocol.need(after == before, 'ORIGINAL_REVISION_HEADERS_CHANGED')
+            else:
+                self.save(label + '/raw-revision-header-differences.json', {
+                    'before': before, 'after': after, 'equal': after == before,
+                    'policy': self.semantic_policy,
+                    'source_semantics_verification': 'REQUIRED_BEFORE_ACCEPT_REJECT'})
+                semantics = self.verify_semantic_views(saved, label + '/source-view-semantics.json')
         else:
             self.protocol.need(not after, 'NATIVE_REVISION_RESIDUE')
+            if self.semantic_module is not None:
+                semantics = self.verify_clean_view(saved, label)
         output = self.copy(saved, self.plan['revision_outputs'][label])
         self.save(label + '/roundtrip-result.json', {'source': source, 'output': output, 'saved': saved,
                   'stages': receipts, 'owned_document_closed': True,
-                  'original_revision_headers_equal': label == 'tracked',
-                  'source_semantics_verification': 'PENDING_PARENT_SOURCE_CONTRACT', 'zotero_refreshed': False})
+                  'original_revision_headers_equal': label == 'tracked' and after == before,
+                  'source_semantics_verification': ('SOURCE_BOUND_DUAL_VIEW_PASS' if semantics is not None
+                                                    else 'PENDING_PARENT_SOURCE_CONTRACT'),
+                  'semantic_receipt': semantics, 'zotero_refreshed': False})
         return output, saved
 
     def export_pdf(self, service, accepted):
@@ -329,6 +379,9 @@ class Driver:
         self.root.mkdir(exist_ok=False)
         s = self.root.stat(); self.root_identity = [s.st_dev, s.st_ino]
         self.guard()
+        if self.semantic_module is not None:
+            # Reject a known bad new source before launching or querying Word.
+            self.verify_semantic_views(self.plan['input'], 'source-pre-native-semantics.json')
         self.runtime = self.native.load_external('word_runtime', self.plan['service_pins']['word_runtime.py'])
         service = self.native.load_external('word_pdf_service', self.plan['service_pins']['word_pdf_service.py'])
         with ExitStack() as stack:
@@ -368,10 +421,12 @@ class Driver:
                 'pages': result['pages'], 'owned_cleanup': True, 'foreign_observation_preserved': True,
                 'foreign_saved': 'UNKNOWN', 'pending': False, 'legacy_released': False,
                 'zotero_refreshed': False, 'zotero_internal_idle_verified': False,
-                'source_semantics_verification': 'PENDING_PARENT_SOURCE_CONTRACT',
+                'source_semantics_verification': ('SOURCE_BOUND_DUAL_VIEW_PASS' if self.semantic_module is not None
+                                                   else 'PENDING_PARENT_SOURCE_CONTRACT'),
                 'final_paper_acceptance': False, 'service': exported, 'pre': pre, 'post': post})
             return {'status': 'OWNED_REVISION_COMPLETE_WITH_FOREIGN_UNKNOWN', 'ticket': self.args.ticket,
-                    'result': report, 'source_semantics_verification': 'PENDING_PARENT_SOURCE_CONTRACT',
+                    'result': report, 'source_semantics_verification': ('SOURCE_BOUND_DUAL_VIEW_PASS'
+                          if self.semantic_module is not None else 'PENDING_PARENT_SOURCE_CONTRACT'),
                     'final_paper_acceptance': False}
 
     def preserve_failure(self, exc):

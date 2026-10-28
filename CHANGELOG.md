@@ -1,3 +1,31 @@
+## 0.4.77
+
+- Add an explicit source-bound semantic mode for new owned Word revision jobs.
+  Validate accepted and rejected source views before native application loading,
+  after the tracked save/reopen and after each zero-revision clean output.
+  Existing jobs retain the exact revision-header gate and original controllers.
+- Preserve full table structure, inherited paragraph/run formatting, layout and
+  field settings, referenced notes, live fields, custom properties/XML and media. Resolve supported
+  property history in one traversal; unsupported revision shapes fail closed.
+- Honor Word's zero-character indentation reset and inherited nonzero precedence.
+  Accumulate custom tab stops across style/direct layers, apply positional
+  overrides and clear, and reject ambiguous single-layer duplicate positions.
+  Preserve conservative legacy zero-alias length checks and valid serialization.
+- Conservatively retain ordered slot values for unproved cross-layer
+  first-line/hanging and modern/legacy side mixtures. Permit numeric spelling
+  and repeated materialization, but reject hidden slot changes at source and
+  tracked-save boundaries. Refuse hanging-indent/tab-clear interactions pending
+  original native evidence.
+- Permit cache updates only for exactly pinned complex PAGE fields in referenced
+  headers/footers. Protect the instruction and formatting, reject zero/leading
+  zero/nonnumeric caches, and require a nonempty positive final accepted cache.
+  Record raw header differences and native tracking/markup state separately.
+- Keep the ordinary queue, foreign documents, 22GiB floor, no-replay rules and
+  prohibition on Zotero Refresh unchanged. Native pagination and scientific
+  acceptance still require their own evidence.
+- Recognize 0.4.77 only with the unchanged protected ordinary-message driver SHA;
+  retain future-version refusal and all original recovery evidence and budgets.
+
 ## 0.4.76
 
 - Create/validate the canonical private file mailbox after identity precommit
