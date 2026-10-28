@@ -57,6 +57,14 @@ def page(display='', before=''):
 def policy():
     return {'mode': sem.MODE, 'page_cache_fields': {'accepted': [{'story': 'word/footer2.xml', 'ordinal': 0, 'instruction_sha256': hashlib.sha256(PAGE_CODE.encode()).hexdigest()}], 'rejected': []}}
 
+def mixed_indent_styles():
+    return x('<w:styles><w:style w:type="paragraph" w:styleId="Normal" w:default="1"/>'
+             '<w:style w:type="paragraph" w:styleId="Base"><w:pPr>'
+             '<w:ind w:firstLineChars="200" w:firstLine="200"/></w:pPr></w:style>'
+             '<w:style w:type="paragraph" w:styleId="Mixed"><w:basedOn w:val="Base"/>'
+             '<w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:style></w:styles>')
+
+
 class SemanticTests(unittest.TestCase):
     def assert_same(self, a, b, **kwargs):
         self.assertTrue(sem.compare(a, b, **kwargs)['all_pass'])
@@ -142,6 +150,49 @@ class SemanticTests(unittest.TestCase):
         b = pack(body=para(pr='<w:ind w:firstLineChars="200" w:firstLine="360"/>'))
         self.assert_same(a, b)
         self.assert_changed(a, pack(body=para(pr='<w:ind w:firstLineChars="100" w:firstLine="420"/>')))
+
+    def test_cross_layer_first_line_and_hanging_changes_are_conservatively_protected(self):
+        a = pack(body=para(pr='<w:pStyle w:val="Mixed"/><w:ind w:firstLine="420"/>'),
+                 styles=mixed_indent_styles())
+        self.assert_same(a, a)
+        self.assert_changed(a, mutate(a, lambda r: r.find('.//' + W + 'ind').set(W + 'firstLine', '0')))
+        self.assert_changed(a, mutate(a, lambda r: r.find('.//' + W + 'ind').set(W + 'firstLineChars', '100'),
+                                    'word/styles.xml'))
+        self.assert_changed(a, mutate(a, lambda r: r.findall('.//' + W + 'ind')[1].set(W + 'hanging', '360'),
+                                    'word/styles.xml'))
+
+    def test_cross_layer_indent_numeric_serialization_and_noop_materialization_are_equal(self):
+        pr = '<w:pStyle w:val="Mixed"/><w:ind w:firstLine="420"/>'
+        a = pack(body=para(pr=pr), styles=mixed_indent_styles())
+        b = pack(body=para(pr=pr.replace('w:firstLine="420"',
+                            'w:hanging="0720" w:left="+720" w:firstLine="0420"')),
+                 styles=mixed_indent_styles())
+        self.assert_same(a, b)
+
+    def test_cross_layer_modern_and_legacy_side_changes_are_conservatively_protected(self):
+        for legacy, modern in (('left', 'start'), ('right', 'end')):
+            with self.subTest(side=legacy):
+                styles = x('<w:styles><w:style w:type="paragraph" w:styleId="Normal" w:default="1"/>'
+                    '<w:style w:type="paragraph" w:styleId="Side"><w:pPr><w:ind w:' + modern +
+                    '="720"/></w:pPr></w:style></w:styles>')
+                a = pack(body=para(pr='<w:pStyle w:val="Side"/><w:ind w:' + legacy + '="360"/>'),
+                         styles=styles)
+                self.assert_same(a, a)
+                self.assert_changed(a, mutate(a, lambda r: r.find('.//' + W + 'ind').set(W + legacy, '100')))
+
+    def test_same_layer_side_aliases_keep_the_known_precedence(self):
+        styles = x('<w:styles/>')
+        a = pack(body=para(pr='<w:ind w:start="720" w:left="360"/>'), styles=styles)
+        b = pack(body=para(pr='<w:ind w:start="720" w:left="100"/>'), styles=styles)
+        self.assert_same(a, b)
+
+    def test_hanging_tab_clear_interaction_is_unverified_and_refused(self):
+        for attribute in ('hanging', 'hangingChars'):
+            with self.subTest(attribute=attribute):
+                a = pack(body=para(pr='<w:ind w:' + attribute + '="720"/>'
+                    '<w:tabs><w:tab w:val="clear" w:pos="720"/></w:tabs>'), styles=x('<w:styles/>'))
+                with self.assertRaisesRegex(sem.SemanticError, 'HANGING_TAB_CLEAR_PRECEDENCE_UNVERIFIED'):
+                    sem.compare(a, a)
 
     def test_zero_character_indents_cannot_hide_length_changes(self):
         for attr in ('firstLine', 'hanging', 'start', 'end', 'left', 'right'):

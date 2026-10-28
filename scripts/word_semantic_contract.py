@@ -486,6 +486,33 @@ class Package:
             result["legacy_zero_lengths"] = legacy_zero
         return result
 
+    @staticmethod
+    def unresolved_indent_slots(layers):
+        """Retain cross-layer spellings whose Word precedence is unproved."""
+        slots = {"first": ("firstLine", "hanging"),
+                 "left": ("left", "start"), "right": ("right", "end")}
+        result = {}
+        for slot, families in slots.items():
+            state, history, kinds = {}, [], set()
+            for layer in layers:
+                node = None if layer is None else layer.find(W + "ind")
+                if node is None:
+                    continue
+                selected = {local(key): int(value) for key, value in node.attrib.items()
+                            if local(key) in {name + suffix for name in families
+                                              for suffix in ("", "Chars")}}
+                if not selected:
+                    continue
+                kinds.update(name for name in families
+                             if name in selected or name + "Chars" in selected)
+                state.update(selected)
+                # Repeating an already materialized value adds no new state.
+                if not history or state != history[-1]:
+                    history.append(dict(state))
+            if len(history) > 1 and len(kinds) > 1:
+                result[slot] = history
+        return result
+
     def paragraph_properties(self, p, story):
         cached = self._paragraph_cache.get((id(p), story))
         if cached is not None:
@@ -513,6 +540,18 @@ class Package:
             result.setdefault(name, "UNSPECIFIED" if name in P_UNSPECIFIED
                               else name in P_DEFAULT_TRUE)
         result["ind"] = self.indent(combined.get("ind"))
+        indent_layers = layers[:-1] + ([number["properties"]] if number is not None else []) + [direct]
+        indent_node = combined.get("ind")
+        hanging = indent_node is not None and any(
+            int(indent_node.get(W + name, "0")) != 0 for name in ("hanging", "hangingChars"))
+        if hanging:
+            # The implicit hanging stop's interaction with clear is unproved.
+            need(not any(tab.get(W + "val") == "clear" for layer in indent_layers
+                         if layer is not None for tab in layer.findall(W + "tabs/" + W + "tab")),
+                 "HANGING_TAB_CLEAR_PRECEDENCE_UNVERIFIED")
+        unresolved = self.unresolved_indent_slots(indent_layers)
+        if unresolved:
+            result["unresolved_indent_slots"] = unresolved
         if number is not None:
             result["numbering"] = {k: number[k] for k in ("num_id", "level", "definition")}
         self._paragraph_cache[(id(p), story)] = result

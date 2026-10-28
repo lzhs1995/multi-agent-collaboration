@@ -11,6 +11,11 @@
   Accumulate custom tab stops across style/direct layers, apply positional
   overrides and clear, and reject ambiguous single-layer duplicate positions.
   Preserve conservative legacy zero-alias length checks and valid serialization.
+- Conservatively retain ordered slot values for unproved cross-layer
+  first-line/hanging and modern/legacy side mixtures. Permit numeric spelling
+  and repeated materialization, but reject hidden slot changes at source and
+  tracked-save boundaries. Refuse hanging-indent/tab-clear interactions pending
+  original native evidence.
 - Permit cache updates only for exactly pinned complex PAGE fields in referenced
   headers/footers. Protect the instruction and formatting, reject zero/leading
   zero/nonnumeric caches, and require a nonempty positive final accepted cache.

@@ -359,6 +359,28 @@ class OwnedRevisionTests(unittest.TestCase):
             part = 'word/document.xml'
             def change(tree):
                 tree.find('.//' + semantics.W + 'ind').set(semantics.W + 'firstLine', '0')
+        elif kind == 'hanging-clear':
+            job, _ref = self.semantic_job(extra_pr='<w:ind w:hanging="720"/>',
+                                         styles=semantic_fixtures.x('<w:styles/>'))
+            part = 'word/document.xml'
+            def change(tree):
+                tree.find('.//' + semantics.W + 'pPr').append(semantic_fixtures.x(
+                    '<w:tabs><w:tab w:val="clear" w:pos="720"/></w:tabs>'))
+        elif kind in {'mixed-first', 'mixed-character', 'mixed-side'}:
+            styles = semantic_fixtures.mixed_indent_styles()
+            extra = '<w:pStyle w:val="Mixed"/><w:ind w:firstLine="420"/>'
+            part = 'word/styles.xml' if kind == 'mixed-character' else 'word/document.xml'
+            attribute = 'firstLineChars' if kind == 'mixed-character' else 'firstLine'
+            if kind == 'mixed-side':
+                styles = semantic_fixtures.x('<w:styles><w:style w:type="paragraph" w:styleId="Normal" w:default="1"/>'
+                    '<w:style w:type="paragraph" w:styleId="Mixed"><w:pPr><w:ind w:start="720"/></w:pPr>'
+                    '</w:style></w:styles>')
+                extra = '<w:pStyle w:val="Mixed"/><w:ind w:left="360"/>'
+                attribute = 'left'
+            job, _ref = self.semantic_job(extra_pr=extra, styles=styles)
+            def change(tree):
+                tree.find('.//' + semantics.W + 'ind').set(semantics.W + attribute,
+                    '0' if kind == 'mixed-first' else '100')
         else:
             # Only the target paragraph uses this style. Unrelated table-cell
             # paragraphs must not catch the mutation and mask a broken merge.
@@ -376,12 +398,15 @@ class OwnedRevisionTests(unittest.TestCase):
         ref = self.f.write('formatting-source-job.json', job)
         plan, plan_ref = self.plan(job, ref, kind)
         driver = self.driver(plan, plan_ref)
+        error = semantics.SemanticError if kind == 'hanging-clear' else ResourceBusy
+        reason = ('HANGING_TAB_CLEAR_PRECEDENCE_UNVERIFIED' if kind == 'hanging-clear'
+                  else 'TRACKED_SOURCE_VIEW_SEMANTICS_CHANGED')
         if not after_save:
             with (patch.object(pdf, 'load_external') as external,
                   patch.object(driver, 'bind_apps') as bind,
                   patch.object(driver.base, 'observe', side_effect=AssertionError('format change reached native PRE')),
                   patch.object(revision.subprocess, 'run') as native_call):
-                with self.assertRaisesRegex(ResourceBusy, 'TRACKED_SOURCE_VIEW_SEMANTICS_CHANGED'):
+                with self.assertRaisesRegex(error, reason):
                     driver.execute()
             self.assertEqual(external.call_count, 0)
             self.assertEqual(bind.call_count, 0)
@@ -398,7 +423,7 @@ class OwnedRevisionTests(unittest.TestCase):
                     change(tree)
                     parts[part] = tree
             with patch.object(revision.subprocess, 'run', side_effect=self.semantic_native(plan, calls, corrupt=corrupt)):
-                with self.assertRaisesRegex(ResourceBusy, 'TRACKED_SOURCE_VIEW_SEMANTICS_CHANGED'):
+                with self.assertRaisesRegex(error, reason):
                     driver.roundtrip('tracked', job['input'])
             self.assertEqual(calls, [('tracked', stage) for stage in revision.STAGES])
         self.assertFalse(Path(plan['revision_outputs']['tracked']).exists())
@@ -416,6 +441,30 @@ class OwnedRevisionTests(unittest.TestCase):
 
     def test_semantic_saved_inherited_tab_change_stops_before_accept_reject(self):
         self.formatting_failure('tabs', after_save=True)
+
+    def test_semantic_cross_layer_first_line_change_is_blocked_before_native(self):
+        self.formatting_failure('mixed-first', after_save=False)
+
+    def test_semantic_cross_layer_character_change_is_blocked_before_native(self):
+        self.formatting_failure('mixed-character', after_save=False)
+
+    def test_semantic_cross_layer_side_change_is_blocked_before_native(self):
+        self.formatting_failure('mixed-side', after_save=False)
+
+    def test_semantic_saved_cross_layer_first_line_change_stops_before_accept_reject(self):
+        self.formatting_failure('mixed-first', after_save=True)
+
+    def test_semantic_saved_cross_layer_character_change_stops_before_accept_reject(self):
+        self.formatting_failure('mixed-character', after_save=True)
+
+    def test_semantic_saved_cross_layer_side_change_stops_before_accept_reject(self):
+        self.formatting_failure('mixed-side', after_save=True)
+
+    def test_semantic_hanging_tab_clear_is_blocked_before_native(self):
+        self.formatting_failure('hanging-clear', after_save=False)
+
+    def test_semantic_saved_hanging_tab_clear_stops_before_accept_reject(self):
+        self.formatting_failure('hanging-clear', after_save=True)
 
     def test_semantic_roundtrip_accepts_header_reserialization_with_both_views_intact(self):
         job, ref = self.semantic_job(); plan, plan_ref = self.plan(job, ref)

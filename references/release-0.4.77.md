@@ -20,6 +20,11 @@ with nonzero lengths and ambiguous duplicate positions remain conservative.
 Endpoint and actual driver controls reject format changes before native loading
 and before tracked output can proceed to accept/reject.
 
+Unproved cross-layer first-line/hanging and modern/legacy side mixtures retain
+ordered cumulative slot values, permitting numeric spelling and duplicate
+materialization only. Active hanging indents with explicit tab clears refuse
+until their implicit-stop precedence is established by native evidence.
+
 This does not reopen the failed original CMA ticket, authorize Zotero Refresh,
 change ordinary FIFO or release foreign documents. Native rendering, actual
 adoption and scientific acceptance require separate evidence. Existing attempts

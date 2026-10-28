@@ -56,12 +56,20 @@ Character-unit indentation follows Word's
 [MS-OI29500 2.1.44 implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/138732dc-507a-4164-af66-808c2fd9f2f9):
 a zero `startChars`, `endChars`, `firstLineChars` or `hangingChars` clears
 earlier values of that attribute and leaves the applicable length indent in
-effect. An inherited nonzero character indent still overrides a later length
-value; changing only that overridden length can be a valid serialization.
+effect. Within one indent spelling, an inherited nonzero character indent still
+overrides a later length value; changing only that overridden length can be a
+valid serialization.
 The note does not establish the zero behavior of legacy `leftChars`/`rightChars`.
 Their coexistence with nonzero legacy lengths remains conservatively compared;
 it is not treated as equivalent to deleting those zero aliases. Pure zero
 defaults and nonzero-character serialization equivalences remain supported.
+
+When `firstLine` and `hanging` spellings occur across different layers, their
+cross-slot precedence has not been proved. The contract additionally retains
+the ordered cumulative values in that slot, with numeric spelling normalized
+and repeated identical values collapsed. It conservatively refuses changes to
+an earlier or later slot value instead of asserting which one Word renders.
+The same protection applies to cross-layer modern/legacy side aliases.
 
 [Custom tab stops are additive through the style hierarchy](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.tabs?view=openxml-3.0.1).
 The comparison accumulates positions, applies later definitions at the same
@@ -69,8 +77,10 @@ position, and lets `clear` remove only its position. Empty tabs retain inherited
 stops; a materialized equivalent set and numeric/order serialization compare
 equally. Conflicting duplicate positions in one layer, unknown tab content and
 Word positions outside its documented -31680 to 31680 twip range refuse rather
-than losing properties. Hanging indentation remains independently protected,
-including its implicit tab-stop effect.
+than losing properties. Hanging indentation remains independently protected.
+An active hanging indent combined with any explicit `clear` tab refuses with
+`HANGING_TAB_CLEAR_PRECEDENCE_UNVERIFIED`: its implicit-stop/clear interaction
+needs original native evidence before that shape can be normalized.
 
 Layout/field settings and webSettings are retained. Revision-session ids, proof
 state, zoom, document ids and the save template's tracking/markup controls are
