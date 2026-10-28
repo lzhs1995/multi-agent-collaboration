@@ -9,7 +9,7 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.77.** Ready messages may be sent directly in either direction,
+**Version: 0.4.78.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
@@ -17,6 +17,14 @@ original receiver transcript proves reception. Do not repaste an uncertain
 message; at most one recorded extra Enter may recover residual input after compaction ends.
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
+
+A separate prospective observer joins hash and complete Read results across
+immediate consecutive Claude requests, retaining every parallel result and the
+actual canonical batch hashes. It records APFS device observations separately
+from stable inode/path/byte checks. The original v1 observer and native-user
+receipt contract remain unchanged. This read-only class sends nothing and
+grants no old-task acceptance or resource authority. See
+[sequential context evidence](references/model-context-sequential.md).
 
 An original .75 owned revision that completed its tracked save/close/reopen
 round trip and stopped on `ORIGINAL_REVISION_HEADERS_CHANGED` has a separate
