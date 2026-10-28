@@ -1,3 +1,15 @@
+## 0.4.78
+
+- Add a separate opt-in sequential context observer for complete immediate
+  request/result batches, exact measured hash/size and the full native Read.
+- Reject omitted parallel results, skipped causal edges, duplicate identities,
+  failed calls, partial reads, false echoes and unproven version transitions.
+- Retain canonical inode/prefix/tail/byte checks while recording APFS device
+  observations separately; leave the old native reader and v1 checker unchanged.
+- Reproduce the original frozen R76 two-batch hashes without another live window
+  or old-attempt mutation. Native receipts, u21 acceptance and efficiency remain
+  separate. Recognize only the unchanged exact .78 protected-message driver.
+
 ## 0.4.77
 
 - Add an explicit source-bound semantic mode for new owned Word revision jobs.

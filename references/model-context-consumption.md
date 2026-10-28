@@ -1,5 +1,9 @@
 # Separate Claude model-context consumption evidence
 
+For a separately bound prospective policy spanning immediate requests, see
+[the sequential observer](model-context-sequential.md). The v1 checker described
+below remains unchanged and cannot reclassify an original failed observation.
+
 The read-only `scripts/model_context_consumption.py` verifies one complete,
 originally bound Claude 2.1.303 MESSAGE_REFERENCE_V2 notice and body chain. Its
 `MODEL_CONTEXT_CONSUMED` observation is distinct from `NATIVE_USER_RECEIVED`.
