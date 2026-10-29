@@ -1,3 +1,21 @@
+## 0.4.81
+
+- Repair A1 for busy-lane late results by matching the real pre-fence call in
+  the original SHA-verified transcript prefix. Stream the prefix hash under the
+  same ten-second budget and retain at most 8 MiB of complete prior records.
+  Load this context only when an in-window result lacks an in-window call.
+- Keep the notice's selected responses and complete canonical result batch
+  separate from prior-call provenance. Unknown calls, duplicate IDs, foreign
+  parent/source/session, missing parallel results and resealed subsets refuse.
+- Add eight full-consumer controls, including the original fence boundary,
+  ordered/inverted chains, public CLI, prior-call identity and bounded evidence.
+  All 18 existing causal controls and 33 sequential controls retain their
+  assertions; the original observer implementations remain unchanged.
+- Preserve the old .80 publication and u24 evidence. R204 establishes a native
+  pre-fence-call/post-fence-result shape, not a new .80/u24 observer verdict.
+  Register .81 only with the unchanged exact ordinary-message driver SHA;
+  changed bytes and the next unreviewed version remain refused.
+
 ## 0.4.80
 
 - Add the separate read-only `MODEL_CONTEXT_CAUSALLY_CONSUMED` evidence class

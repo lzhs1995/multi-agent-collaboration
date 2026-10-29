@@ -36,6 +36,147 @@ class CausalOrderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, reason):
             self.check(events)
 
+    def pin_prefix(self, prefix):
+        f = self.fixture.fixture
+        f.prefix = prefix
+        tail_at = max(0, len(prefix) - 4096)
+        for pin in (f.pin, f.binding["transcript"], f.fence["transcript"]):
+            pin.update(offset=len(prefix), prefix_size=len(prefix),
+                       prefix_sha256=sequential.digest(prefix), tail_at=tail_at,
+                       tail_sha256=sequential.digest(prefix[tail_at:]))
+        f.refresh_fence()
+
+    def inflight_window(self, events=None):
+        f = self.fixture.fixture
+        # R204's native shape: the call ends exactly at the original fence;
+        # its same-session/parent/source result arrives in the fenced window.
+        call = f.assistant("request-prefence", "call-prefence", [
+            dict(type="tool_use", id="tool-prefence", name="Read",
+                 input={"file_path": "/unrelated/in-flight.txt"})])
+        call["timestamp"] = "2026-10-29T17:08:47.088Z"
+        self.pin_prefix(f.prefix + raw(call))
+        result = f.event("user", uuid="result-prefence", parentUuid=call["uuid"],
+            sourceToolAssistantUUID=call["uuid"], timestamp="2026-10-29T17:13:39.166Z",
+            message=dict(role="user", content=[dict(type="tool_result",
+                tool_use_id="tool-prefence", content="unrelated result", is_error=False)]),
+            toolUseResult={"interrupted": False})
+        events = copy.deepcopy(self.events if events is None else events)
+        events.insert(1, result)
+        return events
+
+    def file_check(self, events, *, legacy=False):
+        f = self.fixture.fixture
+        f.events = events
+        attempt, notice = f.write_original_attempt()
+        before = {str(p): p.read_bytes() for p in f.home.rglob("*") if p.is_file()}
+        observer = sequential if legacy else causal
+        with patch("subprocess.run", side_effect=AssertionError("read-only observer")):
+            value = observer.observe_attempt(str(attempt), sequential.digest(attempt.read_bytes()),
+                                             str(notice), snapshot_end=f.transcript.stat().st_size)
+        self.assertEqual(before, {str(p): p.read_bytes() for p in f.home.rglob("*") if p.is_file()})
+        return value
+
+    def test_full_fence_inflight_result_preserves_ordered_consumption_and_original_default(self):
+        events = self.inflight_window()
+        value = self.file_check(events)
+        self.assertEqual(value["observation"], "MODEL_CONTEXT_CAUSALLY_CONSUMED")
+        self.assertTrue(value["body_full_read"])
+        self.assertEqual(value["parallel_tool_results"], 2)
+        self.assertEqual(value["pre_fence_context"]["matched_result_count"], 1)
+        witness = value["pre_fence_context"]["matches"][0]
+        self.assertEqual(witness["call"]["offset"] + witness["call"]["bytes"],
+                         self.fixture.fixture.pin["offset"])
+        self.assertGreaterEqual(witness["result"]["offset"], self.fixture.fixture.pin["offset"])
+        self.assertTrue(all(p["offset"] >= self.fixture.fixture.pin["offset"]
+                            for p in value["proof_slices"]))
+        self.assertFalse(value["historical_window_reclassified"])
+        self.assertEqual(value["input_operations"], 0)
+        self.assertEqual(self.file_check(events, legacy=True)["observation"],
+                         "MODEL_CONTEXT_SEQUENTIALLY_CONSUMED")
+
+    def test_full_fence_inflight_result_allows_causal_order_without_reclassifying_sequential(self):
+        events = self.inflight_window(self.inverted())
+        value = self.file_check(events)
+        self.assertTrue(value["body_full_read"])
+        self.assertTrue(all(not b["result_file_order_between_requests"]
+                            for b in value["sequential_batches"]))
+        with self.assertRaisesRegex(ValueError, "SUCCESSFUL_ORDERED_NATIVE_RESULT"):
+            self.file_check(events, legacy=True)
+
+    def test_prefence_witness_cannot_hide_a_deleted_parallel_call_and_resealed_subset(self):
+        events = self.fixture.add_parallel(copy.deepcopy(self.events))
+        events = self.inflight_window(events)
+        events = [e for e in events if e.get("uuid") != "call-extra"]
+        following = next(e for e in events if e.get("id") == "request-two")
+        read = next(e for e in events if e.get("uuid") == "result-read")
+        following["tail"] = [self.fixture.batch_hash([read])]
+        with self.assertRaisesRegex(ValueError, "UNASSOCIATED_OR_DUPLICATE_NATIVE_CALL"):
+            self.file_check(events)
+
+    def test_prefence_result_cannot_claim_selected_tool_parent_or_source(self):
+        original_events = self.inflight_window()
+        for field in ("tool_use_id", "parentUuid", "sourceToolAssistantUUID"):
+            events = copy.deepcopy(original_events)
+            result = next(e for e in events if e.get("uuid") == "result-prefence")
+            if field == "tool_use_id":
+                result["message"]["content"][0][field] = "tool-read"
+            else:
+                result[field] = "call-read"
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.file_check(events)
+
+    def test_ambiguous_prefence_tool_id_is_not_an_unrelated_result_exemption(self):
+        events = self.inflight_window()
+        f = self.fixture.fixture
+        prefix = f.prefix
+        for change in ("tool_id", "record_uuid"):
+            call = f.assistant("request-other", "call-prefence-duplicate", [
+                dict(type="tool_use", id="tool-prefence", name="Read",
+                     input={"file_path": "/other.txt"})])
+            if change == "record_uuid":
+                call["uuid"] = "call-prefence"
+                call["message"]["content"][0]["id"] = "other-tool"
+            self.pin_prefix(prefix + raw(call))
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.file_check(events)
+
+    def test_inflight_witness_does_not_relax_selected_parallel_results_or_complete_tail(self):
+        original_events = self.inflight_window(self.fixture.add_parallel(copy.deepcopy(self.events)))
+        for change in ("missing", "duplicate", "foreign", "subset"):
+            events = copy.deepcopy(original_events)
+            extra = next(e for e in events if e.get("uuid") == "result-extra")
+            if change == "missing":
+                events.remove(extra)
+            elif change == "duplicate":
+                events.append(copy.deepcopy(extra))
+            elif change == "foreign":
+                extra["sourceToolAssistantUUID"] = "foreign"
+            else:
+                following = next(e for e in events if e.get("id") == "request-two")
+                read = next(e for e in events if e.get("uuid") == "result-read")
+                following["tail"] = [self.fixture.batch_hash([read])]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.file_check(events)
+
+    def test_foreign_or_error_prefence_call_cannot_exempt_an_orphan(self):
+        events = self.inflight_window()
+        f = self.fixture.fixture
+        prefix = [json.loads(line) for line in f.prefix.splitlines()]
+        for field, changed in (("sessionId", TARGET), ("session_id", TARGET),
+                               ("version", "unmeasured"), ("isSidechain", True),
+                               ("isMeta", True), ("isApiErrorMessage", True)):
+            source = copy.deepcopy(prefix)
+            source[-1][field] = changed
+            self.pin_prefix(b"".join(raw(obj) for obj in source))
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "PINNED_PRE_FENCE_RESULT"):
+                self.file_check(events)
+
+    def test_clipped_prefence_call_remains_unverified_within_the_context_limit(self):
+        events = self.inflight_window()
+        with patch.object(causal, "MAX_PRE_FENCE_BYTES", 32):
+            with self.assertRaisesRegex(ValueError, "UNASSOCIATED_OR_DUPLICATE_NATIVE_CALL"):
+                self.file_check(events)
+
     def test_inverted_full_read_and_hash_batches_have_a_separate_evidence_class(self):
         value = self.check(self.inverted())
         self.assertEqual(value["observation"], "MODEL_CONTEXT_CAUSALLY_CONSUMED")
@@ -169,7 +310,7 @@ class CausalOrderTests(unittest.TestCase):
 
     def test_public_cli_is_readonly_and_preserves_original_attempt_and_default(self):
         f = self.fixture.fixture
-        f.events = self.inverted()
+        f.events = self.inflight_window(self.inverted())
         attempt, notice = f.write_original_attempt()
         before = {str(p): p.read_bytes() for p in f.home.rglob("*") if p.is_file()}
         args = ["--attempt", str(attempt), "--attempt-sha256",
@@ -195,4 +336,3 @@ class CausalOrderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

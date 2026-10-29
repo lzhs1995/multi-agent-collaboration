@@ -106,11 +106,11 @@ class SequentialConsumptionTests(unittest.TestCase):
         driver = (root / 'scripts/cmux_message_journal.py').read_bytes()
         self.assertEqual(original.digest(driver), recovery.DRIVER_SHA256)
         (source / 'scripts/cmux_message_journal.py').write_bytes(driver)
-        for version in ('0.4.78', '0.4.79', '0.4.80'):
+        for version in ('0.4.78', '0.4.79', '0.4.80', '0.4.81'):
             (source / 'VERSION').write_bytes((version + '\n').encode())
             value = recovery.original_driver(source, original.evidence)
             self.assertEqual(value['version'], version)
-        (source / 'VERSION').write_bytes(b'0.4.81\n')
+        (source / 'VERSION').write_bytes(b'0.4.82\n')
         with self.assertRaisesRegex(ValueError, 'UNSUPPORTED_ORIGINAL_DRIVER'):
             recovery.original_driver(source, original.evidence)
         (source / 'VERSION').write_bytes(b'0.4.78\n')

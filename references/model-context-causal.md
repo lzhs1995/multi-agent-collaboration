@@ -34,6 +34,24 @@ remain one complete 8 MiB snapshot, eight batches, 32 tools per batch and the
 checked ten-second compute/read budget. There is no waiting loop or automatic
 registration. Installing source does not prove live consumer adoption.
 
+From .81, a tool result whose call preceded the original paste fence can be
+disambiguated through that exact transcript prefix. The observer streams and
+checks its captured prefix SHA under the same ten-second budget, retaining at
+most the last 8 MiB of complete pre-fence records. This context is loaded only
+when an in-window result has no in-window call. A unique non-error native call
+must match the result's tool ID, session, version and parent/source UUIDs.
+Prior-call matches are published separately in `pre_fence_context`, outside
+the notice's `proof_slices` and complete canonical result batches. They grant
+no receipt, task acceptance or resource action. A call absent or clipped from
+this bounded context remains unverified; unrelatedness is never inferred merely
+from an unknown ID or parent. Unknown/duplicate calls and resealed subsets keep
+their original refusal checks. The v1 and sequential implementations are unchanged.
+
+R204 independently found this boundary shape in u24 Claude A: the real call
+ends exactly at its original fence and its same-parent/source result follows
+the fence. That observation does not run .80 against u24, identify the cause of
+its old .78 verdict or change its result/controller/window.
+
 The four frozen u24 records verify the component batch join and its rejection
 of wrong base, wrong parent and missing whole-batch SHA. The local
 `verification/check_causal_real_cases.py` accepts their exact report path and
