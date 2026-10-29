@@ -100,7 +100,7 @@ def _responses(records, request, end, expected):
     return rows
 
 
-def correlate(records, binding, fence, wire, body_ref, body_raw, *, budget=None):
+def correlate(records, binding, fence, wire, body_ref, body_raw, *, budget=None, batch_join=None):
     """Join every immediate request and its whole actual parallel result batch."""
     budget = budget or Budget()
     budget.check()
@@ -179,21 +179,27 @@ def correlate(records, binding, fence, wire, body_ref, body_raw, *, budget=None)
                  and selected[2].get('querySource') == 'repl_main_thread'
                  and isinstance(selected[2].get('tail'), list), 'MEASURED_MAIN_THREAD_REQUEST_REQUIRED')
         need(following[2].get('base') == request[2]['id'], 'IMMEDIATE_CAUSAL_REQUEST_BASE_REQUIRED')
-        responses = _responses(records, request, following[0], expected)
-        calls = [(item, block) for item in responses for block in blocks(item[2])
-                 if block.get('type') == 'tool_use']
+        if batch_join is None:
+            responses = _responses(records, request, following[0], expected)
+            calls = [(item, block) for item in responses for block in blocks(item[2])
+                     if block.get('type') == 'tool_use']
+            joined_results = None
+        else:
+            responses, calls, joined_results = batch_join(
+                records, request, following, expected, budget=budget)
         need(0 < len(calls) <= MAX_TOOLS, 'BOUNDED_COMPLETE_TOOL_BATCH_REQUIRED')
         for item in responses:
             need(item[2]['uuid'] not in seen_uuids, 'DUPLICATE_NATIVE_RECORD_UUID_REFUSED')
             seen_uuids.add(item[2]['uuid'])
         results = []
-        for call, block in calls:
+        for call_index, (call, block) in enumerate(calls):
             budget.check()
             identity = block.get('id')
             need(isinstance(identity, str) and identity and identity not in seen_tools
                  and isinstance(block.get('input'), dict), 'UNIQUE_NATIVE_TOOL_IDS_REQUIRED')
             seen_tools.add(identity)
-            result = native_result(call, block, following)
+            result = (native_result(call, block, following) if joined_results is None
+                      else joined_results[call_index])
             results.append(result)
             input = block['input']
             if block.get('name') == 'Read' and input.get('file_path') == body_ref['path']:
@@ -207,11 +213,12 @@ def correlate(records, binding, fence, wire, body_ref, body_raw, *, budget=None)
                 _hash_result(result, body_ref)
                 hash_seen = result
         results.sort(key=lambda result: (result[0][0], result[1]))
-        actual_results = [(item[0], block_index) for item in records
-            if request[0] < item[0] < following[0] and item[2].get('type') == 'user'
-            for block_index, block in enumerate(blocks(item[2])) if block.get('type') == 'tool_result']
-        need(actual_results == [(item[0], block_index) for item, block_index, _block in results],
-             'EVERY_ACTUAL_PARALLEL_RESULT_REQUIRED')
+        if batch_join is None:
+            actual_results = [(item[0], block_index) for item in records
+                if request[0] < item[0] < following[0] and item[2].get('type') == 'user'
+                for block_index, block in enumerate(blocks(item[2])) if block.get('type') == 'tool_result']
+            need(actual_results == [(item[0], block_index) for item, block_index, _block in results],
+                 'EVERY_ACTUAL_PARALLEL_RESULT_REQUIRED')
         result_rows = {item[0]: item for item, _index, _block in results}
         for item in result_rows.values():
             need(item[2]['uuid'] not in seen_uuids, 'DUPLICATE_NATIVE_RECORD_UUID_REFUSED')
@@ -235,6 +242,8 @@ def correlate(records, binding, fence, wire, body_ref, body_raw, *, budget=None)
                 seen_uuids.add(item[2]['uuid'])
             proof.extend(final)
             proof_end = final[-1][0] + len(final[-1][1])
+            if batch_join is not None:
+                proof_end = max(item[0] + len(item[1]) for item in proof)
             for item in records:
                 budget.check()
                 obj = item[2]
@@ -294,7 +303,7 @@ def _check_transcript(stream, binding):
     return min(held.st_size, named.st_size), [held.st_dev, named.st_dev]
 
 
-def observe_attempt(attempt_path, attempt_sha256, text_file, *, snapshot_end=None):
+def observe_attempt(attempt_path, attempt_sha256, text_file, *, snapshot_end=None, correlator=None):
     budget = Budget()
     raw, attempt_identity, attempt_devices = _snapshot(attempt_path, original.evidence.MAX_EVIDENCE_BYTES)
     need(digest(raw) == attempt_sha256, 'EXACT_ORIGINAL_ATTEMPT_PIN_REQUIRED')
@@ -320,7 +329,8 @@ def observe_attempt(attempt_path, attempt_sha256, text_file, *, snapshot_end=Non
         snapshot = stream.read(end - start)
         budget.check()
         records = original.parsed_records(snapshot, start)
-        result = correlate(records, binding, fence, wire, body_ref, body_raw, budget=budget)
+        result = (correlate if correlator is None else correlator)(
+            records, binding, fence, wire, body_ref, body_raw, budget=budget)
         _size, after_devices = _check_transcript(stream, bound)
         stream.seek(start)
         need(stream.read(end - start) == snapshot, 'ORIGINAL_RECORDS_CHANGED_DURING_OBSERVATION')

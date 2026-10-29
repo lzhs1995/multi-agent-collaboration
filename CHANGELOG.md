@@ -1,3 +1,20 @@
+## 0.4.80
+
+- Add the separate read-only `MODEL_CONTEXT_CAUSALLY_CONSUMED` evidence class
+  for immediate native request/result batches whose file append order differs
+  from their causal order. Require exact request base/ref, unique tool and
+  record IDs, matching parent/source UUIDs and the whole canonical batch SHA
+  exactly once in the next request tail.
+- Retain every parallel result and reject missing, failed, interrupted,
+  conflicting or unassociated records. Reuse full-body, hash, transcript and
+  finite-budget validation; keep the original observers as the defaults.
+- Preserve 18 causal and 33 sequential checks and four frozen native batch
+  regressions with wrong-base, wrong-parent and missing-whole-batch controls.
+  Component regressions do not reclassify old windows or prove full-body
+  consumption, task acceptance, application recovery or resource release.
+- Register only the unchanged ordinary-message driver bytes for this release;
+  altered bytes and the next unreviewed release remain refused.
+
 ## 0.4.79
 
 - Recognize the exact measured `ultracode` upper input rule for authenticated

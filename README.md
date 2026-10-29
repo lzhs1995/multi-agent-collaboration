@@ -1,4 +1,12 @@
-# Current release: 0.4.79
+# Current release: 0.4.80
+
+The separate prospective model-context observer joins complete native result
+batches by immediate request `base`, response `requestRef`, tool IDs and
+parent/source UUIDs, even when results append after the following request.
+The whole canonical batch SHA must occur exactly once in that request's
+`tail`. The original observers and historical task results retain their
+contracts. See [0.4.80](references/release-0.4.80.md) and the
+[causal observer](references/model-context-causal.md).
 
 Protected terminal delivery recognizes the measured Claude 2.1.303 `ultracode`
 empty input frame. Its complete upper and lower rules must have the same width,
