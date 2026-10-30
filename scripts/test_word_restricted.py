@@ -27,6 +27,10 @@ class RestrictedWordTests(unittest.TestCase):
         groups=patch.object(protocol,'group_alive',return_value=False);groups.start();self.addCleanup(groups.stop)
         self.admin=self.actor();self.successor=self.actor();self.owner_session=str(uuid.uuid4())
         who=patch.object(protocol,'native_identity',return_value=self.admin);self.identity=who.start();self.addCleanup(who.stop)
+        # Private queue fixtures model their own output volume. Production
+        # disk observations are exercised separately by the admission controls.
+        space=patch.object(protocol,'disk_free_bytes',return_value=protocol.FLOOR)
+        self.disk=space.start();self.addCleanup(space.stop)
         self.lock_paths=[self.user/'.cache/wordrev/word-automation.lock',self.user/'.cmuxterm/locks/desktop-focus.lock']
         for path in self.lock_paths:path.parent.mkdir(parents=True,exist_ok=True);path.touch()
         self.legacy=Broker(self.root);self.addCleanup(self.legacy.db.close)

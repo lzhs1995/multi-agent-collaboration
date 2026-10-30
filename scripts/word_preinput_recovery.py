@@ -52,6 +52,18 @@ AX_DRIVERS = {
 }
 WORD_TIMEOUT_PROFILE = 'WORD_TIMEOUT_0472'
 AX_REFERENCE_PROFILE = 'SYSTEM_EVENTS_WINDOW_REFERENCE_0473'
+DISK_REASON = 'WORD_DISK_ADMISSION_CHANGED'
+DISK_PROFILE = 'WORD_DISK_ADMISSION_0482'
+# Exact complete .82 tree used by the original failed child. A similar
+# diagnostic from another controller cannot acquire this closeout profile.
+DISK_SOURCE_COUNT = 431
+DISK_SOURCE_BYTES = 6136596
+DISK_SOURCE_DIGEST = '9650c58412f6e1dea977d5aa5070888374893b996793c8bc1929dbd2b51c14d5'
+DISK_DRIVERS = {
+    'word_restricted_broker.py': '055a08eccdad3f877f336cb488bb9cbd1af29135aaef08454be406cfa26e3120',
+    'word_restricted_pdf.py': '80e26376616ec47b139afc7ab7e09fa1d8c4541bb6d41cf38a04b813e5b777d4',
+    'word_restricted_revision.py': '19bee4a11d167c358856ab585de0de2757b4ec92f017df973d533d6033db044b',
+}
 # Only this observed failure expression in the fixed original read-only script.
 # It is not a diagnosis of a permanent AX permission problem or a proven race.
 AX_REFERENCE_DIAGNOSTIC = ('System Events發生錯誤：無法取得「window "文件1  -  已復原" '
@@ -71,7 +83,14 @@ def verify_ax_source(plan):
         release='0473', profile=AX_REFERENCE_PROFILE)
 
 
-def verify_published_inventory_source(plan, *, count, total, tree, drivers, release, profile):
+def verify_disk_source(plan):
+    return verify_published_inventory_source(plan, count=DISK_SOURCE_COUNT,
+        total=DISK_SOURCE_BYTES, tree=DISK_SOURCE_DIGEST, drivers=DISK_DRIVERS,
+        release='0482', profile=DISK_PROFILE, reason=DISK_REASON)
+
+
+def verify_published_inventory_source(plan, *, count, total, tree, drivers, release, profile,
+                                      reason=INVENTORY_REASON):
     """Read a complete published original tree; never import or patch it."""
     import executor_reask_protocol as releases
     source = Path(plan['controller_source'])
@@ -113,7 +132,7 @@ def verify_published_inventory_source(plan, *, count, total, tree, drivers, rele
                       for name, sha in drivers.items()),
                   'SUPPORTED_ORIGINAL_PREINPUT_DRIVER_REQUIRED')
     return dict(members=len(files), source=str(source), published_tree_sha256=tree,
-                critical_drivers=drivers, preinput_reason=INVENTORY_REASON, failure_profile=profile)
+                critical_drivers=drivers, preinput_reason=reason, failure_profile=profile)
 
 
 def verify_original_source(plan):
@@ -124,6 +143,10 @@ def verify_original_source(plan):
     if source != expected:
         pins = plan['controller_pins']
         protocol.need(isinstance(pins, dict), 'COMPLETE_ORIGINAL_CONTROLLER_REQUIRED')
+        revision_pin = pins.get('word_restricted_revision.py')
+        if (isinstance(revision_pin, dict) and
+                revision_pin.get('sha256') == DISK_DRIVERS['word_restricted_revision.py']):
+            return verify_disk_source(plan)
         inventory_pin = pins.get('word_restricted_inventory.py')
         if (isinstance(inventory_pin, dict) and
                 inventory_pin.get('sha256') == AX_DRIVERS['word_restricted_inventory.py']):

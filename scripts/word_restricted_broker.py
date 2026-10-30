@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -35,6 +36,20 @@ VALIDATOR_PINS = {
 def need(condition, reason):
     if not condition:
         raise ResourceBusy(reason)
+
+
+def disk_free_bytes(plan):
+    """Observe the actual output volume before consuming a new run budget."""
+    try:
+        free = shutil.disk_usage(Path(plan['evidence_root']).parent).free
+    except OSError as exc:
+        raise ResourceBusy('WORD_DISK_ADMISSION_UNAVAILABLE') from exc
+    need(type(free) is int and free >= 0, 'WORD_DISK_ADMISSION_UNAVAILABLE')
+    return free
+
+
+def verify_disk_admission(plan):
+    need(disk_free_bytes(plan) >= plan['required_free_bytes'], 'WORD_DISK_ADMISSION_CHANGED')
 
 
 def canonical(value):
@@ -431,6 +446,7 @@ class RestrictedWordBroker:
                 need(self.db.execute("SELECT 1 FROM word_restricted_tickets WHERE status IN ('ACTIVE','PENDING')").fetchone() is None, 'RESTRICTED_WORD_WRITER_BUSY')
                 first = self.db.execute("SELECT id FROM word_restricted_tickets WHERE status='WAITING' ORDER BY requested,id LIMIT 1").fetchone()
                 need(first is not None and first[0] == ticket and row['status'] == 'WAITING', 'RESTRICTED_WORD_FIFO_REQUIRED')
+                verify_disk_admission(plan)
                 self.db.execute("UPDATE word_restricted_tickets SET status='ACTIVE',token=?,expires=? WHERE id=?", (str(uuid.uuid4()), time.time()+ttl, ticket))
         return self.get(ticket)
 
@@ -441,6 +457,7 @@ class RestrictedWordBroker:
             with self.transaction():
                 row, plan = self.require(ticket, token)
                 need(row['invocations'] == 0 and row['nonce'] is None and row['pgid'] is None, 'ORIGINAL_RUN_EXISTS_NO_REPLAY')
+                verify_disk_admission(plan)
                 nonce = str(uuid.uuid4())
                 self.db.execute('UPDATE word_restricted_tickets SET invocations=1,nonce=?,parent_pid=? WHERE id=?', (nonce, os.getpid(), ticket))
             entrypoint = 'word_restricted_revision.py' if plan['operation'] == REVISION_SCOPE else 'word_restricted_pdf.py'

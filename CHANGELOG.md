@@ -1,3 +1,17 @@
+## 0.4.83
+
+- Check actual output-volume free bytes under the queue transaction before
+  granting a new lease and before consuming its invocation/nonce. A refused
+  preflight leaves the original row and lease unchanged. Keep the declared
+  reserve and native child's subsequent space checks.
+- Add only the exact complete .82 disk-failure source profile to the original
+  actor's pre-input settlement. Require the full original result, no possible
+  application effect, absent staging/outputs/pending, exited child, original
+  held locks and full ticket/legacy CAS. Preserve the spent invocation and
+  original failure; this settlement grants no replay or ordinary release.
+- Exercise queue and disk observations with private deterministic fixtures,
+  including zero-budget refusals and whole-source/effect/identity negatives.
+
 ## 0.4.82
 
 - Authenticate the official macOS release filename with canonical launcher,
