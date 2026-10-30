@@ -15,6 +15,11 @@ failure and only `failure.json`, declaring no possible open document. Any
 native intent, inventory, staged document, named output, pending operation,
 changed source or uncertain process prevents settlement.
 
+An applied native .82 approval retains its exact original validation source.
+The settlement delegates only one bounded read-only broker preview to that
+complete SHA-verified controller. Its returned contract and zero input/queue
+effects must match exactly. This does not grant, run or replay the original job.
+
 Preview remains read-only. Only the original authenticated actor can apply
 its exact preview SHA under the original queue, Word and focus locks. The
 transaction retains the original failed result, invocation, nonce, token and

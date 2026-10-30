@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
+import subprocess
 import sys
 import time
 import uuid
@@ -269,6 +270,52 @@ class PreinputRecovery:
     def close(self):
         self.broker.close()
 
+    def original_contract(self, row, plan, original_source):
+        """Validate an applied .82 native contract through its exact old source.
+
+        The delegated command is a read-only preview. Running or granting the
+        original job through another controller remains forbidden.
+        """
+        if original_source.get('preinput_reason') != DISK_REASON:
+            return self.broker.contract(row['disposition'])
+        rows = list(self.broker.db.execute(
+            'SELECT contract FROM word_restricted_dispositions WHERE id=?', (row['disposition'],)))
+        rows.extend(self.broker.db.execute(
+            'SELECT contract FROM word_restricted_revision_dispositions WHERE id=?', (row['disposition'],)))
+        protocol.need(len(rows) == 1, 'APPLIED_RESTRICTED_DISPOSITION_REQUIRED')
+        ref = protocol.object_bytes(rows[0][0].encode('utf-8'))
+        contract = protocol.object_bytes(protocol.read_pin(ref))
+        if contract.get('schema') != protocol.NATIVE_REVISION_SCHEMA:
+            return self.broker.contract(row['disposition'])
+        source = Path(plan['controller_source'])
+        driver = plan['controller_pins']['word_restricted_broker.py']
+        protocol.need(original_source.get('failure_profile') == DISK_PROFILE
+                      and driver['sha256'] == DISK_DRIVERS['word_restricted_broker.py']
+                      and driver['path'] == str(source / 'scripts/word_restricted_broker.py')
+                      and contract.get('native_approval_source') ==
+                          plan['controller_pins']['word_native_approval.py'],
+                      'EXACT_ORIGINAL_NATIVE_APPROVAL_CONTROLLER_REQUIRED')
+        protocol.read_pin(driver)
+        argv = [str(Path(sys.executable).resolve()), '-BE', driver['path'], 'preview',
+                '--root', str(self.broker.root), '--file', ref['path'], '--sha256', ref['sha256']]
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ResourceBusy('ORIGINAL_NATIVE_APPROVAL_PREVIEW_UNAVAILABLE') from exc
+        protocol.need(result.returncode == 0 and result.stderr == '',
+                      'ORIGINAL_NATIVE_APPROVAL_PREVIEW_REFUSED')
+        value = protocol.object_bytes(result.stdout.encode('utf-8'))
+        protocol.need(value.get('outcome') == 'RESTRICTED_WORD_READ_ONLY_PLAN'
+                      and value.get('contract') == ref
+                      and value.get('input_operations') == value.get('queue_changes') == 0
+                      and value.get('legacy_released') is False
+                      and value.get('plan_sha256') == protocol.digest(dict(
+                          contract=ref, legacy=contract['original_row_sha256'])),
+                      'EXACT_ORIGINAL_READ_ONLY_APPROVAL_PREVIEW_REQUIRED')
+        protocol.read_pin(ref)
+        self.broker.legacy(contract)
+        return contract
+
     def facts(self, ticket):
         row = self.broker.get(ticket)
         protocol.need(row['status'] == 'PENDING' and row['invocations'] == 1,
@@ -282,7 +329,7 @@ class PreinputRecovery:
         protocol.need(plan.get('operation') == protocol.REVISION_SCOPE, 'OWNED_REVISION_PREINPUT_ONLY')
         original_source = verify_original_source(plan)
         reason = original_source.get('preinput_reason', PREINPUT_REASON)
-        contract = self.broker.contract(row['disposition'])
+        contract = self.original_contract(row, plan, original_source)
         self.broker.plan_scope(contract, plan)
         protocol.need(protocol.actor_matches(plan['actor'], contract['successor']), 'ORIGINAL_ACTOR_CHANGED')
         protocol.verify_revision_plan(plan, running=True)
@@ -398,7 +445,8 @@ class PreinputRecovery:
             saved = dict(original_result=row['result'], preinput_closeout=closeout)
             with self.broker.transaction():
                 protocol.need(self.broker.get(ticket) == row, 'PREINPUT_TICKET_COMPARE_AND_SWAP_FAILED')
-                contract = self.broker.contract(row['disposition'])
+                original_plan = protocol.object_bytes(protocol.read_pin(fresh['facts']['plan']))
+                contract = self.original_contract(row, original_plan, fresh['facts']['controller'])
                 legacy, resource = self.broker.legacy(contract)
                 protocol.need(protocol.digest(legacy) == fresh['facts']['legacy_row_sha256']
                               and protocol.digest(resource) == fresh['facts']['legacy_resource_sha256'],

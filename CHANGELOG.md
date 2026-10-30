@@ -9,6 +9,10 @@
   application effect, absent staging/outputs/pending, exited child, original
   held locks and full ticket/legacy CAS. Preserve the spent invocation and
   original failure; this settlement grants no replay or ordinary release.
+- Validate an applied native .82 approval with one bounded read-only preview
+  through its complete pinned original controller. Reject changed sources,
+  nonzero or unknown outcomes and any claimed input or queue mutation; a
+  prospective controller never substitutes its own approval binding.
 - Exercise queue and disk observations with private deterministic fixtures,
   including zero-budget refusals and whole-source/effect/identity negatives.
 

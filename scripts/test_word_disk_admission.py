@@ -2,6 +2,7 @@
 import copy
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -185,6 +186,79 @@ class DiskPreinputTests(unittest.TestCase):
         with self.assertRaisesRegex(ResourceBusy, 'EXACT_PREINPUT_FAILURE'):
             self.f.r.preview(self.ticket['id'])
         self.assertEqual(self.broker.get(self.ticket['id']), self.before)
+
+
+class OriginalApprovalDelegationTests(unittest.TestCase):
+    def setUp(self):
+        self.f = owned_tests.OwnedRevisionTests(); self.f.setUp()
+        self.addCleanup(self.f.doCleanups)
+        self.ticket, self.plan, _ref, contract_ref = self.f.request()
+        self.broker = self.f.f.broker
+        contract = json.loads(protocol.read_pin(contract_ref))
+        contract.update(schema=protocol.NATIVE_REVISION_SCHEMA,
+            native_approval_source=self.plan['controller_pins']['word_native_approval.py'])
+        self.ref = self.f.f.write('original-native-contract.json', contract)
+        self.broker.db.execute('UPDATE word_restricted_revision_dispositions SET contract=? WHERE id=?',
+            (json.dumps(self.ref), self.ticket['disposition']))
+        self.contract = contract
+        self.r = recovery.PreinputRecovery(self.broker.root, readonly=False)
+        self.addCleanup(self.r.close)
+        self.profile = {'preinput_reason': recovery.DISK_REASON, 'failure_profile': recovery.DISK_PROFILE}
+        drivers = {name: self.plan['controller_pins'][name]['sha256'] for name in recovery.DISK_DRIVERS}
+        change = patch.object(recovery, 'DISK_DRIVERS', drivers); change.start(); self.addCleanup(change.stop)
+        self.result = SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(dict(
+            outcome='RESTRICTED_WORD_READ_ONLY_PLAN', contract=self.ref, input_operations=0,
+            queue_changes=0, legacy_released=False, plan_sha256=protocol.digest(dict(
+                contract=self.ref, legacy=contract['original_row_sha256'])))))
+
+    def call(self):
+        return self.r.original_contract(self.ticket, self.plan, self.profile)
+
+    def test_only_exact_original_broker_readonly_preview_is_delegated(self):
+        before = list(self.broker.db.iterdump())
+        with patch.object(recovery.subprocess, 'run', return_value=self.result) as run:
+            self.assertEqual(self.call(), self.contract)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[1:], ['-BE', self.plan['controller_pins']['word_restricted_broker.py']['path'],
+            'preview', '--root', str(self.broker.root), '--file', self.ref['path'], '--sha256', self.ref['sha256']])
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+        self.assertEqual(list(self.broker.db.iterdump()), before)
+
+    def test_nonzero_or_stderr_delegation_keeps_queue_unchanged(self):
+        before = list(self.broker.db.iterdump())
+        for result in [SimpleNamespace(returncode=2, stderr='', stdout=self.result.stdout),
+                       SimpleNamespace(returncode=0, stderr='unknown diagnostic', stdout=self.result.stdout)]:
+            with self.subTest(result=result), patch.object(recovery.subprocess, 'run', return_value=result):
+                with self.assertRaisesRegex(ResourceBusy, 'ORIGINAL_NATIVE_APPROVAL_PREVIEW_REFUSED'):
+                    self.call()
+        self.assertEqual(list(self.broker.db.iterdump()), before)
+
+    def test_claimed_input_or_wrong_contract_is_not_readonly_validation(self):
+        original = json.loads(self.result.stdout)
+        for key, value in [('input_operations', 1), ('queue_changes', 1), ('legacy_released', True),
+                           ('contract', {}), ('plan_sha256', '0' * 64)]:
+            out = dict(original); out[key] = value
+            result = SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(out))
+            with self.subTest(key=key), patch.object(recovery.subprocess, 'run', return_value=result):
+                with self.assertRaisesRegex(ResourceBusy, 'EXACT_ORIGINAL_READ_ONLY_APPROVAL_PREVIEW'):
+                    self.call()
+
+    def test_changed_original_approval_source_refuses_before_delegation(self):
+        bad = dict(self.contract, native_approval_source={'path': '/foreign/approval.py'})
+        ref = self.f.f.write('wrong-native-source.json', bad)
+        self.broker.db.execute('UPDATE word_restricted_revision_dispositions SET contract=? WHERE id=?',
+            (json.dumps(ref), self.ticket['disposition']))
+        with patch.object(recovery.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ResourceBusy, 'EXACT_ORIGINAL_NATIVE_APPROVAL_CONTROLLER'):
+                self.call()
+            run.assert_not_called()
+
+    def test_delegation_timeout_retains_unknown_and_original_queue(self):
+        before = list(self.broker.db.iterdump())
+        with patch.object(recovery.subprocess, 'run', side_effect=subprocess.TimeoutExpired('readonly-preview', 30)):
+            with self.assertRaisesRegex(ResourceBusy, 'ORIGINAL_NATIVE_APPROVAL_PREVIEW_UNAVAILABLE'):
+                self.call()
+        self.assertEqual(list(self.broker.db.iterdump()), before)
 
 
 class DiskSourceTests(unittest.TestCase):
