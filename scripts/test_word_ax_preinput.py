@@ -142,6 +142,10 @@ class PublishedAxSourceTests(unittest.TestCase):
         source = home / 'original-private-0473/source'
         current = Path(protocol.__file__).resolve().parents[1]
         shutil.copytree(current, source, ignore=shutil.ignore_patterns('.git', '__pycache__'))
+        # Model the legacy AX revision driver, distinct from the current disk
+        # driver. The complete synthetic tree and every pin are measured below.
+        revision = source / 'scripts/word_restricted_revision.py'
+        revision.write_bytes(b'# Synthetic original AX controller fixture.\n' + revision.read_bytes())
         files = {}
         for path in sorted(source.rglob('*')):
             if path.is_file():

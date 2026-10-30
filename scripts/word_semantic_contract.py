@@ -672,17 +672,28 @@ class Package:
                         run = parents.get(f["separator"])
                         need(run is not None and run.tag == W + "r", "PAGE_SEPARATOR_RUN_REQUIRED")
                         profile = self.run_properties(p, run, "0", story)
+                        proofing_differences = []
                         for t in f["texts"]:
                             owner = parents.get(t)
                             need(owner is not None and owner.tag == W + "r"
-                                 and self.nearest_p(t, story) is p
-                                 and self.run_properties(p, owner, "0", story) == profile,
+                                 and self.nearest_p(t, story) is p,
                                  "PAGE_CACHE_FORMAT_CHANGED")
+                            cache_profile = dict(self.run_properties(p, owner, "0", story))
+                            # Word may suppress proofing of its generated PAGE
+                            # result. Only this declared cache can differ in
+                            # noProof; the separator and all layout stay exact.
+                            if cache_profile["noProof"] != profile["noProof"]:
+                                proofing_differences.append(dict(
+                                    separator=profile["noProof"], cache=cache_profile["noProof"]))
+                            cache_profile["noProof"] = profile["noProof"]
+                            need(cache_profile == profile, "PAGE_CACHE_FORMAT_CHANGED")
                             self.page_nodes.add(t)
                         self.page_separators[f["separator"]] = profile
                         self.page_begins.add(f["begin"])
                         self.page_observations.append(dict(story=story, ordinal=f["ordinal"],
                               instruction_sha256=declaration["instruction_sha256"], cache=display))
+                        if proofing_differences:
+                            self.page_observations[-1]["noProof_differences"] = proofing_differences
                         seen.add((story, f["ordinal"]))
                     else:
                         raise SemanticError("UNKNOWN_FIELD_BOUNDARY")

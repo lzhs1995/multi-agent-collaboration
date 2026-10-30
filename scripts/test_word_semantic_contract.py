@@ -457,6 +457,55 @@ class SemanticTests(unittest.TestCase):
         with self.assertRaisesRegex(sem.SemanticError, 'PAGE_CACHE_FORMAT_CHANGED'):
             sem.compare(a, b, page_fields=policy()['page_cache_fields']['accepted'])
 
+    def test_declared_page_cache_proofing_metadata_is_diagnostic(self):
+        original = pack(footer=page())
+        fields = policy()['page_cache_fields']['accepted']
+        for val in ('1', 'true', 'on'):
+            with self.subTest(noProof=val):
+                saved = pack(footer=page('3').replace(
+                    '<w:r><w:t>3', '<w:r><w:rPr><w:noProof w:val="' + val + '"/></w:rPr><w:t>3'))
+                result = sem.compare(original, saved, page_fields=fields, require_page_cache=True)
+                self.assertTrue(result['all_pass'])
+                self.assertEqual(result['actual_page_cache'][0]['noProof_differences'],
+                                 [dict(separator=False, cache=True)])
+                self.assert_changed(original, saved)
+
+    def test_page_proofing_exception_does_not_hide_font_or_other_boolean_changes(self):
+        original = pack(footer=page())
+        fields = policy()['page_cache_fields']['accepted']
+        changes = ['<w:sz w:val="24"/>', '<w:rFonts w:ascii="Arial"/>',
+                   '<w:color w:val="FF0000"/>', '<w:lang w:val="fr-FR"/>']
+        changes += ['<w:' + name + ' w:val="' +
+                    ('0' if name in sem.R_DEFAULT_TRUE else '1') + '"/>'
+                    for name in sorted(sem.R_BOOL - {'noProof', 'bCs'})]
+        for extra in changes:
+            with self.subTest(extra=extra):
+                saved = pack(footer=page('3').replace(
+                    '<w:r><w:t>3', '<w:r><w:rPr><w:noProof/>' + extra + '</w:rPr><w:t>3'))
+                with self.assertRaisesRegex(sem.SemanticError, 'PAGE_CACHE_FORMAT_CHANGED'):
+                    sem.compare(original, saved, page_fields=fields)
+
+    def test_page_proofing_exception_stays_inside_declared_result(self):
+        fields = policy()['page_cache_fields']['accepted']
+        original = pack(body=para(), footer=page())
+        self.assert_changed(original, pack(body=para(runpr='<w:noProof/>'), footer=page('3')),
+                            page_fields=fields)
+        saved = pack(footer=page('3', '<w:r><w:rPr><w:noProof/></w:rPr><w:t>前文</w:t></w:r>'))
+        self.assert_changed(pack(footer=page('', '<w:r><w:t>前文</w:t></w:r>')), saved,
+                            page_fields=fields)
+        saved = pack(footer=page('3').replace(
+            '<w:r><w:fldChar w:fldCharType="separate"',
+            '<w:r><w:rPr><w:noProof/></w:rPr><w:fldChar w:fldCharType="separate"'))
+        self.assert_changed(original, saved, page_fields=fields)
+
+    def test_untracked_page_result_left_after_reject_is_not_exempt(self):
+        inserted = ('<w:ins w:id="1">' + page().split('<w:r><w:t>')[0] + '</w:ins>'
+                    '<w:r><w:rPr><w:noProof/></w:rPr><w:t>3</w:t></w:r>'
+                    '<w:ins w:id="2"><w:r><w:fldChar w:fldCharType="end"/></w:r></w:ins>')
+        tracked = pack(footer=inserted)
+        self.assert_same(pack(footer=page()), tracked, page_fields=policy()['page_cache_fields']['accepted'])
+        self.assert_changed(pack(footer=''), tracked, actual_accept=False)
+
     def test_page_surrounding_text_is_protected(self):
         a = pack(footer=page('', '<w:r><w:t>前文</w:t></w:r>'))
         b = pack(footer=page('1', '<w:r><w:t>变更</w:t></w:r>'))

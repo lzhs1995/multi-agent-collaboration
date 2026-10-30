@@ -144,6 +144,10 @@ class PublishedInventorySourceTests(unittest.TestCase):
         source = home / 'private-original-controller/source'
         current = Path(protocol.__file__).resolve().parents[1]
         shutil.copytree(current, source, ignore=shutil.ignore_patterns('.git', '__pycache__'))
+        # Model the legacy inventory driver without selecting the newer disk
+        # profile. Keep complete-tree and per-file pin checks active below.
+        revision = source / 'scripts/word_restricted_revision.py'
+        revision.write_bytes(b'# Synthetic original inventory controller fixture.\n' + revision.read_bytes())
         files = {}
         for path in sorted(source.rglob('*')):
             if path.is_file():
