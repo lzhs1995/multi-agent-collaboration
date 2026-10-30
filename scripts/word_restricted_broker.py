@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -21,6 +22,7 @@ RESOURCE = 'word-zotero'
 FLOOR = 22 * 1024**3
 PDF_SCOPE = 'OWNED_PDF_ONLY'
 REVISION_SCOPE = 'OWNED_REVISION_ROUNDTRIP'
+NATIVE_REVISION_SCHEMA = 'word-restricted-native-successor-disposition-v1'
 SERVICE_PINS = {
     'word_pdf_service.py': 'cbdee80cc5ac33565001ca221f7086ce2360292c27fa01329b761406f1e9bc77',
     'word_runtime.py': 'c700ef743e37532cebf3d10a0a78bb410920ddc1ca6280f10aaedf851a7b8458',
@@ -34,6 +36,20 @@ VALIDATOR_PINS = {
 def need(condition, reason):
     if not condition:
         raise ResourceBusy(reason)
+
+
+def disk_free_bytes(plan):
+    """Observe the actual output volume before consuming a new run budget."""
+    try:
+        free = shutil.disk_usage(Path(plan['evidence_root']).parent).free
+    except OSError as exc:
+        raise ResourceBusy('WORD_DISK_ADMISSION_UNAVAILABLE') from exc
+    need(type(free) is int and free >= 0, 'WORD_DISK_ADMISSION_UNAVAILABLE')
+    return free
+
+
+def verify_disk_admission(plan):
+    need(disk_free_bytes(plan) >= plan['required_free_bytes'], 'WORD_DISK_ADMISSION_CHANGED')
 
 
 def canonical(value):
@@ -118,8 +134,12 @@ def locator_record(ref):
     return object_bytes(raw)
 
 
-def approved_plan(contract):
+def approved_plan(contract, *, root=None):
     """Bind the original native user approval to its preceding exact plan."""
+    if contract.get('schema') == NATIVE_REVISION_SCHEMA:
+        import word_native_approval
+        word_native_approval.verify_native_disposition(contract, root=root)
+        return
     need(actor_matches(contract['administrator'],contract['successor']), 'EXPLICIT_SUCCESSOR_ADMINISTRATION_REQUIRED')
     a, p = contract['approval'], contract['approved_plan']
     need(a['path'] == p['path'] and p['offset'] + p['bytes'] <= a['offset'], 'ORIGINAL_PLAN_APPROVAL_ORDER_REQUIRED')
@@ -310,9 +330,13 @@ class RestrictedWordBroker:
     def preview(self, ref):
         contract = object_bytes(read_pin(ref))
         need((contract['schema'], contract['scope']) in (
-            ('word-restricted-disposition-v1', PDF_SCOPE),
-            ('word-restricted-disposition-v2', REVISION_SCOPE)), 'RESTRICTED_DISPOSITION_REQUIRED')
-        approved_plan(contract)
+             ('word-restricted-disposition-v1', PDF_SCOPE),
+             ('word-restricted-disposition-v2', REVISION_SCOPE),
+             (NATIVE_REVISION_SCHEMA, REVISION_SCOPE)), 'RESTRICTED_DISPOSITION_REQUIRED')
+        approved_plan(contract, root=self.root)
+        if contract['schema'] == NATIVE_REVISION_SCHEMA:
+            import word_native_approval
+            word_native_approval.verify_applied_native_parent(self.db, contract)
         self.legacy(contract)
         return dict(outcome='RESTRICTED_WORD_READ_ONLY_PLAN', plan_sha256=digest(dict(contract=ref, legacy=contract['original_row_sha256'])),
                     contract=ref, input_operations=0, queue_changes=0, legacy_released=False, foreign_saved='UNKNOWN')
@@ -324,6 +348,9 @@ class RestrictedWordBroker:
         with os_lock(self.root / (hashlib.sha256(RESOURCE.encode()).hexdigest() + '.lock')):
             with self.transaction():
                 _row, resource = self.legacy(contract)
+                if contract['schema'] == NATIVE_REVISION_SCHEMA:
+                    import word_native_approval
+                    word_native_approval.verify_applied_native_parent(self.db, contract)
                 for path in json.loads(resource['external_locks']):
                     with os_lock(path):
                         pass
@@ -352,7 +379,11 @@ class RestrictedWordBroker:
             rows.extend(self.db.execute('SELECT contract FROM word_restricted_revision_dispositions WHERE id=?', (disposition,)))
         need(len(rows) == 1, 'APPLIED_RESTRICTED_DISPOSITION_REQUIRED')
         value = object_bytes(read_pin(json.loads(rows[0][0])))
-        approved_plan(value); self.legacy(value)
+        approved_plan(value, root=self.root)
+        if value['schema'] == NATIVE_REVISION_SCHEMA:
+            import word_native_approval
+            word_native_approval.verify_applied_native_parent(self.db, value)
+        self.legacy(value)
         return value
 
     def request(self, disposition, plan_ref):
@@ -381,6 +412,9 @@ class RestrictedWordBroker:
         need(plan['operation'] == contract['scope'], 'EXACT_DISPOSITION_OPERATION_REQUIRED')
         if plan['operation'] == REVISION_SCOPE:
             need(plan['initial_job'] == contract['initial_job'], 'EXACT_DISPOSITION_INITIAL_JOB_REQUIRED')
+        if contract.get('schema') == NATIVE_REVISION_SCHEMA:
+            import word_native_approval
+            word_native_approval.verify_native_execution_plan(contract, plan)
 
     def require(self, ticket, token, *, child=False):
         row = self.get(ticket)
@@ -412,6 +446,7 @@ class RestrictedWordBroker:
                 need(self.db.execute("SELECT 1 FROM word_restricted_tickets WHERE status IN ('ACTIVE','PENDING')").fetchone() is None, 'RESTRICTED_WORD_WRITER_BUSY')
                 first = self.db.execute("SELECT id FROM word_restricted_tickets WHERE status='WAITING' ORDER BY requested,id LIMIT 1").fetchone()
                 need(first is not None and first[0] == ticket and row['status'] == 'WAITING', 'RESTRICTED_WORD_FIFO_REQUIRED')
+                verify_disk_admission(plan)
                 self.db.execute("UPDATE word_restricted_tickets SET status='ACTIVE',token=?,expires=? WHERE id=?", (str(uuid.uuid4()), time.time()+ttl, ticket))
         return self.get(ticket)
 
@@ -422,6 +457,7 @@ class RestrictedWordBroker:
             with self.transaction():
                 row, plan = self.require(ticket, token)
                 need(row['invocations'] == 0 and row['nonce'] is None and row['pgid'] is None, 'ORIGINAL_RUN_EXISTS_NO_REPLAY')
+                verify_disk_admission(plan)
                 nonce = str(uuid.uuid4())
                 self.db.execute('UPDATE word_restricted_tickets SET invocations=1,nonce=?,parent_pid=? WHERE id=?', (nonce, os.getpid(), ticket))
             entrypoint = 'word_restricted_revision.py' if plan['operation'] == REVISION_SCOPE else 'word_restricted_pdf.py'

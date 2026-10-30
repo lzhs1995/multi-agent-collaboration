@@ -1,4 +1,23 @@
-# Current release: 0.4.79
+# Current release: 0.4.82
+
+Official macOS Codex releases use an explicitly refreshed, protected signature
+cache and authenticate the current user thread through its live writable native
+rollout descriptor when no original foreground observer is required. The Word
+broker accepts a pinned native successor approval chain and provides exact
+consumed-owned-failure closeout without another Word call. See
+[0.4.82](references/release-0.4.82.md); ordinary owners, spent slots and original
+controllers stay fixed.
+
+The separate prospective model-context observer joins complete native result
+batches by immediate request `base`, response `requestRef`, tool IDs and
+parent/source UUIDs, even when results append after the following request.
+The whole canonical batch SHA must occur exactly once in that request's
+`tail`. The original observers and historical task results retain their
+contracts. A late result from a call before the original paste fence requires
+that call's pinned prefix evidence; it does not become part of the notice's
+result batch. Unknown or ambiguous calls still refuse a resealed subset.
+See [0.4.81](references/release-0.4.81.md) and the
+[causal observer](references/model-context-causal.md).
 
 Protected terminal delivery recognizes the measured Claude 2.1.303 `ultracode`
 empty input frame. Its complete upper and lower rules must have the same width,

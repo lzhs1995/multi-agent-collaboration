@@ -1,3 +1,79 @@
+## 0.4.83
+
+- Check actual output-volume free bytes under the queue transaction before
+  granting a new lease and before consuming its invocation/nonce. A refused
+  preflight leaves the original row and lease unchanged. Keep the declared
+  reserve and native child's subsequent space checks.
+- Add only the exact complete .82 disk-failure source profile to the original
+  actor's pre-input settlement. Require the full original result, no possible
+  application effect, absent staging/outputs/pending, exited child, original
+  held locks and full ticket/legacy CAS. Preserve the spent invocation and
+  original failure; this settlement grants no replay or ordinary release.
+- Validate an applied native .82 approval with one bounded read-only preview
+  through its complete pinned original controller. Reject changed sources,
+  nonzero or unknown outcomes and any claimed input or queue mutation; a
+  prospective controller never substitutes its own approval binding.
+- Exercise queue and disk observations with private deterministic fixtures,
+  including zero-budget refusals and whole-source/effect/identity negatives.
+
+## 0.4.82
+
+- Authenticate the official macOS release filename with canonical launcher,
+  file identity, executable digest and a protected explicitly refreshed signature
+  cache. Refresh and final publication obey the original shared deadline;
+  identity reads never run codesign or trust a generic verified flag.
+- Authenticate an official TUI's current user thread through one kernel-observed
+  writable rollout descriptor, complete metadata and post-birth native record.
+  Recheck descriptor and file identity; required or malformed original foreground
+  observations never fall back to resume argv or this new route.
+- Extend the existing owned revision lane with exact native successor approval
+  validation against the applied original parent and original source closure.
+  Close only the pinned consumed .77 failure after proven owned native close,
+  exact pending archival and full ticket CAS. Preserve ordinary owner, FIFO,
+  old result, invocation and spent slots; recovery adds no application call.
+- Package the reviewed direct-CUA roundtrip/query verifier and unchanged helper
+  together. A relocated new helper validates only future queries bound to that
+  complete source; historical helpers and queries remain unchanged.
+- Keep the original protected-message driver SHA for .82 and reject changed
+  bytes or the next unreviewed version before input. Offline legacy fixtures
+  retain the real production signature/foreground helpers while replacing only
+  external process observations.
+
+## 0.4.81
+
+- Repair A1 for busy-lane late results by matching the real pre-fence call in
+  the original SHA-verified transcript prefix. Stream the prefix hash under the
+  same ten-second budget and retain at most 8 MiB of complete prior records.
+  Load this context only when an in-window result lacks an in-window call.
+- Keep the notice's selected responses and complete canonical result batch
+  separate from prior-call provenance. Unknown calls, duplicate IDs, foreign
+  parent/source/session, missing parallel results and resealed subsets refuse.
+- Add eight full-consumer controls, including the original fence boundary,
+  ordered/inverted chains, public CLI, prior-call identity and bounded evidence.
+  All 18 existing causal controls and 33 sequential controls retain their
+  assertions; the original observer implementations remain unchanged.
+- Preserve the old .80 publication and u24 evidence. R204 establishes a native
+  pre-fence-call/post-fence-result shape, not a new .80/u24 observer verdict.
+  Register .81 only with the unchanged exact ordinary-message driver SHA;
+  changed bytes and the next unreviewed version remain refused.
+
+## 0.4.80
+
+- Add the separate read-only `MODEL_CONTEXT_CAUSALLY_CONSUMED` evidence class
+  for immediate native request/result batches whose file append order differs
+  from their causal order. Require exact request base/ref, unique tool and
+  record IDs, matching parent/source UUIDs and the whole canonical batch SHA
+  exactly once in the next request tail.
+- Retain every parallel result and reject missing, failed, interrupted,
+  conflicting or unassociated records. Reuse full-body, hash, transcript and
+  finite-budget validation; keep the original observers as the defaults.
+- Preserve 18 causal and 33 sequential checks and four frozen native batch
+  regressions with wrong-base, wrong-parent and missing-whole-batch controls.
+  Component regressions do not reclassify old windows or prove full-body
+  consumption, task acceptance, application recovery or resource release.
+- Register only the unchanged ordinary-message driver bytes for this release;
+  altered bytes and the next unreviewed release remain refused.
+
 ## 0.4.79
 
 - Recognize the exact measured `ultracode` upper input rule for authenticated

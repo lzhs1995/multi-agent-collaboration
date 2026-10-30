@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
+import subprocess
 import sys
 import time
 import uuid
@@ -52,6 +53,18 @@ AX_DRIVERS = {
 }
 WORD_TIMEOUT_PROFILE = 'WORD_TIMEOUT_0472'
 AX_REFERENCE_PROFILE = 'SYSTEM_EVENTS_WINDOW_REFERENCE_0473'
+DISK_REASON = 'WORD_DISK_ADMISSION_CHANGED'
+DISK_PROFILE = 'WORD_DISK_ADMISSION_0482'
+# Exact complete .82 tree used by the original failed child. A similar
+# diagnostic from another controller cannot acquire this closeout profile.
+DISK_SOURCE_COUNT = 431
+DISK_SOURCE_BYTES = 6136596
+DISK_SOURCE_DIGEST = '9650c58412f6e1dea977d5aa5070888374893b996793c8bc1929dbd2b51c14d5'
+DISK_DRIVERS = {
+    'word_restricted_broker.py': '055a08eccdad3f877f336cb488bb9cbd1af29135aaef08454be406cfa26e3120',
+    'word_restricted_pdf.py': '80e26376616ec47b139afc7ab7e09fa1d8c4541bb6d41cf38a04b813e5b777d4',
+    'word_restricted_revision.py': '19bee4a11d167c358856ab585de0de2757b4ec92f017df973d533d6033db044b',
+}
 # Only this observed failure expression in the fixed original read-only script.
 # It is not a diagnosis of a permanent AX permission problem or a proven race.
 AX_REFERENCE_DIAGNOSTIC = ('System Events發生錯誤：無法取得「window "文件1  -  已復原" '
@@ -71,7 +84,14 @@ def verify_ax_source(plan):
         release='0473', profile=AX_REFERENCE_PROFILE)
 
 
-def verify_published_inventory_source(plan, *, count, total, tree, drivers, release, profile):
+def verify_disk_source(plan):
+    return verify_published_inventory_source(plan, count=DISK_SOURCE_COUNT,
+        total=DISK_SOURCE_BYTES, tree=DISK_SOURCE_DIGEST, drivers=DISK_DRIVERS,
+        release='0482', profile=DISK_PROFILE, reason=DISK_REASON)
+
+
+def verify_published_inventory_source(plan, *, count, total, tree, drivers, release, profile,
+                                      reason=INVENTORY_REASON):
     """Read a complete published original tree; never import or patch it."""
     import executor_reask_protocol as releases
     source = Path(plan['controller_source'])
@@ -113,7 +133,7 @@ def verify_published_inventory_source(plan, *, count, total, tree, drivers, rele
                       for name, sha in drivers.items()),
                   'SUPPORTED_ORIGINAL_PREINPUT_DRIVER_REQUIRED')
     return dict(members=len(files), source=str(source), published_tree_sha256=tree,
-                critical_drivers=drivers, preinput_reason=INVENTORY_REASON, failure_profile=profile)
+                critical_drivers=drivers, preinput_reason=reason, failure_profile=profile)
 
 
 def verify_original_source(plan):
@@ -124,6 +144,10 @@ def verify_original_source(plan):
     if source != expected:
         pins = plan['controller_pins']
         protocol.need(isinstance(pins, dict), 'COMPLETE_ORIGINAL_CONTROLLER_REQUIRED')
+        revision_pin = pins.get('word_restricted_revision.py')
+        if (isinstance(revision_pin, dict) and
+                revision_pin.get('sha256') == DISK_DRIVERS['word_restricted_revision.py']):
+            return verify_disk_source(plan)
         inventory_pin = pins.get('word_restricted_inventory.py')
         if (isinstance(inventory_pin, dict) and
                 inventory_pin.get('sha256') == AX_DRIVERS['word_restricted_inventory.py']):
@@ -246,6 +270,52 @@ class PreinputRecovery:
     def close(self):
         self.broker.close()
 
+    def original_contract(self, row, plan, original_source):
+        """Validate an applied .82 native contract through its exact old source.
+
+        The delegated command is a read-only preview. Running or granting the
+        original job through another controller remains forbidden.
+        """
+        if original_source.get('preinput_reason') != DISK_REASON:
+            return self.broker.contract(row['disposition'])
+        rows = list(self.broker.db.execute(
+            'SELECT contract FROM word_restricted_dispositions WHERE id=?', (row['disposition'],)))
+        rows.extend(self.broker.db.execute(
+            'SELECT contract FROM word_restricted_revision_dispositions WHERE id=?', (row['disposition'],)))
+        protocol.need(len(rows) == 1, 'APPLIED_RESTRICTED_DISPOSITION_REQUIRED')
+        ref = protocol.object_bytes(rows[0][0].encode('utf-8'))
+        contract = protocol.object_bytes(protocol.read_pin(ref))
+        if contract.get('schema') != protocol.NATIVE_REVISION_SCHEMA:
+            return self.broker.contract(row['disposition'])
+        source = Path(plan['controller_source'])
+        driver = plan['controller_pins']['word_restricted_broker.py']
+        protocol.need(original_source.get('failure_profile') == DISK_PROFILE
+                      and driver['sha256'] == DISK_DRIVERS['word_restricted_broker.py']
+                      and driver['path'] == str(source / 'scripts/word_restricted_broker.py')
+                      and contract.get('native_approval_source') ==
+                          plan['controller_pins']['word_native_approval.py'],
+                      'EXACT_ORIGINAL_NATIVE_APPROVAL_CONTROLLER_REQUIRED')
+        protocol.read_pin(driver)
+        argv = [str(Path(sys.executable).resolve()), '-BE', driver['path'], 'preview',
+                '--root', str(self.broker.root), '--file', ref['path'], '--sha256', ref['sha256']]
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ResourceBusy('ORIGINAL_NATIVE_APPROVAL_PREVIEW_UNAVAILABLE') from exc
+        protocol.need(result.returncode == 0 and result.stderr == '',
+                      'ORIGINAL_NATIVE_APPROVAL_PREVIEW_REFUSED')
+        value = protocol.object_bytes(result.stdout.encode('utf-8'))
+        protocol.need(value.get('outcome') == 'RESTRICTED_WORD_READ_ONLY_PLAN'
+                      and value.get('contract') == ref
+                      and value.get('input_operations') == value.get('queue_changes') == 0
+                      and value.get('legacy_released') is False
+                      and value.get('plan_sha256') == protocol.digest(dict(
+                          contract=ref, legacy=contract['original_row_sha256'])),
+                      'EXACT_ORIGINAL_READ_ONLY_APPROVAL_PREVIEW_REQUIRED')
+        protocol.read_pin(ref)
+        self.broker.legacy(contract)
+        return contract
+
     def facts(self, ticket):
         row = self.broker.get(ticket)
         protocol.need(row['status'] == 'PENDING' and row['invocations'] == 1,
@@ -259,7 +329,7 @@ class PreinputRecovery:
         protocol.need(plan.get('operation') == protocol.REVISION_SCOPE, 'OWNED_REVISION_PREINPUT_ONLY')
         original_source = verify_original_source(plan)
         reason = original_source.get('preinput_reason', PREINPUT_REASON)
-        contract = self.broker.contract(row['disposition'])
+        contract = self.original_contract(row, plan, original_source)
         self.broker.plan_scope(contract, plan)
         protocol.need(protocol.actor_matches(plan['actor'], contract['successor']), 'ORIGINAL_ACTOR_CHANGED')
         protocol.verify_revision_plan(plan, running=True)
@@ -375,7 +445,8 @@ class PreinputRecovery:
             saved = dict(original_result=row['result'], preinput_closeout=closeout)
             with self.broker.transaction():
                 protocol.need(self.broker.get(ticket) == row, 'PREINPUT_TICKET_COMPARE_AND_SWAP_FAILED')
-                contract = self.broker.contract(row['disposition'])
+                original_plan = protocol.object_bytes(protocol.read_pin(fresh['facts']['plan']))
+                contract = self.original_contract(row, original_plan, fresh['facts']['controller'])
                 legacy, resource = self.broker.legacy(contract)
                 protocol.need(protocol.digest(legacy) == fresh['facts']['legacy_row_sha256']
                               and protocol.digest(resource) == fresh['facts']['legacy_resource_sha256'],

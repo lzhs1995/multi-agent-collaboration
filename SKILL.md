@@ -9,14 +9,42 @@ description: Coordinate context-bearing CLI agents in macOS cmux using scoped ta
 无关旧任务结算。复用原会话与健康握手，旧次证据单独保留；不再让无关 pending
 永久阻塞新联络。完整边框外的 ASCII `...` 截断路径及任务摘要按 footer 识别。
 
-**Version: 0.4.79.** Ready messages may be sent directly in either direction,
+**Version: 0.4.84.** Ready messages may be sent directly in either direction,
 including during work, Goal and compaction. Raw cmux communication is allowed.
 The bridge falls back to terminal input when the native transport is unavailable
 before any input intent. A new user message containing the unique marker in the
 original receiver transcript proves reception. Do not repaste an uncertain
 message; at most one recorded extra Enter may recover residual input after compaction ends.
+
+For an exactly declared PAGE result, Word-generated `noProof` differences are
+recorded separately from effective layout. Fonts, sizes, language, other run
+properties, field boundaries and surrounding text still match exactly in both
+views. An untracked result left after rejecting an inserted field remains a
+content mismatch. Old results and controllers retain their original contracts.
+See [0.4.84](references/release-0.4.84.md).
 See [direct delivery](references/verified-compose-delivery.md) and
 [existing terminal tabs](references/existing-terminal-tabs.md).
+
+New owned Word leases check the actual output volume before grant and again
+before consuming a run nonce. The declared reserve and checks within the
+native child remain unchanged. One exact .82 disk failure with only its
+failure record, no staged document or output, and an exited child has an
+original-actor, exact-preview closeout. Its spent invocation and original
+failure remain intact; subsequent work uses a distinct reviewed job.
+See [0.4.83](references/release-0.4.83.md).
+
+Official native Codex loading, exact inherited Word approval and the original
+owned native-close settlement are retained from [0.4.82](references/release-0.4.82.md).
+
+For an explicitly bound prospective observation, a separate causal consumer
+joins immediate request `base`, response `requestRef` and every native result
+by its tool ID and parent/source UUID. It verifies the complete canonical
+batch SHA exactly once in the next request's `tail` without inferring batch
+membership from file append offsets. Late results from pre-fence calls require
+the matching real call in the original SHA-verified prefix context; unproved
+orphans and resealed subsets remain refused. Original observers, windows and
+task results remain unchanged. See [causal context evidence](references/model-context-causal.md)
+and [0.4.81](references/release-0.4.81.md).
 
 The measured Claude 2.1.303 empty frame can include the exact `ultracode`
 upper-rule label. Require its complete bare lower rule at the same width,

@@ -1,5 +1,10 @@
 # Initial Word revisions with a quarantined legacy ticket
 
+For an explicitly approved current native successor, see the separate
+[0.4.82 approval and exact owned closeout](release-0.4.82.md). Its source-bound
+contract preserves the applied original disposition and ordinary owner; it does
+not flatten native messages into the older approval schema.
+
 An expired ordinary Word ticket can remain ACTIVE while an unknown foreign
 draft has no lawful release proof. The ordinary broker then cannot issue a
 fresh grant. An exactly approved original successor may use
