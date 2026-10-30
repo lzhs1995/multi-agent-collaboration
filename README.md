@@ -1,4 +1,12 @@
-# Current release: 0.4.81
+# Current release: 0.4.82
+
+Official macOS Codex releases use an explicitly refreshed, protected signature
+cache and authenticate the current user thread through its live writable native
+rollout descriptor when no original foreground observer is required. The Word
+broker accepts a pinned native successor approval chain and provides exact
+consumed-owned-failure closeout without another Word call. See
+[0.4.82](references/release-0.4.82.md); ordinary owners, spent slots and original
+controllers stay fixed.
 
 The separate prospective model-context observer joins complete native result
 batches by immediate request `base`, response `requestRef`, tool IDs and

@@ -1,3 +1,26 @@
+## 0.4.82
+
+- Authenticate the official macOS release filename with canonical launcher,
+  file identity, executable digest and a protected explicitly refreshed signature
+  cache. Refresh and final publication obey the original shared deadline;
+  identity reads never run codesign or trust a generic verified flag.
+- Authenticate an official TUI's current user thread through one kernel-observed
+  writable rollout descriptor, complete metadata and post-birth native record.
+  Recheck descriptor and file identity; required or malformed original foreground
+  observations never fall back to resume argv or this new route.
+- Extend the existing owned revision lane with exact native successor approval
+  validation against the applied original parent and original source closure.
+  Close only the pinned consumed .77 failure after proven owned native close,
+  exact pending archival and full ticket CAS. Preserve ordinary owner, FIFO,
+  old result, invocation and spent slots; recovery adds no application call.
+- Package the reviewed direct-CUA roundtrip/query verifier and unchanged helper
+  together. A relocated new helper validates only future queries bound to that
+  complete source; historical helpers and queries remain unchanged.
+- Keep the original protected-message driver SHA for .82 and reject changed
+  bytes or the next unreviewed version before input. Offline legacy fixtures
+  retain the real production signature/foreground helpers while replacing only
+  external process observations.
+
 ## 0.4.81
 
 - Repair A1 for busy-lane late results by matching the real pre-fence call in
