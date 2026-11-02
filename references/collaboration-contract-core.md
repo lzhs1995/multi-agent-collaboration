@@ -46,6 +46,14 @@ outside writes with their existing authority; add post-freeze activity separatel
 instead of changing a frozen report. A missing authorization check remains
 unverified, rather than becoming a claim of unauthorized action.
 
+For related packages, carry forward the agreed audit scope and cutoff instead of
+silently reducing them when a checker changes. Cover the task's actual write
+channels: direct tools, shell redirection, generators and their relevant outputs;
+include memory, temporary or maintenance paths when those channels use them.
+Record exclusions. Validate a new or changed checker against a known positive
+case; do not create real out-of-scope writes as a test or mandate a whole-machine
+scan on every package. A supervisor's caveat does not repair missing coverage.
+
 Bind review claims to object ID, paragraph/page or other locator, short supporting
 quotation and input version/hash. Check that the quote supports the claim, not
 merely that it occurs somewhere. Verify objects, negation, qualifications, model
