@@ -18,6 +18,20 @@ and stopping condition. A short question need not become a formal file package.
 Maintenance is a separate assignment; it must not silently consume a dissertation
 reviewer's scope. Explicitly assigned maintenance is not a model capability fault.
 
+For a takeover, read the complete applicable authorization and later directions;
+record the clause used and the observed reason. Distinguish executor failure,
+transport failure, capacity/resource limits and an authorized efficiency choice.
+More than one may apply. A refused maintenance notice does not establish failure
+of every task channel; a working file mailbox does not establish formal dispatch.
+Keep the failed attempt's time and scope: repeated observations of one probe are
+not independent sends or API retries, and an earlier failure does not prove a
+continuing outage. Use existing authority without adding an approval loop.
+
+When an executor recovers, state who finishes an already started package and who
+owns subsequent work. Record start, recovery, freeze and acceptance separately;
+reuse accepted work at the handoff boundary. Preserve original sessions, output
+ownership and resource limits. Label solo results as self-review.
+
 ## Evidence and outcomes
 
 Keep submission, native reception, full body reading, produced artifact,
@@ -25,6 +39,12 @@ supervisor acceptance and resource release distinct. An ACK, lifecycle state,
 hash match or file existence establishes only the fact it actually checks.
 Do not introduce an ACK of an ACK. Read and integrate a finished result before
 dispatching dependent work. Preserve unanswered or unknown items in the ledger.
+
+A write audit states its inspected paths and time window. A clean package-root
+diff says nothing about outside maintenance or memory writes. Record relevant
+outside writes with their existing authority; add post-freeze activity separately
+instead of changing a frozen report. A missing authorization check remains
+unverified, rather than becoming a claim of unauthorized action.
 
 Bind review claims to object ID, paragraph/page or other locator, short supporting
 quotation and input version/hash. Check that the quote supports the claim, not
