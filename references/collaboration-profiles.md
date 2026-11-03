@@ -33,10 +33,10 @@ dispatcher requires its own measured change and regression evidence.
 
 ## Chapter and whole-document coordination
 
-Each chapter supervisor owns its outputs and requests only useful independent
-review. One whole-document supervisor integrates shared terminology, references,
-cross-references and milestones. Chapter supervisors submit deltas and unresolved
-questions; avoid an all-to-all agent chat or duplicate acquisition.
+For one cmux workspace per chapter with an inner Herdr team, see
+[nested research coordination](nested-research-coordination.md). It defines the
+chapter/senior-supervisor layout and optional workflow-mode metadata, not a new
+runtime profile or automatic scheduler. The common contract remains single-source.
 
 Herdr supports workspace coordination on the same server. Use its native route
 where available. Across servers, discover with an explicit supported selector
