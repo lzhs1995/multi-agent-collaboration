@@ -40,6 +40,10 @@ hash match or file existence establishes only the fact it actually checks.
 Do not introduce an ACK of an ACK. Read and integrate a finished result before
 dispatching dependent work. Preserve unanswered or unknown items in the ledger.
 
+The reviewer chooses its own verdict from the supported outcomes. Keep any
+requested outcome separate from the actual reviewer decision; do not prefill or
+report the requested outcome as the reviewer's judgment.
+
 A write audit states its inspected paths and time window. A clean package-root
 diff says nothing about outside maintenance or memory writes. Record relevant
 outside writes with their existing authority; add post-freeze activity separately

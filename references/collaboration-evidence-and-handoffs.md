@@ -56,6 +56,11 @@ An authorized read-only substitute may fill a specific gap with the same evidenc
 limits. This does not transfer shared editing, export or publication ownership.
 Do not label a dependent recheck as an independent review.
 
+Original tool output is evidence within its recorded scope even when no separate
+receipt was saved. A later receipt cites the original run and tested version; it
+does not create a new execution. Repeat a check only for changed inputs, a failure
+or a remaining concern, and label that run separately.
+
 ## Receipt, cadence and complete inboxes
 
 Keep RPC acceptance, queueing, native receipt, full referenced-body reading, ACK,
