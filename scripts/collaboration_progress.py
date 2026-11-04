@@ -43,6 +43,9 @@ budget. Herdr subprocess timeouts share that scan deadline; tasks not reached
 within it remain UNKNOWN. Native kernel/filesystem reads are synchronous and
 cooperatively bounded, not forcibly interrupted. An OS stall can overrun; the
 snapshot records partial coverage/overrun/gaps instead of guaranteeing 60 seconds.
+The task count, target size and remaining duration must fit the bounded event
+journal; oversized periods are refused before recording ACTIVE. Event records
+retain checkpoint hashes/metadata, while snapshots hold the full self-report.
 
 Output flock is held for the entire run; do not remove its lock file. After a
 crash the OS releases it. A hard kill cannot write a final status: an ACTIVE file
@@ -52,6 +55,10 @@ Events are fsynced before stdout; a crash between those steps can omit stdout,
 so events.jsonl is authoritative for consumption. STOP means the pinned process
 is absent/replaced, not that the task succeeded, all children ended, or a resource
 lease can be released. Read failures/timeouts are UNKNOWN and never STOP.
+Verified Herdr runtime states produce one baseline and subsequent state-change
+events in that same journal. They do not diagnose why an agent became idle or
+blocked, prove a message was read, or send a notification. Replay uses the last
+journaled state, so restarting the observer does not repeat unchanged events.
 No transcript reader or failure-cause classifier is included. API 429/502,
 compaction, planned standby and actual completion require the original native
 evidence and supervisor judgment; idle/done/absence cannot distinguish them.
@@ -97,6 +104,10 @@ class ObservedAbsent(Exception):
 def utc(seconds=None):
     return datetime.fromtimestamp(time.time() if seconds is None else seconds,
                                   timezone.utc).isoformat()
+
+
+def runtime_counter(value):
+    return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
 
 
 def epoch(value):
@@ -373,12 +384,17 @@ def snapshot(manifest, prior=None, *, process_reader=native_process,
                 require(result.get('identity_matches') is True, 'HERDR_IDENTITY_UNCONFIRMED')
                 status = result.get('state')
                 if (not isinstance(status, str) or not status.strip()
-                        or status.strip().lower() == 'unknown'):
+                        or len(status) > 128 or status.strip().lower() == 'unknown'):
                     status = 'UNKNOWN'
                 herdr.update(state=status, identity_matches=True,
-                             selector=task['herdr']['selector'], observed_at=utc(wall()))
+                             selector=task['herdr']['selector'], observed_at=utc(wall()),
+                             target=task['herdr']['target'],
+                             revision=runtime_counter(result.get('revision')),
+                             state_change_seq=runtime_counter(result.get('state_change_seq')))
             except Exception as exc:
                 herdr['error'] = type(exc).__name__
+                if isinstance(exc, (ProgressError, ValueError)):
+                    herdr['error_code'] = str(exc)
         if monotonic() >= deadline and 'checkpoint' in task:
             checkpoint = {'state': 'UNKNOWN', 'error': 'OBSERVATION_BUDGET_EXHAUSTED',
                           'native_proof': False, 'self_report_verified': False}
@@ -495,6 +511,65 @@ def stop_signals(stop):
             signal.signal(signum, handler)
 
 
+def checkpoint_reference(checkpoint):
+    """Events link to checkpoint content; snapshots retain the self-report."""
+    return {key: checkpoint[key] for key in (
+        'state', 'path', 'bytes', 'sha256', 'file_mtime', 'stale',
+        'native_proof', 'self_report_verified') if key in checkpoint}
+
+
+def runtime_target(target):
+    return {'endpoint': {'transport': 'herdr', 'socket': target['endpoint']['socket']},
+            **{key: target[key] for key in ('pane_id', 'terminal_id', 'native_session_id')}}
+
+
+def journal_reservation(manifest, remaining_seconds):
+    """Conservative byte bound for remaining samples plus one process STOP each.
+
+    Fixed allowance covers JSON keys, timestamps, state, counters and hashes.
+    Unbounded input strings (target, checkpoint path) are charged separately.
+    Reject an oversized period before recording ACTIVE; never enlarge the log.
+    """
+    ticks = max(1, math.ceil(remaining_seconds / CADENCE))
+    size = lambda value: len(json.dumps(value, ensure_ascii=False).encode('utf-8'))
+    reserve = 8192  # This invocation's lifecycle records and conservative slack.
+    for task in manifest['tasks']:
+        common = 4096 + size(task.get('checkpoint', {}).get('path', ''))
+        reserve += common  # At most one STOP for this exact pinned process.
+        if 'herdr' in task:
+            reserve += ticks * (common + size(runtime_target(task['herdr']['target'])))
+    return reserve
+
+
+def runtime_state_event(row, previous, *, observer_id, project_id):
+    """A literal verified runtime transition, never a business verdict or send."""
+    observed = row['herdr']
+    if (row['handle']['state'] != 'LIVE' or observed.get('identity_matches') is not True
+            or observed.get('state') in ('UNKNOWN', 'NOT_CONFIGURED')):
+        return None
+    state = observed['state']
+    if previous is not None and previous['state'] == state:
+        return None
+    prior_id = previous['event_id'] if previous is not None else None
+    target = runtime_target(observed['target'])
+    key = digest(json.dumps([observer_id, project_id, row['task_id'],
+                             observed['selector'], target, prior_id, state],
+                            sort_keys=True).encode())
+    return {'type': 'HERDR_STATE_CHANGED' if previous is not None else 'HERDR_BASELINE',
+            'event_id': key, 'task_id': row['task_id'], 'state': state,
+            'previous_state': previous['state'] if previous is not None else None,
+            'previous_event_id': prior_id,
+            'previous_observed_at': previous.get('observed_at') if previous is not None else None,
+            'runtime_observed_at': observed['observed_at'],
+            'selector': observed['selector'], 'target': target,
+            'revision': observed.get('revision'),
+            'state_change_seq': observed.get('state_change_seq'),
+            'checkpoint': checkpoint_reference(row['checkpoint']),
+            'accepted': False, 'task_completed': False,
+            'failure_cause': 'NOT_DETERMINED',
+            'notification_candidate': previous is not None}
+
+
 def run(manifest_path, output_path, *, mode, duration=None, resume=False,
         stream=None, process_reader=native_process, herdr_reader=native_herdr,
         wall=time.time, monotonic=time.monotonic, stop=None, waiter=None,
@@ -519,9 +594,16 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
         require(not journal or journal.endswith(b'\n'), 'INCOMPLETE_EVENT_JOURNAL')
         events = [decode(line) for line in (journal or b'').splitlines()]
         require(all(isinstance(e, dict) and isinstance(e.get('type'), str)
-                    and (e['type'] != 'STOP' or isinstance(e.get('event_id'), str))
+                    and (e['type'] not in ('STOP', 'HERDR_BASELINE', 'HERDR_STATE_CHANGED')
+                         or isinstance(e.get('event_id'), str))
                     for e in events), 'INVALID_EVENT_JOURNAL')
         stopped_ids = {e['event_id'] for e in events if e.get('type') == 'STOP'}
+        runtime_states = {}
+        for e in events:
+            if e['type'] in ('HERDR_BASELINE', 'HERDR_STATE_CHANGED'):
+                require(isinstance(e.get('task_id'), str) and isinstance(e.get('state'), str)
+                        and isinstance(e.get('observed_at'), str), 'INVALID_RUNTIME_EVENT')
+                runtime_states[e['task_id']] = e
         now, mono_now = wall(), monotonic()
         current_boot = boot_identity(boot_reader())
         if resume:
@@ -565,6 +647,9 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                      'cadence_seconds': CADENCE, 'checkpoints': {}}
         deadline = min(state['deadline_monotonic'],
                        mono_now + max(0, epoch(state['deadline_at']) - now))
+        require(len(journal or b'') + journal_reservation(
+                    manifest, max(0, deadline - mono_now)) <= MAX_JOURNAL,
+                'JOURNAL_BUDGET_INSUFFICIENT_FOR_PERIOD')
         try:
             self_pin = process_observation(process_reader(os.getpid(), timeout=2))
             state['observer_handle'] = {'state': 'LIVE', 'process': self_pin}
@@ -609,6 +694,14 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                                                          epoch(state['deadline_at'])))
                     output.write('snapshot.json', snap)
                     for row in snap['tasks']:
+                        change = runtime_state_event(row, runtime_states.get(row['task_id']),
+                                                     observer_id=state['observer_id'],
+                                                     project_id=manifest['project_id'])
+                        if change is not None:
+                            kind = change.pop('type')
+                            observed_event = event(kind, **change)
+                            output.event(observed_event, stream)
+                            runtime_states[row['task_id']] = observed_event
                         if row['handle']['state'] not in ('ABSENT', 'REPLACED'):
                             continue
                         key = digest(json.dumps([manifest['project_id'], row['task_id'],
@@ -616,7 +709,8 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                         if key not in stopped_ids:
                             output.event(event('STOP', event_id=key, task_id=row['task_id'],
                                                reason=row['handle']['state'],
-                                               checkpoint=row['checkpoint'], accepted=False), stream)
+                                               checkpoint=checkpoint_reference(row['checkpoint']),
+                                               accepted=False), stream)
                             stopped_ids.add(key)
                     state.update(checkpoints=checkpoints, last_recorded_at=utc(wall()),
                                  last_recorded_monotonic=monotonic(),

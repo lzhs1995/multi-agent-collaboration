@@ -179,6 +179,27 @@ actual receipt/read evidence. The observer never sends that notice. Its final
 coverage becomes UNKNOWN, and a hard kill may leave ACTIVE on disk: verify the
 real observer handle and `coverage_valid_until` before claiming ongoing coverage.
 
+For a verified Herdr target, the same journal also records one `HERDR_BASELINE`
+and a `HERDR_STATE_CHANGED` when its literal runtime state changes. An unchanged
+state produces no repeated event, even if a sequence counter changes. Resume
+uses the durable journal, including an event saved before a stdout interruption.
+UNKNOWN samples preserve the previous known state and observation time; they do
+not imply a stop, failed task, read message, released resource or completed work.
+Changes are notification candidates for the supervisor to interpret and deliver
+once through the original supported route. They are not native notifications.
+Events retain checkpoint metadata and hashes; the latest snapshot retains its
+full self-report. The observer checks whether the task count, endpoint sizes and
+remaining period fit the 4 MiB event budget before recording ACTIVE. An oversized
+period is refused before observation, including on resume; no implicit log reset,
+deadline extension or new period is created. Use an explicitly bounded period
+that fits the original journal and retain that period's evidence.
+
+The [federation adapter](federated-progress-adapter.md) projects referenced actor
+process/endpoint pins into this same observer. It retains actors without usable
+pins as UNKNOWN; it neither discovers replacement participants nor creates a
+second progress loop. Live process, native identity, runtime state and business
+acceptance remain separately reported.
+
 ### 3. Bidirectional wake-up, with visible conversation evidence
 
 Both supervisor→executor and executor→supervisor need a supported route. Submit
@@ -244,6 +265,13 @@ a revision, rounds two and three must both pass on the same revised PDF. A new
 issue in round two makes that gate unattainable in the remaining budget: return
 partial, retain the chapter's remaining budget and ask the acceptance owner to
 decide any genuinely new scope. Refreezing alone never resets either ledger.
+
+New tasks that explicitly adopt it can use the [review scope budget ledger](review-scope-budget.md)
+to record intents, scope lineage and aliases, complete or unknown returns, and
+the three-round cap in one SQLite database per project. This is bookkeeping,
+not identity or semantic authorization, scientific PASS, or a takeover of an
+existing harness/NLM contract. A REUSE entry is not a second independent review
+of the same PDF.
 
 ### 5. Recover intent and evidence; read back uncertain outcomes
 

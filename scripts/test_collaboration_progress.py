@@ -312,6 +312,147 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(snap['tasks'][0]['herdr']['state'], 'UNKNOWN')
         self.assertFalse([e for e in self.events() if e['type'] == 'STOP'])
 
+    def runtime_reader(self, states):
+        remaining = iter(states)
+        def read(binding, *, timeout):
+            value = next(remaining)
+            if isinstance(value, Exception):
+                raise value
+            return {'identity_matches': True, 'state': value, 'revision': 3,
+                    'state_change_seq': int(self.clock.now())}
+        return read
+
+    def runtime_events(self):
+        return [e for e in self.events() if e['type'] in
+                ('HERDR_BASELINE', 'HERDR_STATE_CHANGED')]
+
+    def test_herdr_runtime_changes_are_durable_once_not_business_verdicts(self):
+        self.bind_herdr()
+        self.run_observer(duration=240,
+                          herdr_reader=self.runtime_reader(['working', 'blocked', 'blocked', 'idle']))
+        events = self.runtime_events()
+        self.assertEqual([e['state'] for e in events], ['working', 'blocked', 'idle'])
+        self.assertEqual([e['previous_state'] for e in events], [None, 'working', 'blocked'])
+        self.assertEqual([e['notification_candidate'] for e in events], [False, True, True])
+        self.assertEqual(len({e['event_id'] for e in events}), 3)
+        for e in events:
+            self.assertFalse(e['native_notification'])
+            self.assertFalse(e['supervisor_consumed'])
+            self.assertFalse(e['accepted'])
+            self.assertFalse(e['task_completed'])
+            self.assertEqual(e['failure_cause'], 'NOT_DETERMINED')
+        self.assertFalse([e for e in self.events() if e['type'] == 'STOP'])
+
+    def test_herdr_unknown_gap_retains_last_known_state_without_false_transition(self):
+        self.bind_herdr()
+        self.run_observer(duration=300, herdr_reader=self.runtime_reader([
+            'working', subprocess.TimeoutExpired('herdr', 20), 'unknown', 'working', 'blocked']))
+        events = self.runtime_events()
+        self.assertEqual([e['state'] for e in events], ['working', 'blocked'])
+        self.assertEqual(events[-1]['previous_observed_at'], events[0]['observed_at'])
+
+    def test_unknown_or_malformed_runtime_is_partial_coverage_not_a_stop(self):
+        self.bind_herdr()
+        for value in ('unknown', 'UNKNOWN', None, {}, '', 'x' * 129):
+            with self.subTest(value=value):
+                snap, _ = self.take(herdr_reader=self.runtime_reader([value]))
+                row = snap['tasks'][0]
+                self.assertEqual(row['herdr']['state'], 'UNKNOWN')
+                self.assertTrue(snap['partial_coverage'])
+                self.assertIsNone(p.runtime_state_event(row, None, observer_id='o', project_id='p'))
+
+    def test_same_runtime_with_new_sequence_does_not_spam_events(self):
+        self.bind_herdr()
+        self.run_observer(duration=180,
+                          herdr_reader=self.runtime_reader(['working', 'working', 'working']))
+        self.assertEqual(len(self.runtime_events()), 1)
+
+    def test_runtime_returning_to_blocked_is_a_new_transition(self):
+        self.bind_herdr()
+        self.run_observer(duration=180,
+                          herdr_reader=self.runtime_reader(['blocked', 'working', 'blocked']))
+        events = self.runtime_events()
+        self.assertEqual([e['state'] for e in events], ['blocked', 'working', 'blocked'])
+        self.assertNotEqual(events[0]['event_id'], events[2]['event_id'])
+
+    def test_runtime_event_journal_prevents_resend_after_stdout_failure_and_resume(self):
+        self.bind_herdr()
+        class BrokenStream(io.StringIO):
+            def write(self, text):
+                if json.loads(text)['type'] == 'HERDR_STATE_CHANGED':
+                    raise OSError('stdout disconnected after durable event')
+                return super().write(text)
+        with self.assertRaises(OSError):
+            self.run_observer(duration=180, stream=BrokenStream(),
+                              herdr_reader=self.runtime_reader(['working', 'blocked']))
+        original = json.loads((self.output / 'observer.json').read_text())['deadline_at']
+        self.run_observer(resume=True, duration=None,
+                          herdr_reader=self.runtime_reader(['blocked', 'blocked']))
+        self.assertEqual([e['state'] for e in self.runtime_events()], ['working', 'blocked'])
+        self.assertEqual(json.loads((self.output / 'observer.json').read_text())['deadline_at'], original)
+
+    def test_same_pane_names_on_two_services_have_separate_runtime_events(self):
+        self.bind_herdr()
+        second = copy.deepcopy(self.manifest['tasks'][0])
+        second['task_id'] = 'chapter-b'
+        second['herdr']['selector']['name'] = 'chapter-b'
+        second['herdr']['target']['endpoint']['socket'] = '/tmp/chapter-b.sock'
+        second['herdr']['target']['native_session_id'] = 'session-b'
+        self.manifest['tasks'].append(second)
+        self.save_manifest()
+        self.run_observer(duration=120,
+                          herdr_reader=self.runtime_reader(['working', 'idle', 'blocked', 'idle']))
+        changes = [e for e in self.runtime_events() if e['type'] == 'HERDR_STATE_CHANGED']
+        self.assertEqual([(e['task_id'], e['selector']['name']) for e in changes],
+                         [('chapter-a', 'chapter-a')])
+        self.assertEqual(len(self.runtime_events()), 3)
+
+    def test_native_identity_failure_keeps_exact_unknown_reason(self):
+        self.bind_herdr()
+        from collaboration_profile import ProfileError
+        self.run_observer(duration=60,
+                          herdr_reader=self.runtime_reader([ProfileError('NATIVE_SESSION_CHANGED')]))
+        snap = json.loads((self.output / 'snapshot.json').read_text())
+        self.assertEqual(snap['tasks'][0]['herdr']['error_code'], 'NATIVE_SESSION_CHANGED')
+        self.assertEqual(self.runtime_events(), [])
+
+    def test_large_checkpoints_do_not_fill_transition_journal(self):
+        self.bind_herdr()
+        checkpoint = self.checkpoint({'status': 'working', 'current_work': 'x' * 61000})
+        for index in range(1, 4):
+            task = copy.deepcopy(self.manifest['tasks'][0])
+            task['task_id'] = 'chapter-' + str(index)
+            self.manifest['tasks'].append(task)
+        self.save_manifest()
+        def state(binding, *, timeout):
+            return {'identity_matches': True,
+                    'state': 'working' if int(self.clock.now() / 60) % 2 else 'blocked'}
+        self.run_observer(duration=1800, herdr_reader=state)
+        events = self.runtime_events()
+        self.assertEqual(len(events), 120)
+        self.assertLess((self.output / 'events.jsonl').stat().st_size, 256 * 1024)
+        for event in events:
+            self.assertNotIn('self_report', event['checkpoint'])
+            self.assertEqual(event['checkpoint']['sha256'], p.digest(checkpoint.read_bytes()))
+        snap = json.loads((self.output / 'snapshot.json').read_text())
+        self.assertEqual(len(snap['tasks'][0]['checkpoint']['self_report']['current_work']), 61000)
+        self.assertEqual(json.loads((self.output / 'observer.json').read_text())['stop_reason'],
+                         'DEADLINE_REACHED')
+
+    def test_journal_budget_rejects_oversized_period_before_active(self):
+        self.bind_herdr()
+        with self.assertRaisesRegex(p.ProgressError, 'JOURNAL_BUDGET_INSUFFICIENT_FOR_PERIOD'):
+            self.run_observer(duration=86400, herdr_reader=self.runtime_reader(['working']))
+        self.assertFalse((self.output / 'observer.json').exists())
+        self.assertFalse((self.output / 'events.jsonl').exists())
+
+    def test_runtime_event_does_not_copy_arbitrary_binding_metadata(self):
+        self.bind_herdr()
+        self.manifest['tasks'][0]['herdr']['target']['unrelated_evidence'] = 'x' * 60000
+        self.save_manifest()
+        self.run_observer(duration=60, herdr_reader=self.runtime_reader(['working']))
+        self.assertNotIn('unrelated_evidence', self.runtime_events()[0]['target'])
+
     def test_herdr_unavailable_status_is_partial_unknown_with_verified_identity(self):
         self.bind_herdr()
         binding = self.manifest['tasks'][0]['herdr']
@@ -350,6 +491,36 @@ class ProgressTests(unittest.TestCase):
                 self.assertEqual(snap['tasks'][0]['herdr']['state'], value)
                 self.assertFalse(snap['partial_coverage'])
                 self.assertFalse(snap['tasks'][0]['task_completed'])
+
+    def test_unknown_normalization_retains_identity_metadata_without_runtime_event(self):
+        self.bind_herdr()
+        for value in (None, {}, [], 1, '', '   ', ' Unknown ', 'x' * 129):
+            with self.subTest(status=value):
+                snap, _ = self.take(herdr_reader=lambda *a, **k: {
+                    'identity_matches': True, 'state': value, 'revision': 3,
+                    'state_change_seq': 9223372036854775807})
+                row = snap['tasks'][0]
+                self.assertEqual(row['herdr']['state'], 'UNKNOWN')
+                self.assertIs(row['herdr']['identity_matches'], True)
+                self.assertEqual(row['herdr']['target'], self.manifest['tasks'][0]['herdr']['target'])
+                self.assertEqual(row['herdr']['revision'], 3)
+                self.assertEqual(row['herdr']['state_change_seq'], 9223372036854775807)
+                self.assertTrue(snap['partial_coverage'])
+                self.assertIsNone(p.runtime_state_event(row, None, observer_id='o', project_id='p'))
+
+    def test_runtime_counters_are_bounded_int64_without_changing_runtime_truth(self):
+        self.bind_herdr()
+        for value, expected in ((0, 0), (2**63-1, 2**63-1), (-1, None), (2**63, None),
+                                (True, None), ('9' * 10000, None), (float('nan'), None)):
+            with self.subTest(counter_type=type(value).__name__, expected=expected):
+                snap, _ = self.take(herdr_reader=lambda *a, **k: {
+                    'identity_matches': True, 'state': 'working',
+                    'revision': value, 'state_change_seq': value})
+                row = snap['tasks'][0]
+                self.assertEqual(row['herdr']['state'], 'working')
+                self.assertEqual(row['herdr']['revision'], expected)
+                self.assertEqual(row['herdr']['state_change_seq'], expected)
+                self.assertFalse(row['accepted'])
 
     def test_snapshot_budget_skips_unobserved_tasks_as_unknown(self):
         self.manifest['tasks'].append({'task_id': 'chapter-b', 'process': dict(self.pin, pid=222)})
@@ -512,6 +683,24 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(self.clock.monotonic_value, 10180)
         self.assertEqual(first['deadline_monotonic'], second['deadline_monotonic'])
         self.assertEqual(len([e for e in self.events() if e['type'] == 'STOP']), 1)
+
+    def test_resume_journal_reservation_uses_shorter_wall_or_monotonic_budget(self):
+        self.bind_herdr()
+        for rollback, remaining in ((50, 120), (-50, 70)):
+            with self.subTest(wall_rollback_seconds=rollback):
+                self.output = self.root / ('resume-clock-budget-' + str(rollback))
+                first = self.interrupted_watch(rollback=rollback)
+                before_mono = self.clock.monotonic_value
+                with patch.object(p, 'journal_reservation', wraps=p.journal_reservation) as reserve:
+                    second = self.run_observer(duration=None, resume=True,
+                                               process_reader=self.absent,
+                                               monotonic=self.clock.monotonic)
+                self.assertEqual(reserve.call_count, 1)
+                self.assertEqual(reserve.call_args.args[1], remaining)
+                self.assertEqual(self.clock.monotonic_value - before_mono, remaining)
+                self.assertEqual(first['deadline_at'], second['deadline_at'])
+                self.assertEqual(first['deadline_monotonic'], second['deadline_monotonic'])
+                self.assertEqual(second['stop_reason'], 'DEADLINE_REACHED')
 
     def assert_resume_refused_without_output_change(self, expression, **kwargs):
         before = {p.name: p.read_bytes() for p in self.output.iterdir() if p.is_file()}
