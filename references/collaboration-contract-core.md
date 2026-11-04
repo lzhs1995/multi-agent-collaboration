@@ -4,6 +4,12 @@ Use this contract for new tasks in either transport. Existing tasks keep their
 registered controller, input attempts and acceptance contract. Reading a skill
 does not enroll a task, start an agent, grant shared writes or enable a loop.
 
+For a nested team of teams, apply [nested research coordination](nested-research-coordination.md).
+It defines inward/outward responsibilities, four task modes, traceable handoffs,
+60-second progress visibility, bidirectional conversation evidence, bounded review
+and recovery. One shared contract serves both skill entries; task registration
+and actual runtime observation remain separate from reading these instructions.
+
 ## Assign useful work
 
 The supervisor owns scope, integration and final acceptance. An executor owns a
