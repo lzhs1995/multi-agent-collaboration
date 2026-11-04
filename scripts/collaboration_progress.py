@@ -34,6 +34,10 @@ to this observer requests graceful stop; no peer receives a signal. Resume
 requires the identical manifest and retains the original deadline and STOP IDs;
 it cannot extend coverage or reset a completed budget. Use a new output directory
 for a separately authorized new observation period, retaining the old records.
+Resume also requires the original local kernel boot UUID and monotonic deadline.
+Old state without this clock binding, a different boot, or an unavailable boot
+identity is refused without resetting the observation period. Wall-clock rollback
+cannot increase the original monotonic budget; CPU uptime is not a boot identity.
 Each scan receives at most 50 seconds and never more than the remaining watch
 budget. Herdr subprocess timeouts share that scan deadline; tasks not reached
 within it remain UNKNOWN. Native kernel/filesystem reads are synchronous and
@@ -146,6 +150,40 @@ def read_regular(path, limit, *, dir_fd=None):
 def require(condition, reason):
     if not condition:
         raise ProgressError(reason)
+
+
+def boot_identity(value):
+    require(isinstance(value, dict) and set(value) == {'source', 'uuid'}
+            and value['source'] in ('darwin-kern.bootsessionuuid', 'linux-proc-boot-id')
+            and isinstance(value['uuid'], str), 'INVALID_BOOT_IDENTITY')
+    try:
+        parsed = uuid.UUID(value['uuid'])
+    except ValueError as exc:
+        raise ProgressError('INVALID_BOOT_IDENTITY') from exc
+    require(parsed.int != 0 and str(parsed) == value['uuid'], 'INVALID_BOOT_IDENTITY')
+    return dict(value)
+
+
+def native_boot_identity():
+    """Kernel-generated local boot UUID; never infer a boot from uptime or wall time."""
+    if sys.platform == 'darwin':
+        import ctypes
+        lib = ctypes.CDLL(None, use_errno=True)
+        lib.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                                    ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p,
+                                    ctypes.c_size_t]
+        lib.sysctlbyname.restype = ctypes.c_int
+        buffer = ctypes.create_string_buffer(128)
+        size = ctypes.c_size_t(len(buffer))
+        if lib.sysctlbyname(b'kern.bootsessionuuid', buffer, ctypes.byref(size), None, 0):
+            raise OSError(ctypes.get_errno(), 'kernel boot identity unavailable')
+        raw, source = buffer.value.decode('ascii'), 'darwin-kern.bootsessionuuid'
+    elif sys.platform.startswith('linux'):
+        raw = read_regular('/proc/sys/kernel/random/boot_id', 128)[0].decode('ascii').strip()
+        source = 'linux-proc-boot-id'
+    else:
+        raise ProgressError('BOOT_IDENTITY_UNAVAILABLE')
+    return boot_identity({'source': source, 'uuid': raw.lower()})
 
 
 def validate_manifest(manifest):
@@ -333,7 +371,11 @@ def snapshot(manifest, prior=None, *, process_reader=native_process,
                     raise ProgressError('HERDR_READ_SKIPPED')
                 result = herdr_reader(task['herdr'], timeout=min(20, left))
                 require(result.get('identity_matches') is True, 'HERDR_IDENTITY_UNCONFIRMED')
-                herdr.update(state=result.get('state', 'unknown'), identity_matches=True,
+                status = result.get('state')
+                if (not isinstance(status, str) or not status.strip()
+                        or status.strip().lower() == 'unknown'):
+                    status = 'UNKNOWN'
+                herdr.update(state=status, identity_matches=True,
                              selector=task['herdr']['selector'], observed_at=utc(wall()))
             except Exception as exc:
                 herdr['error'] = type(exc).__name__
@@ -455,7 +497,8 @@ def stop_signals(stop):
 
 def run(manifest_path, output_path, *, mode, duration=None, resume=False,
         stream=None, process_reader=native_process, herdr_reader=native_herdr,
-        wall=time.time, monotonic=time.monotonic, stop=None, waiter=None):
+        wall=time.time, monotonic=time.monotonic, stop=None, waiter=None,
+        boot_reader=native_boot_identity):
     require(mode in ('snapshot', 'watch'), 'INVALID_MODE')
     require(not resume or mode == 'watch', 'ONLY_WATCH_CAN_RESUME')
     require((resume and duration is None) or (mode == 'snapshot' and duration is None)
@@ -479,7 +522,8 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                     and (e['type'] != 'STOP' or isinstance(e.get('event_id'), str))
                     for e in events), 'INVALID_EVENT_JOURNAL')
         stopped_ids = {e['event_id'] for e in events if e.get('type') == 'STOP'}
-        now = wall()
+        now, mono_now = wall(), monotonic()
+        current_boot = boot_identity(boot_reader())
         if resume:
             require(previous is not None, 'NO_OBSERVER_TO_RESUME')
             state = decode(previous)
@@ -495,6 +539,17 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                     and all(e.get('observer_id') == state['observer_id']
                             and e.get('project_id') == manifest['project_id'] for e in events),
                     'EVENT_JOURNAL_BINDING_CHANGED')
+            clock_fields = ('started_monotonic', 'deadline_monotonic',
+                            'last_recorded_monotonic')
+            require('boot_identity' in state and all(
+                type(state.get(k)) in (int, float) and math.isfinite(state[k])
+                for k in clock_fields), 'RESUME_CLOCK_BINDING_REQUIRED')
+            require(boot_identity(state['boot_identity']) == current_boot,
+                    'RESUME_BOOT_IDENTITY_CHANGED')
+            require(0 <= state['started_monotonic'] <= state['last_recorded_monotonic']
+                    <= mono_now < state['deadline_monotonic']
+                    and CADENCE <= state['deadline_monotonic'] - state['started_monotonic']
+                    <= 86400, 'ORIGINAL_MONOTONIC_DEADLINE_EXPIRED_OR_CLOCK_REGRESSED')
             require(epoch(state['last_recorded_at']) <= now < epoch(state['deadline_at']),
                     'ORIGINAL_DEADLINE_EXPIRED_OR_CLOCK_REGRESSED')
         else:
@@ -505,8 +560,11 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                      'project_id': manifest['project_id'], 'manifest_path': str(manifest_path),
                      'manifest_sha256': pinned, 'started_at': utc(now),
                      'deadline_at': utc(now + (duration or SNAPSHOT_BUDGET)),
+                     'boot_identity': current_boot, 'started_monotonic': mono_now,
+                     'deadline_monotonic': mono_now + (duration or SNAPSHOT_BUDGET),
                      'cadence_seconds': CADENCE, 'checkpoints': {}}
-        deadline = monotonic() + max(0, epoch(state['deadline_at']) - now)
+        deadline = min(state['deadline_monotonic'],
+                       mono_now + max(0, epoch(state['deadline_at']) - now))
         try:
             self_pin = process_observation(process_reader(os.getpid(), timeout=2))
             state['observer_handle'] = {'state': 'LIVE', 'process': self_pin}
@@ -516,6 +574,7 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
             if isinstance(exc, ProgressError):
                 state['observer_handle']['error_code'] = str(exc)
         state.update(status='ACTIVE', coverage='OBSERVING', last_recorded_at=utc(wall()),
+                     last_recorded_monotonic=monotonic(),
                      native_notification=False, accepted=False)
         output.write('observer.json', state)
         reason = 'OBSERVATION_ERROR'
@@ -560,6 +619,7 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
                                                checkpoint=row['checkpoint'], accepted=False), stream)
                             stopped_ids.add(key)
                     state.update(checkpoints=checkpoints, last_recorded_at=utc(wall()),
+                                 last_recorded_monotonic=monotonic(),
                                  last_snapshot_at=snap['observed_at'],
                                  coverage_valid_until=snap['coverage_valid_until'])
                     output.write('observer.json', state)
@@ -575,7 +635,8 @@ def run(manifest_path, output_path, *, mode, duration=None, resume=False,
             raise
         finally:
             state.update(status='STOPPED', coverage='UNKNOWN', stop_reason=reason,
-                         stopped_at=utc(wall()), last_recorded_at=utc(wall()))
+                         stopped_at=utc(wall()), last_recorded_at=utc(wall()),
+                         last_recorded_monotonic=monotonic())
             output.write('observer.json', state)
             output.event(event('OBSERVER_STOPPED', reason=reason, coverage='UNKNOWN'), stream)
     return state

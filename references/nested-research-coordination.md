@@ -167,6 +167,9 @@ task completion, resource release and native notification are not inferred.
 To end this observer, signal only its verified process with Ctrl-C/SIGTERM via its
 original tool handle. To resume after interruption, use the identical manifest
 and output with `watch --resume`; the original deadline and STOP IDs remain.
+Resume requires the same kernel boot UUID and original monotonic deadline; wall
+clock rollback cannot add time. Old state without that binding or a different
+boot is refused without resetting the period.
 Do not delete the writer lock or start a second writer. An expired period stays
 expired; a separately authorized new period uses new output and retains old data.
 

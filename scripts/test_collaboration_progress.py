@@ -73,6 +73,19 @@ class Clock:
         self.value += seconds
 
 
+class IndependentClock(Clock):
+    def __init__(self):
+        super().__init__()
+        self.monotonic_value = 10000.0
+
+    def monotonic(self):
+        return self.monotonic_value
+
+    def wait(self, seconds):
+        super().wait(seconds)
+        self.monotonic_value += seconds
+
+
 class ProgressTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -85,6 +98,8 @@ class ProgressTests(unittest.TestCase):
         self.path = self.root / 'tasks.json'
         self.output = self.root / 'out'
         self.clock = Clock()
+        self.boot = {'source': 'darwin-kern.bootsessionuuid',
+                     'uuid': '11111111-1111-4111-8111-111111111111'}
         self.save_manifest()
 
     def save_manifest(self):
@@ -107,7 +122,9 @@ class ProgressTests(unittest.TestCase):
         return p.run(self.path, self.output, mode=kwargs.pop('mode', 'watch'),
                      duration=kwargs.pop('duration', 120),
                      process_reader=kwargs.pop('process_reader', self.live),
-                     wall=self.clock.now, monotonic=self.clock.now,
+                     wall=kwargs.pop('wall', self.clock.now),
+                     monotonic=kwargs.pop('monotonic', self.clock.now),
+                     boot_reader=kwargs.pop('boot_reader', lambda: dict(self.boot)),
                      waiter=kwargs.pop('waiter', self.clock.wait), **kwargs)
 
     def events(self):
@@ -295,6 +312,45 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(snap['tasks'][0]['herdr']['state'], 'UNKNOWN')
         self.assertFalse([e for e in self.events() if e['type'] == 'STOP'])
 
+    def test_herdr_unavailable_status_is_partial_unknown_with_verified_identity(self):
+        self.bind_herdr()
+        binding = self.manifest['tasks'][0]['herdr']
+        for value in ('missing', None, 'unknown', 'UNKNOWN', ' Unknown ', '', 1, [], {}):
+            with self.subTest(status=value):
+                row = {'pane_id': 'w1:p2', 'terminal_id': 'term_bound',
+                       'agent_session': {'kind': 'id', 'value': 'session-bound'}}
+                if value != 'missing':
+                    row['agent_status'] = value
+                replies = [
+                    {'server': {'running': True, 'status': 'running', 'compatible': True,
+                                'endpoint_compatible': True, 'session': 'chapter-a',
+                                'socket': binding['target']['endpoint']['socket']}},
+                    {'result': {'agents': [row]}}]
+                calls = []
+                def read(argv, **kwargs):
+                    calls.append(argv)
+                    return subprocess.CompletedProcess(argv, 0, json.dumps(replies.pop(0)))
+                with patch('collaboration_progress.subprocess.run', side_effect=read):
+                    snap, _ = self.take()
+                observed = snap['tasks'][0]
+                self.assertEqual(observed['handle']['state'], 'LIVE')
+                self.assertEqual(observed['herdr']['state'], 'UNKNOWN')
+                self.assertTrue(observed['herdr']['identity_matches'])
+                self.assertTrue(snap['partial_coverage'])
+                self.assertEqual(calls, [
+                    ['herdr', '--session', 'chapter-a', 'status', '--json'],
+                    ['herdr', '--session', 'chapter-a', 'agent', 'list']])
+
+    def test_known_herdr_status_preserves_complete_observation(self):
+        self.bind_herdr()
+        for value in ('working', 'idle', 'done', 'blocked'):
+            with self.subTest(status=value):
+                snap, _ = self.take(herdr_reader=lambda *a, **k: {
+                    'identity_matches': True, 'state': value})
+                self.assertEqual(snap['tasks'][0]['herdr']['state'], value)
+                self.assertFalse(snap['partial_coverage'])
+                self.assertFalse(snap['tasks'][0]['task_completed'])
+
     def test_snapshot_budget_skips_unobserved_tasks_as_unknown(self):
         self.manifest['tasks'].append({'task_id': 'chapter-b', 'process': dict(self.pin, pid=222)})
         calls = []
@@ -425,6 +481,85 @@ class ProgressTests(unittest.TestCase):
         self.save_manifest()
         with self.assertRaisesRegex(p.ProgressError, 'BINDING_CHANGED'):
             self.run_observer(duration=None, resume=True)
+
+    def interrupted_watch(self, *, rollback=0):
+        self.clock = IndependentClock()
+        stop = threading.Event()
+        def stop_tick(seconds):
+            self.clock.wait(seconds)
+            self.clock.value -= rollback
+            stop.set()
+        return self.run_observer(duration=180, process_reader=self.absent,
+                                 stop=stop, waiter=stop_tick,
+                                 monotonic=self.clock.monotonic)
+
+    def test_resume_wall_rollback_cannot_extend_monotonic_deadline(self):
+        first = self.interrupted_watch(rollback=50)
+        self.assertEqual(self.clock.monotonic_value, 10060)
+        second = self.run_observer(duration=None, resume=True, process_reader=self.absent,
+                                   monotonic=self.clock.monotonic)
+        self.assertEqual(self.clock.monotonic_value, 10180)
+        self.assertEqual(first['deadline_at'], second['deadline_at'])
+        self.assertEqual(first['deadline_monotonic'], second['deadline_monotonic'])
+        self.assertEqual(second['boot_identity'], self.boot)
+        self.assertEqual(len([e for e in self.events() if e['type'] == 'STOP']), 1)
+
+    def test_resume_same_boot_retains_elapsed_downtime(self):
+        first = self.interrupted_watch()
+        self.clock.wait(30)
+        second = self.run_observer(duration=None, resume=True, process_reader=self.absent,
+                                   monotonic=self.clock.monotonic)
+        self.assertEqual(self.clock.monotonic_value, 10180)
+        self.assertEqual(first['deadline_monotonic'], second['deadline_monotonic'])
+        self.assertEqual(len([e for e in self.events() if e['type'] == 'STOP']), 1)
+
+    def assert_resume_refused_without_output_change(self, expression, **kwargs):
+        before = {p.name: p.read_bytes() for p in self.output.iterdir() if p.is_file()}
+        with self.assertRaisesRegex(p.ProgressError, expression):
+            self.run_observer(duration=None, resume=True,
+                              monotonic=self.clock.monotonic, **kwargs)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.output.iterdir()
+                                  if p.is_file()})
+
+    def test_resume_changed_boot_is_refused_without_reset(self):
+        self.interrupted_watch()
+        self.boot['uuid'] = '22222222-2222-4222-8222-222222222222'
+        self.assert_resume_refused_without_output_change('RESUME_BOOT_IDENTITY_CHANGED')
+
+    def test_resume_missing_clock_binding_is_refused_without_reset(self):
+        original = self.interrupted_watch()
+        for missing in ('boot_identity', 'started_monotonic', 'deadline_monotonic',
+                        'last_recorded_monotonic'):
+            with self.subTest(missing=missing):
+                state = dict(original)
+                del state[missing]
+                (self.output/'observer.json').write_text(json.dumps(state))
+                self.assert_resume_refused_without_output_change('RESUME_CLOCK_BINDING_REQUIRED')
+
+    def test_resume_expired_monotonic_budget_refused_despite_wall_rollback(self):
+        self.interrupted_watch(rollback=50)
+        self.clock.wait(120)
+        self.assert_resume_refused_without_output_change('ORIGINAL_MONOTONIC_DEADLINE_EXPIRED')
+
+    def test_resume_monotonic_regression_is_refused(self):
+        self.interrupted_watch()
+        self.clock.monotonic_value -= 1
+        self.assert_resume_refused_without_output_change('CLOCK_REGRESSED')
+
+    def test_resume_invalid_boot_identity_is_refused_without_reset(self):
+        self.interrupted_watch()
+        for invalid in ({}, {'source': 'cpu-uptime', 'uuid': self.boot['uuid']},
+                        dict(self.boot, uuid='not-a-uuid')):
+            with self.subTest(boot=invalid):
+                self.assert_resume_refused_without_output_change(
+                    'INVALID_BOOT_IDENTITY', boot_reader=lambda: invalid)
+
+    def test_native_boot_identity_is_stable_kernel_uuid(self):
+        first = p.native_boot_identity()
+        second = p.native_boot_identity()
+        self.assertEqual(first, second)
+        self.assertEqual(p.boot_identity(first), first)
+        self.assertIn(first['source'], ('darwin-kern.bootsessionuuid', 'linux-proc-boot-id'))
 
     def test_unbounded_watch_and_implicit_output_reuse_refused(self):
         for value in (None, 0, 59, 86401, True):
