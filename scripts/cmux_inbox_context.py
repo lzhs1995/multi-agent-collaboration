@@ -146,7 +146,10 @@ def incoming(snapshot, workspace, surface):
         raw = body.encode('utf-8')
         entry = dict(id=message_id, body_bytes=len(raw), body_sha256=hashlib.sha256(raw).hexdigest(),
                      recipient_surface_id=canonical(surface), recipient_workspace_id=canonical(workspace))
-        if len(raw) <= MAX_BODY:
+        # Budget the representation actually included in context. Control
+        # characters can expand sixfold in JSON and otherwise starve every
+        # later notice even when their raw body fits MAX_BODY.
+        if len(json.dumps(body, ensure_ascii=False).encode('utf-8')) <= MAX_BODY:
             entry['body'] = body
         else:
             entry['body_omitted'] = 'Inspect the original cmux inbox row; this is not the full body.'

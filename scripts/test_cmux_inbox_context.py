@@ -157,6 +157,20 @@ class InboxContextTests(unittest.TestCase):
         self.assertEqual(len(self.discover()), 2)
         self.assertEqual(self.discover(), [])
 
+    def test_escape_heavy_body_does_not_starve_later_notice(self):
+        body = '\x01' * 4000
+        self.query.return_value['messages'] = [dict(message(), body=body), message(FOREIGN)]
+        result = self.discover()
+        self.assertEqual([row['id'] for row in result], [MID, FOREIGN])
+        self.assertNotIn('body', result[0])
+        self.assertIn('body_omitted', result[0])
+        self.assertEqual(result[0]['body_bytes'], 4000)
+        self.assertEqual(result[0]['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+        self.assertEqual(result[1]['body'], 'STATUS: original notice')
+        self.assertLessEqual(len(self.emit.call_args.args[0].encode()), inbox.MAX_CONTEXT)
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(self.emit.call_count, 1)
+
     def test_context_byte_budget_is_bounded(self):
         self.query.return_value['messages'] = [dict(message(str(inbox.uuid.uuid4())), body='中' * 1300) for _ in range(8)]
         self.discover()

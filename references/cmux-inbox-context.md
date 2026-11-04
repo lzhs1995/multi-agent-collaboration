@@ -21,8 +21,9 @@ has loaded it. Register only in an already authorized maintenance scope and pin
 the complete immutable source; do not migrate in-flight attempts.
 
 The observer reads at most 256 queued rows, exposes at most eight notices and
-16 KiB per event, and bounds each body's exposure to 4096 UTF-8 bytes. Larger
-bodies are explicitly omitted with their byte count and SHA. The snapshot can
+16 KiB per event, and bounds each body's JSON representation to 4096 UTF-8
+bytes, including escaping. Larger representations are explicitly omitted with
+the original body's byte count and SHA so they cannot block later notices. The snapshot can
 omit older rows; it is not a complete inbox audit. It never executes body paths.
 The private cursor records successful output flushes, not message consumption.
 Unchanged notices are deduplicated; a failed flush leaves them available. No
