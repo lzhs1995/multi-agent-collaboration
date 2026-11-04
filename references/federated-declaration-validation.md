@@ -90,3 +90,8 @@ identity, resource, generation, allowed operations,
 input revision, expiry/state and real MCP/API/application write-entry checks are
 needed. Expiry does not stop an operation or release ownership. A valid manifest
 cannot certify those guarantees or authorize parallel application writes.
+
+For an existing restricted Word ticket, the [read-only resource preflight](federated-resource-preflight.md)
+reports its original executor/controller and missing task bindings or required
+readback. It creates no lease or authorization and does not replace the supported
+execution guard at an actual application entry.
