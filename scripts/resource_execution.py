@@ -23,6 +23,7 @@ __execution_pin__ = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 SOURCE = Path(__file__).resolve().parent.parent
 SCHEMA = 'resource-execution-v1'
+WORD_SCHEMA = 'resource-execution-word-pdf-v1'
 KEYS = ('generation', 'operation', 'request_revision', 'attempt_id', 'contract_sha256')
 
 
@@ -173,10 +174,15 @@ def validate(contract, *, execution_inputs=True):
     need(hashlib.sha256(loaded_source).hexdigest() == __execution_pin__
          and _EXECUTION_LOADED_CODE == compile(loaded_source, __file__, 'exec', dont_inherit=True),
          'LOADED_EXECUTION_SOURCE_CHANGED')
+    word = isinstance(contract, dict) and contract.get('schema') == WORD_SCHEMA
     need(isinstance(contract, dict) and set(contract) == {
         'schema', 'task_id', 'resource', 'actor', 'controller', 'operation', 'request_revision',
-        'attempt_id', 'argv', 'cwd', 'environment', 'transport_artifacts', 'inputs'}, 'EXACT_EXECUTION_CONTRACT_REQUIRED')
-    need(contract['schema'] == SCHEMA, 'EXECUTION_SCHEMA_REQUIRED')
+        'attempt_id', 'cwd', 'environment', 'transport_artifacts', 'inputs',
+        'word_plan' if word else 'argv'}, 'EXACT_EXECUTION_CONTRACT_REQUIRED')
+    need(contract['schema'] in (SCHEMA, WORD_SCHEMA), 'EXECUTION_SCHEMA_REQUIRED')
+    if word:
+        need(contract['resource'] == 'word-zotero' and contract['operation'] == 'owned_word_pdf_export',
+             'WORD_PDF_OPERATION_REQUIRED')
     for key in ('task_id', 'resource', 'operation', 'attempt_id'):
         need(isinstance(contract[key], str) and 0 < len(contract[key]) <= 256
              and not any(c in contract[key] for c in '\0\r\n'), 'INVALID_EXECUTION_IDENTIFIER')
@@ -191,10 +197,12 @@ def validate(contract, *, execution_inputs=True):
         # original research input, transport or cwd may legitimately be gone.
         return read_object(canonical(contract))
     need(absolute(contract['cwd']).is_dir(), 'CWD_DIRECTORY_REQUIRED')
-    argv, env = contract['argv'], contract['environment']
-    need(isinstance(argv, list) and argv and all(isinstance(x, str) and '\0' not in x for x in argv), 'EXACT_ARGV_REQUIRED')
-    executable = absolute(argv[0])
-    need(executable.is_file() and os.access(executable, os.X_OK), 'PINNED_EXECUTABLE_REQUIRED')
+    env = contract['environment']
+    if not word:
+        argv = contract['argv']
+        need(isinstance(argv, list) and argv and all(isinstance(x, str) and '\0' not in x for x in argv), 'EXACT_ARGV_REQUIRED')
+        executable = absolute(argv[0])
+        need(executable.is_file() and os.access(executable, os.X_OK), 'PINNED_EXECUTABLE_REQUIRED')
     need(isinstance(env, dict) and all(isinstance(k, str) and k and '=' not in k
          and '\0' not in k and isinstance(v, str) and '\0' not in v for k, v in env.items()), 'COMPLETE_ENVIRONMENT_REQUIRED')
     for field in ('inputs', 'transport_artifacts'):
@@ -204,8 +212,33 @@ def validate(contract, *, execution_inputs=True):
             checked_ref(ref)
             need(ref['path'] not in seen, 'DUPLICATE_PIN')
             seen.add(ref['path'])
-    need(str(executable) in {ref['path'] for ref in contract['transport_artifacts']}, 'EXECUTABLE_TRANSPORT_PIN_REQUIRED')
+    if word:
+        word_module().validate_inputs(contract)
+    else:
+        need(str(executable) in {ref['path'] for ref in contract['transport_artifacts']}, 'EXECUTABLE_TRANSPORT_PIN_REQUIRED')
     return read_object(canonical(contract))
+
+
+def word_module():
+    """One exact adjacent typed implementation; no arbitrary adapter injection."""
+    path = Path(__file__).resolve().with_name('word_execution.py')
+    raw = path.read_bytes()
+    module = sys.modules.get('word_execution')
+    if module is not None:
+        need(Path(getattr(module, '__file__', '')).resolve() == path
+             and getattr(module, '__execution_pin__', None) == hashlib.sha256(raw).hexdigest()
+             and getattr(module, '_EXECUTION_LOADED_CODE', None) == compile(raw, str(path), 'exec', dont_inherit=True),
+             'FOREIGN_OR_CHANGED_WORD_EXECUTION_MODULE')
+        return module
+    spec = importlib.util.spec_from_file_location('word_execution', path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules['word_execution'] = module
+    try:
+        exec(compile(raw, str(path), 'exec', dont_inherit=True), module.__dict__)
+    except BaseException:
+        sys.modules.pop('word_execution', None)
+        raise
+    return module
 
 
 def validate_contract(supplied, *, execution_inputs=True):
@@ -381,6 +414,7 @@ class Execution:
         need(set(kwargs) <= {'text', 'stdout', 'stderr'}, 'UNBOUND_POPEN_OPTIONS')
         need('text' not in kwargs or type(kwargs['text']) is bool, 'INVALID_TEXT_OPTION')
         row, contract = self.require(ticket, token, generation)
+        need(contract['schema'] == SCHEMA, 'WORD_TYPED_RUN_REQUIRED')
         for key, value in [('operation', operation), ('request_revision', request_revision), ('attempt_id', attempt_id)]:
             need(contract[key] == value, 'EXECUTION_OPERATION_BINDING_CHANGED')
         self.authenticate(ticket)
@@ -444,6 +478,7 @@ class Execution:
 
     def check_release(self, row, proof, generation, reconcile):
         _, contract = self.require(row['id'], row['token'], generation, expired=True)
+        need(contract['schema'] == SCHEMA, 'WORD_TYPED_RELEASE_REQUIRED')
         expected = self.enrich(row)['execution']
         supplied = proof.get('execution')
         need(isinstance(supplied, dict) and all(supplied.get(k) == expected[k] for k in KEYS), 'RELEASE_EXECUTION_BINDING_REQUIRED')

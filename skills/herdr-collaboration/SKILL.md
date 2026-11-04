@@ -51,6 +51,11 @@ do not label it a legacy native-user receipt or replay the prompt to manufacture
 one. A discovered file plus a substantive reply can establish body reading and
 result availability without proving the original notification was received.
 
+For inner Claude callers, read the [observed caller boundary](../../references/herdr-caller-boundary.md).
+Receiver pinning and a completed main-session tool result do not authenticate a
+future sender. Preserve unknown branch identity; PID, session ID and inherited
+environment alone are insufficient.
+
 `python3 -B scripts/collaboration_profile.py check-herdr --target <absolute-json>` from the
 complete MAC source performs a read-only check. Target fields are `endpoint`
 (`transport=herdr`, absolute `socket`), `pane_id`, `terminal_id`, and

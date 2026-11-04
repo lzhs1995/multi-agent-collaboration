@@ -43,6 +43,12 @@ An executor's report is not a final chapter verdict. In peer mode, designate one
 integration writer even though discussion remains equal. Shared Word/Zotero or
 account resources retain one lease regime across all teams.
 
+The [chapter 5/6 interface example](chapter-interface-example.md) preserves
+dual-lineage shares versus single-lineage levels and different categorical
+definitions, with explicit source gaps. It covers only a definition-boundary
+subset; six artifact corrections await the original reviewer's round-2 result.
+It is not a complete chapter interface or acceptance of two live Herdr teams.
+
 ## Four cooperation modes
 
 Choose a mode for the current task or phase; do not infer it from the number of
@@ -193,6 +199,9 @@ remaining period fit the 4 MiB event budget before recording ACTIVE. An oversize
 period is refused before observation, including on resume; no implicit log reset,
 deadline extension or new period is created. Use an explicitly bounded period
 that fits the original journal and retain that period's evidence.
+
+See the [local observer evidence](progress-observer-live-evidence.md) for a
+completed process-exit observation and its separate notification limits.
 
 The [federation adapter](federated-progress-adapter.md) projects referenced actor
 process/endpoint pins into this same observer. It retains actors without usable

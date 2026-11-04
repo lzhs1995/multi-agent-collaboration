@@ -148,6 +148,30 @@ class Broker:
     def withdraw_enforced(self, ticket, *, attempt_id, contract_sha256):
         return self._execution().withdraw(ticket, attempt_id=attempt_id, contract_sha256=contract_sha256)
 
+    @staticmethod
+    def validate_word_pdf_contract(contract):
+        module = Broker._execution_module()
+        module.need(isinstance(contract, dict) and contract.get('schema') == module.WORD_SCHEMA,
+                    'WORD_TYPED_CONTRACT_REQUIRED')
+        return module.validate_contract(contract)
+
+    def _word_execution(self):
+        return self._execution_module().word_module().WordExecution(self, os_lock, group_alive)
+
+    def run_word_pdf_enforced(self, ticket, token, *, generation, operation, request_revision, attempt_id):
+        return self._word_execution().run_pdf(ticket, token, generation=generation, operation=operation,
+                                              request_revision=request_revision, attempt_id=attempt_id)
+
+    def release_word_pdf_enforced(self, ticket, token, proof, *, generation, reconcile=False):
+        execution = self._word_execution()
+        with execution.locked_native(ticket):
+            return execution.enrich(self._release(ticket, token, proof, reconcile,
+                                                  execution=execution, generation=generation))
+
+    def inspect_word_pdf_enforced(self, ticket):
+        """Original-attempt readback only; no native calls, replay or recovery."""
+        return self._word_execution().inspect(ticket)
+
     @contextmanager
     def transaction(self):
         self.db.execute("BEGIN IMMEDIATE")
