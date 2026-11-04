@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import cmux_prompt_reference as reference
 import mac_harness as harness
+from test_all import OfflineResult
 
 
 class HandshakeSchemaTests(unittest.TestCase):
@@ -139,4 +140,6 @@ class HandshakeSchemaTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # Match the offline suite: schema fixtures must not inspect the invoking
+    # live client while generating their synthetic handshake receipts.
+    unittest.main(testRunner=unittest.TextTestRunner(resultclass=OfflineResult))
