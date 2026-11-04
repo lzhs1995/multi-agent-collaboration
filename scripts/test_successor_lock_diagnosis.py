@@ -52,7 +52,11 @@ class SuccessorLockDiagnosisTests(unittest.TestCase):
                     self.assertFalse(list(self.journal.glob('event-*.json')))
                     self.assertFalse((self.journal / 'attempt.json').exists())
                     if sys.platform == 'darwin':
-                        self.assertIn(str(child.pid), message.split('holder_pids=')[1])
+                        holders = message.split('holder_pids=')[1]
+                        # PID observation is best-effort and has a production
+                        # two-second bound; lock exclusion is already proven.
+                        if holders != 'unmeasured':
+                            self.assertIn(str(child.pid), holders)
                 finally:
                     child.stdin.close()
                     child.wait(timeout=5)
@@ -63,6 +67,31 @@ class SuccessorLockDiagnosisTests(unittest.TestCase):
     def test_diagnostic_timeout_never_changes_lock_outcome(self):
         with patch.object(subprocess, 'run', side_effect=subprocess.TimeoutExpired('lsof', 2)):
             self.assertEqual(delivery._lock_holders(self.root / 'lock'), 'unmeasured')
+        path = self.lock_paths()['pane']
+        path.parent.mkdir(parents=True, exist_ok=True)
+        code = ('import fcntl,sys;f=open(sys.argv[1],"a");fcntl.flock(f,fcntl.LOCK_EX);'
+                'print("held",flush=True);sys.stdin.read()')
+        child = subprocess.Popen([sys.executable, '-B', '-c', code, str(path)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), 'held')
+            with patch.object(subprocess, 'run', side_effect=subprocess.TimeoutExpired('lsof', 2)) as probe:
+                with self.assertRaises(delivery.native.NativeDeliveryError) as caught:
+                    with delivery._locked(self.root, self.journal, self.artifact):
+                        self.fail('contended lock entered after diagnostic timeout')
+            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(probe.call_args.kwargs['timeout'], 2)
+            self.assertEqual(str(caught.exception),
+                'SUCCESSOR_DELIVERY_IN_PROGRESS: zero input; held_lock=pane path=' +
+                str(path) + ' holder_pids=unmeasured')
+            self.assertEqual(caught.exception.details['input_operations'], 0)
+            self.assertEqual(caught.exception.details['path'], str(path))
+            self.assertFalse(list(self.journal.glob('event-*.json')))
+            self.assertFalse((self.journal / 'attempt.json').exists())
+        finally:
+            child.stdin.close()
+            child.wait(timeout=5)
+            child.stdout.close()
         result = subprocess.CompletedProcess(['lsof'], 0, stdout=str(os.getpid()) + '\n123\n123\n', stderr='')
         with patch.object(subprocess, 'run', return_value=result) as run:
             self.assertEqual(delivery._lock_holders(self.root / 'lock'), '123')
