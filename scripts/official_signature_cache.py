@@ -6,6 +6,34 @@ ctime/mtime 只是文件系统元数据，不是密码学不可变。缓存缺�
 import argparse, hashlib, json, math, os, stat, subprocess, time
 from pathlib import Path
 import cmux_identity_budget as budget
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_validation = ContextVar('official_signature_validation', default=None)
+
+@contextmanager
+def validation_scope():
+    """Full digest at entry and exit, fresh pin checks at every intervening call.
+
+    Evidence is local to this one resolution and never survives it. A changed
+    pin rejects the entire resolution, even if a replacement has a valid cache.
+    Exceptions produce no successful identity and need no closing validation.
+    """
+    if _validation.get() is not None:
+        yield
+        return
+    scope = {'pins': {}, 'sealing': False}
+    token = _validation.set(scope)
+    try:
+        yield
+        scope['sealing'] = True
+        for executable, launcher in tuple(scope['pins']):
+            ok, reason = check(executable, launcher)
+            if not ok:
+                raise ValueError('signature scope changed before return: ' + str(reason))
+        budget.check()
+    finally:
+        _validation.reset(token)
 
 SCHEMA = 'official-codex-signature-cache-v1'
 REQUIREMENT = 'anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"'
@@ -18,9 +46,13 @@ def _identity(st):
 
 def _digest(path):
     h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for block in iter(lambda: f.read(8 << 20), b''):
-            budget.check(); h.update(block)
+    # Hash every byte on every check, using a reused bounded buffer. Avoid the
+    # repeated 8 MiB allocations/copies in a hot authentication path.
+    block = bytearray(256 << 10)
+    view = memoryview(block)
+    with open(path, 'rb', buffering=0) as f:
+        while length := f.readinto(block):
+            budget.check(); h.update(view[:length])
     return h.hexdigest()
 
 def _safe_dir(directory):
@@ -63,9 +95,20 @@ def check(executable, launcher):
             raise ValueError('launcher target changed since refresh')
         if rec.get('identity') != _identity(os.stat(exe)):
             raise ValueError('executable identity drift since refresh')
-        if (rec.get('sha256') != _digest(exe) or rec.get('identity') != _identity(os.stat(exe))
+        scope = _validation.get()
+        key = (exe, str(launcher))
+        pin = (tuple(rec['identity']), rec.get('sha256'), rec.get('launcher_realpath'))
+        previous = scope['pins'].get(key) if scope is not None else None
+        if previous is not None and previous != pin:
+            raise ValueError('verified executable pin changed within resolution')
+        reuse = previous is not None and not scope['sealing']
+        if (not reuse and rec.get('sha256') != _digest(exe) or rec.get('identity') != _identity(os.stat(exe))
                 or rec.get('launcher_realpath') != os.path.realpath(launcher)):
             raise ValueError('executable content digest or launcher target drift since refresh')
+        if scope is not None and previous is None:
+            if len(scope['pins']) >= 16:
+                raise ValueError('signature resolution capacity exceeded')
+            scope['pins'][key] = pin
     except (OSError, ValueError, UnicodeDecodeError) as e:
         budget.check(); return False, 'SIGNATURE_REFRESH_REQUIRED: %s: %s' % (type(e).__name__, e)
     budget.check(); return True, None

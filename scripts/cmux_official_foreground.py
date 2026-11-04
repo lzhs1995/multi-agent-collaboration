@@ -119,11 +119,20 @@ def _latest(stream, size, birth_ms, thread_id=None):
         need(boundary >= 0, "complete native rollout record unavailable")
         start += boundary + 1
         raw = raw[boundary + 1:]
-    offset, latest = start, None
-    for line in raw.splitlines(keepends=True):
-        if line.endswith(b"\n") and line.strip():
-            latest = (offset, line)
-        offset += len(line)
+    # Find the same last complete nonblank splitlines record from the end.
+    # Avoid materializing every line of an 8 MiB history on each recheck.
+    end, latest = len(raw), None
+    while end:
+        newline = raw.rfind(b"\n", 0, end)
+        if newline < 0:
+            break
+        content_end = newline - 1 if newline and raw[newline - 1] == 13 else newline
+        begin = max(raw.rfind(b"\n", 0, content_end), raw.rfind(b"\r", 0, content_end)) + 1
+        line = raw[begin:newline + 1]
+        if line.strip():
+            latest = (start + begin, line)
+            break
+        end = begin
     need(latest is not None and len(latest[1]) <= MAX_RECORD, "bounded complete native rollout record required")
     entry = _json(latest[1])
     if entry.get("type") == "token_usage_record":

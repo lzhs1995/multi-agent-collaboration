@@ -195,6 +195,20 @@ class OfficialForegroundTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             foreground.read(self.client)
 
+    def test_last_complete_record_keeps_crlf_offset_digest_and_ignores_blank_partial_tail(self):
+        record = json.dumps(self.event).encode() + b'\r\n'
+        prefix = b'old-fragment\r'
+        raw = prefix + record + b' \r\n\t\n{"partial":'
+        selected, _ = foreground._latest(io.BytesIO(raw),len(raw),0,THREAD)
+        self.assertEqual(selected['offset'],len(prefix))
+        self.assertEqual(selected['bytes'],len(record))
+        self.assertEqual(selected['sha256'],hashlib.sha256(record).hexdigest())
+
+    def test_backward_scan_cannot_accept_only_blank_complete_lines(self):
+        raw = b' \r\n\t\n{"partial":'
+        with self.assertRaisesRegex(ValueError,'complete native rollout record'):
+            foreground._latest(io.BytesIO(raw),len(raw),0,THREAD)
+
     def test_native_append_preserves_same_selection_and_original_evidence(self):
         before = foreground.read(self.client)
         with self.path.open("a") as stream:
