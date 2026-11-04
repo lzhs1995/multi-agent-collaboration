@@ -46,7 +46,10 @@ account resources retain one lease regime across all teams.
 ## Four cooperation modes
 
 Choose a mode for the current task or phase; do not infer it from the number of
-panes. A mode switch records its boundary, accepted work, unfinished operations
+panes. Modes are workflow metadata, not new `collaboration-profile-v1` values
+or an implemented automatic scheduler. The corresponding topology labels are
+`mesh` (free peer), `star` (moderator), `hierarchical` (delegation) and `ring`
+(ordered iteration). Message hops and scheduler steps do not count review rounds. A mode switch records its boundary, accepted work, unfinished operations
 and next owner; it does not replay the task or discard failures.
 
 | Mode | Use and control | Exit condition |
