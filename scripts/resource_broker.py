@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
+
+_EXECUTION_LOADED_CODE = sys._getframe().f_code
+__execution_pin__ = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 class ResourceBusy(RuntimeError):
@@ -68,6 +73,105 @@ class Broker:
         if "invocations" not in ticket_columns:
             self.db.execute("ALTER TABLE tickets ADD COLUMN invocations INTEGER NOT NULL DEFAULT 0")
 
+    @staticmethod
+    def _execution_module():
+        broker_source = Path(__file__).read_bytes()
+        if (hashlib.sha256(broker_source).hexdigest() != __execution_pin__
+                or _EXECUTION_LOADED_CODE != compile(broker_source, __file__, 'exec', dont_inherit=True)):
+            raise ResourceBusy('LOADED_BROKER_SOURCE_CHANGED')
+        path = Path(__file__).resolve().with_name('resource_execution.py')
+        name = 'resource_execution'
+        module = sys.modules.get(name)
+        if module is not None and Path(getattr(module, '__file__', '')).resolve() != path:
+            raise ResourceBusy('FOREIGN_RESOURCE_EXECUTION_MODULE')
+        source = path.read_bytes()
+        if module is not None and (getattr(module, '__execution_pin__', None) != hashlib.sha256(source).hexdigest()
+                or getattr(module, '_EXECUTION_LOADED_CODE', None) != compile(source, str(path), 'exec', dont_inherit=True)):
+            raise ResourceBusy('LOADED_EXECUTION_SOURCE_CHANGED')
+        if module is None:
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            try:
+                # Compile source bytes explicitly; an old pyc is not this controller.
+                exec(compile(source, str(path), 'exec', dont_inherit=True), module.__dict__)
+            except BaseException:
+                sys.modules.pop(name, None)
+                raise
+        return module
+
+    def _execution(self):
+        return self._execution_module().Execution(self, os_lock, group_alive)
+
+    @staticmethod
+    def validate_execution_contract(contract):
+        """Read-only native preflight; does not construct a broker or open its DB."""
+        return Broker._execution_module().validate_contract(contract)
+
+    def _bound(self, ticket):
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_execution_bindings'").fetchone():
+            return False
+        return self.db.execute('SELECT 1 FROM resource_execution_bindings WHERE ticket_id=?', (ticket,)).fetchone() is not None
+
+    def request_enforced(self, contract):
+        return self._execution().request(contract)
+
+    def grant_enforced(self, ticket, ttl=600):
+        if type(ttl) is not int:
+            raise ValueError('INVALID_LEASE_TTL')
+        execution = self._execution()
+        with execution.locked_native(ticket):
+            return execution.enrich(self._grant(ticket, ttl, execution=execution))
+
+    def run_enforced(self, ticket, token, *, generation, operation, request_revision, attempt_id, **kwargs):
+        return self._execution().run(ticket, token, generation=generation, operation=operation,
+                                     request_revision=request_revision, attempt_id=attempt_id, **kwargs)
+
+    def release_enforced(self, ticket, token, proof, *, generation, reconcile=False):
+        execution = self._execution()
+        with execution.locked_native(ticket):
+            return execution.enrich(self._release(ticket, token, proof, reconcile,
+                                                  execution=execution, generation=generation))
+
+    def requeue_unsubmitted_enforced(self, ticket, token, *, generation):
+        execution = self._execution()
+        with execution.locked_native(ticket):
+            with self.transaction():
+                execution.local_check(ticket)
+                row = self.get(ticket)
+                binding, _ = execution.binding(ticket)
+                if not token or row['token'] != token or type(generation) is not int or binding['generation'] != generation:
+                    raise ResourceBusy('ORIGINAL_UNSUBMITTED_LEASE_REQUIRED')
+                execution.requeue_unsubmitted(row, binding)
+            return execution.enrich(self.get(ticket))
+
+    def withdraw_enforced(self, ticket, *, attempt_id, contract_sha256):
+        return self._execution().withdraw(ticket, attempt_id=attempt_id, contract_sha256=contract_sha256)
+
+    @staticmethod
+    def validate_word_pdf_contract(contract):
+        module = Broker._execution_module()
+        module.need(isinstance(contract, dict) and contract.get('schema') == module.WORD_SCHEMA,
+                    'WORD_TYPED_CONTRACT_REQUIRED')
+        return module.validate_contract(contract)
+
+    def _word_execution(self):
+        return self._execution_module().word_module().WordExecution(self, os_lock, group_alive)
+
+    def run_word_pdf_enforced(self, ticket, token, *, generation, operation, request_revision, attempt_id):
+        return self._word_execution().run_pdf(ticket, token, generation=generation, operation=operation,
+                                              request_revision=request_revision, attempt_id=attempt_id)
+
+    def release_word_pdf_enforced(self, ticket, token, proof, *, generation, reconcile=False):
+        execution = self._word_execution()
+        with execution.locked_native(ticket):
+            return execution.enrich(self._release(ticket, token, proof, reconcile,
+                                                  execution=execution, generation=generation))
+
+    def inspect_word_pdf_enforced(self, ticket):
+        """Original-attempt readback only; no native calls, replay or recovery."""
+        return self._word_execution().inspect(ticket)
+
     @contextmanager
     def transaction(self):
         self.db.execute("BEGIN IMMEDIATE")
@@ -107,6 +211,10 @@ class Broker:
         uuid.UUID(workspace_uuid)
         uuid.UUID(surface_uuid)
         with self.transaction():
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_execution_bindings'").fetchone() and self.db.execute(
+                'SELECT 1 FROM resource_execution_bindings e JOIN tickets t ON t.id=e.ticket_id WHERE t.resource=? AND t.task_id=?',
+                (resource, task_id)).fetchone():
+                raise ResourceBusy('ENFORCED_TASK_CANNOT_DOWNGRADE')
             if not self.db.execute("SELECT name FROM resources WHERE name=?", (resource,)).fetchone():
                 raise ValueError("RESOURCE_NOT_CONFIGURED")
             old = self.db.execute("SELECT * FROM tickets WHERE resource=? AND task_id=? AND workspace_uuid=? AND surface_uuid=? AND status IN ('WAITING','ACTIVE')", (resource, task_id, workspace_uuid, surface_uuid)).fetchone()
@@ -123,23 +231,50 @@ class Broker:
         return dict(row)
 
     def grant(self, ticket, ttl=600):
+        return self._grant(ticket, ttl)
+
+    def _grant(self, ticket, ttl=600, *, execution=None):
         if not 1 <= ttl <= 86400:
             raise ValueError("INVALID_LEASE_TTL")
         with self.transaction():
             row = self.get(ticket)
+            if self._bound(ticket) and execution is None:
+                raise ResourceBusy('ENFORCED_API_REQUIRED')
+            if execution is not None:
+                execution.local_check(ticket)
             active = self.db.execute("SELECT * FROM tickets WHERE resource=? AND status='ACTIVE'", (row["resource"],)).fetchone()
             if active:
                 reason = "EXPIRED_LEASE_NEEDS_RECONCILIATION" if active["expires"] <= time.time() else "RESOURCE_LEASE_BUSY"
                 raise ResourceBusy(reason)
+            # Restricted Word tickets share this database and resource lock.
+            # Their table has no resource column: every row is word-zotero.
+            # Keep this check in the grant's BEGIN IMMEDIATE transaction; an
+            # unresolved restricted operation stays owned even after expiry.
+            if row["resource"] == "word-zotero" and self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='word_restricted_tickets'"
+            ).fetchone():
+                restricted = self.db.execute(
+                    "SELECT id,status FROM word_restricted_tickets WHERE status IN ('ACTIVE','PENDING') LIMIT 1"
+                ).fetchone()
+                if restricted:
+                    raise ResourceBusy("RESTRICTED_WORD_UNRESOLVED: " + restricted["id"] + " (" + restricted["status"] + ")")
             first = self.db.execute("SELECT id FROM tickets WHERE resource=? AND status='WAITING' ORDER BY requested,id LIMIT 1", (row["resource"],)).fetchone()
             if not first or first["id"] != ticket:
                 raise ResourceBusy("WAIT_YOUR_TURN")
-            with os_lock(self.lock_path(row["resource"])):
-                self._external_free(row["resource"])
+            with nullcontext() if execution is not None else os_lock(self.lock_path(row["resource"])):
+                if execution is None:
+                    self._external_free(row["resource"])
                 self.db.execute("UPDATE tickets SET status='ACTIVE', token=?, expires=? WHERE id=?", (str(uuid.uuid4()), time.time() + ttl, ticket))
+                if execution is not None:
+                    execution.granted(row)
             return self.get(ticket)
 
     def require(self, ticket, token, allow_expired=False):
+        if self._bound(ticket):
+            raise ResourceBusy('ENFORCED_API_REQUIRED')
+        return self._require(ticket, token, allow_expired)
+
+    def _require(self, ticket, token, allow_expired=False):
         row = self.get(ticket)
         if row["status"] != "ACTIVE" or not token or row["token"] != token:
             raise ResourceBusy("LEASE_OWNER_MISMATCH")
@@ -150,6 +285,8 @@ class Broker:
     def withdraw(self, ticket, task_id, workspace_uuid, surface_uuid):
         """Only the exact owner may remove an abandoned waiting ticket."""
         with self.transaction():
+            if self._bound(ticket):
+                raise ResourceBusy('ENFORCED_API_REQUIRED')
             row = self.get(ticket)
             if row["status"] != "WAITING" or any(row[k] != v for k, v in (
                     ("task_id", task_id), ("workspace_uuid", workspace_uuid), ("surface_uuid", surface_uuid))):
@@ -178,8 +315,15 @@ class Broker:
                     "process_group_empty": empty, "pgid": proc.pid}
 
     def release(self, ticket, token, proof, reconcile=False):
+        return self._release(ticket, token, proof, reconcile)
+
+    def _release(self, ticket, token, proof, reconcile=False, *, execution=None, generation=None):
         with self.transaction():
-            row = self.require(ticket, token, allow_expired=True)
+            if self._bound(ticket) and execution is None:
+                raise ResourceBusy('ENFORCED_API_REQUIRED')
+            if execution is not None:
+                execution.local_check(ticket)
+            row = self._require(ticket, token, allow_expired=True)
             if row["expires"] <= time.time() and not reconcile:
                 raise ResourceBusy("EXPIRED_LEASE_NEEDS_RECONCILIATION")
             if proof.get("pending") is not False or proof.get("own_processes_empty") is not True or group_alive(row["pgid"]):
@@ -211,8 +355,11 @@ class Broker:
                             or raw.get("status") not in {"COMPLETE", "FAILED"} or not raw.get("request_id")
                             or recorded_lease.get("id") != ticket or recorded_lease.get("token") != token):
                         raise ResourceBusy("NLM_REMOTE_TERMINAL_NOT_PROVEN")
-            with os_lock(self.lock_path(row["resource"])):
-                self._external_free(row["resource"])
+            with nullcontext() if execution is not None else os_lock(self.lock_path(row["resource"])):
+                if execution is None:
+                    self._external_free(row["resource"])
+                if execution is not None:
+                    execution.check_release(row, proof, generation, reconcile)
                 checked = {**proof, "external_locks_probed_and_released": True,
                            "documents_verified": bool(requirements) and requirements.get("documents") == 0,
                            "released_at": time.time(), "reconciled": reconcile}

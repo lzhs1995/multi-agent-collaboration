@@ -1,0 +1,25 @@
+{
+  "upstream": "https://github.com/lzhs1995/officecli-word-revision",
+  "commit": "c68cc8aec9aacfb09462a7bd8b474bc0be83a3c8",
+  "version": "0.1.0.dev5",
+  "installed_source": "/Users/lzhs/.local/share/officecli-word-revision/releases/0.1.0.dev5-c68cc8aec9aa/venv/lib/python3.14/site-packages/officecli_word_revision/scripts",
+  "license": {
+    "name": "MIT",
+    "copyright": "Copyright (c) 2026 lzhs1995",
+    "source": "c68cc8aec9aacfb09462a7bd8b474bc0be83a3c8:LICENSE",
+    "sha256": "61929c3d5f6ca4208900fd0e323a70c6e9926a56e76c9d69bf635ea7f1810e9d"
+  },
+  "files": [
+    {
+      "name": "word_runtime.py",
+      "bytes": 6878,
+      "sha256": "c700ef743e37532cebf3d10a0a78bb410920ddc1ca6280f10aaedf851a7b8458"
+    },
+    {
+      "name": "word_pdf_service.py",
+      "bytes": 11885,
+      "sha256": "cbdee80cc5ac33565001ca221f7086ce2360292c27fa01329b761406f1e9bc77"
+    }
+  ],
+  "purpose": "Offline byte-identical Python service tests; all native/application calls mocked; no actual Word or shared DB."
+}

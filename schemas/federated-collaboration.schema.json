@@ -1,0 +1,413 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Read-only federated collaboration declaration",
+  "description": "References existing binding and task declarations. Schema validity does not register actors, prove live identity, authorize input or enforce application leases.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project_id",
+    "senior",
+    "actors",
+    "chapters",
+    "tasks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "federated-collaboration-v1"
+    },
+    "project_id": {
+      "$ref": "#/$defs/text"
+    },
+    "senior": {
+      "$ref": "#/$defs/text"
+    },
+    "actors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/actor"
+      }
+    },
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/chapter"
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "nullable_text": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actor_list": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "pointer"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/text"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pointer": {
+          "type": "string",
+          "pattern": "^(|/.*)$"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_identity",
+        "session_selector",
+        "socket"
+      ],
+      "properties": {
+        "host_identity": {
+          "$ref": "#/$defs/text"
+        },
+        "session_selector": {
+          "$ref": "#/$defs/text"
+        },
+        "socket": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_id",
+        "role",
+        "binding_ref"
+      ],
+      "properties": {
+        "actor_id": {
+          "$ref": "#/$defs/text"
+        },
+        "role": {
+          "$ref": "#/$defs/text"
+        },
+        "binding_ref": {
+          "$ref": "#/$defs/reference"
+        }
+      }
+    },
+    "chapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chapter_id",
+        "workspace_uuid",
+        "herdr_service",
+        "supervisor",
+        "participants"
+      ],
+      "properties": {
+        "chapter_id": {
+          "$ref": "#/$defs/text"
+        },
+        "workspace_uuid": {
+          "$ref": "#/$defs/uuid"
+        },
+        "herdr_service": {
+          "$ref": "#/$defs/service"
+        },
+        "supervisor": {
+          "$ref": "#/$defs/text"
+        },
+        "participants": {
+          "$ref": "#/$defs/actor_list"
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sender",
+        "recipient",
+        "coordination_scope",
+        "delivery_transport"
+      ],
+      "properties": {
+        "sender": {
+          "$ref": "#/$defs/text"
+        },
+        "recipient": {
+          "$ref": "#/$defs/text"
+        },
+        "coordination_scope": {
+          "enum": [
+            "chapter",
+            "federation"
+          ]
+        },
+        "delivery_transport": {
+          "enum": [
+            "cmux",
+            "herdr",
+            "original"
+          ]
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "parent_task_id",
+        "chapter_id",
+        "owner",
+        "participants",
+        "controller",
+        "mode_ref",
+        "budget_ref",
+        "routes"
+      ],
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/text"
+        },
+        "parent_task_id": {
+          "$ref": "#/$defs/nullable_text"
+        },
+        "chapter_id": {
+          "$ref": "#/$defs/nullable_text"
+        },
+        "owner": {
+          "$ref": "#/$defs/text"
+        },
+        "participants": {
+          "$ref": "#/$defs/actor_list"
+        },
+        "controller": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "object",
+              "minProperties": 1
+            }
+          ]
+        },
+        "mode_ref": {
+          "$ref": "#/$defs/reference"
+        },
+        "budget_ref": {
+          "$ref": "#/$defs/reference"
+        },
+        "registration_ref": {
+          "$ref": "#/$defs/reference"
+        },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/route"
+          }
+        }
+      }
+    },
+    "binding": {
+      "description": "Projection selected from an existing declaration by binding_ref.pointer; further original evidence remains allowed. This is not a second identity authority.",
+      "type": "object",
+      "required": [
+        "agent",
+        "native_session_id",
+        "terminal_id",
+        "outer_cmux",
+        "endpoint"
+      ],
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/text"
+        },
+        "native_session_id": {
+          "$ref": "#/$defs/text"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/text"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/text"
+        },
+        "outer_cmux": {
+          "type": "object",
+          "required": [
+            "workspace_uuid",
+            "pane_uuid",
+            "surface_uuid"
+          ],
+          "properties": {
+            "workspace_uuid": {
+              "$ref": "#/$defs/uuid"
+            },
+            "pane_uuid": {
+              "$ref": "#/$defs/uuid"
+            },
+            "surface_uuid": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "endpoint": {
+          "type": "object",
+          "required": [
+            "transport",
+            "host_identity"
+          ],
+          "properties": {
+            "transport": {
+              "enum": [
+                "cmux",
+                "herdr"
+              ]
+            },
+            "host_identity": {
+              "$ref": "#/$defs/text"
+            },
+            "session_selector": {
+              "$ref": "#/$defs/text"
+            },
+            "socket": {
+              "type": "string",
+              "pattern": "^/"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "endpoint": {
+                "properties": {
+                  "transport": {
+                    "const": "herdr"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "pane_id"
+            ],
+            "properties": {
+              "endpoint": {
+                "required": [
+                  "socket",
+                  "session_selector"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "revision"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "peer",
+            "host_dispatch",
+            "hierarchical",
+            "closed_loop"
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue_lineage_id",
+        "acceptance_scope_id",
+        "max_rounds",
+        "rounds_used",
+        "time_limit_seconds",
+        "token_limit"
+      ],
+      "properties": {
+        "issue_lineage_id": {
+          "$ref": "#/$defs/text"
+        },
+        "acceptance_scope_id": {
+          "$ref": "#/$defs/text"
+        },
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "rounds_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "time_limit_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "token_limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

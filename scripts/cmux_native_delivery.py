@@ -78,6 +78,8 @@ def _provider(p):
     name = Path(p["executable"]).name
     if name == "codex":
         return "codex"
+    if identity.official_codex(p["executable"], p.get("argv"), p.get("file_identity")):
+        return "codex"
     if name in ("claude", "claude.exe"):
         return "claude"
     if _versioned_claude(p):
@@ -90,7 +92,7 @@ def _provider(p):
 def _live_session(p, provider, *, require_native=False):
     if provider == "codex":
         try:
-            selected = foreground.read(p)
+            selected = identity.foreground_selection(p)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise NativeDeliveryError("NATIVE_FOREGROUND_INVALID") from exc
         if selected is not None:
@@ -204,7 +206,7 @@ def _target_process_in_budget(row):
                 if tty == row['tty'] and identity.process(shell['pid'], validate_argv=False) == shell:
                     shells.append(dict(pid=shell['pid'], birth=shell['birth'], executable=shell['executable']))
             continue
-        if (name not in ("codex", "claude", "claude.exe", "node")
+        if (name not in ("codex", "claude", "claude.exe", "node", *identity.OFFICIAL_CODEX_NAMES)
                 and _CLAUDE_NATIVE_VERSION.fullmatch(name) is None):
             continue
         try:

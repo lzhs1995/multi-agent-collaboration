@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import cmux_bridge as bridge
 import cmux_native_delivery as native
+import cmux_daemon_identity as identity
 
 
 class ScreenSequence:
@@ -72,7 +73,10 @@ class NativeFixture(contextlib.AbstractContextManager):
         self.stack.enter_context(patch.object(native, "_native_root", side_effect=self._root))
         # process() / ps 为可变外部观测；_target_process、require_bound 不被 mock。
         facade = types.SimpleNamespace(process=self._process, ProcessExited=native.identity.ProcessExited,
-                                      IdentityError=native.identity.IdentityError)
+                                      IdentityError=native.identity.IdentityError,
+                                      OFFICIAL_CODEX_NAMES=identity.OFFICIAL_CODEX_NAMES,
+                                      official_codex=identity.official_codex,
+                                      foreground_selection=identity.foreground_selection)
         self.stack.enter_context(patch.object(native, "identity", facade))
         self.stack.enter_context(patch.object(native, "subprocess", types.SimpleNamespace(
             run=self._ps, SubprocessError=subprocess.SubprocessError)))
