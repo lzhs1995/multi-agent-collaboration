@@ -46,8 +46,9 @@ account resources retain one lease regime across all teams.
 The [chapter 5/6 interface example](chapter-interface-example.md) preserves
 dual-lineage shares versus single-lineage levels and different categorical
 definitions, with explicit source gaps. It covers only a definition-boundary
-subset; six artifact corrections await the original reviewer's round-2 result.
-It is not a complete chapter interface or acceptance of two live Herdr teams.
+subset; the original reviewer closed 6/6 artifact corrections in round 2 and ROOT
+accepted the corrected subset, retaining v1 findings and source gaps. It is not
+a complete chapter interface or acceptance of two live Herdr teams.
 
 ## Four cooperation modes
 

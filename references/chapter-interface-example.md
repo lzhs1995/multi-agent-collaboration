@@ -6,11 +6,12 @@ and complete table/figure locations, so it is not a complete chapter delivery
 interface or chapter/scientific acceptance. ROOT assembled the boundaries and
 consumed an internal collaborator's code evidence. The original Claude reviewer
 then applied the e901 domain rules and returned six artifact corrections in
-round 1. ROOT prepared a separate frozen correction; the same reviewer's round-2
-result is still pending ROOT's return as of the v13 notice. Reuse this work;
+round 1. ROOT prepared a separate frozen correction; the same reviewer closed
+all six items in round 2, and ROOT accepted it as `ACCEPT_CORRECTED_SUBSET`
+in the v14 return. Reuse this accepted subset;
 this documentation update starts no review, fit, manuscript edit or NLM request.
 It does not establish
-two live Herdr chapter teams, native delivery or any of the original 33 business
+two live Herdr chapter teams, bidirectional native delivery or any of the original 33 business
 cases / 15 pairs. Their reported counts remain 0/33 and 0/15.
 
 ## The interface that must survive integration
@@ -84,13 +85,15 @@ unverified; `C6-BINARY`, `C6-BALANCE` and `C6-EXPLORATORY` return the asymmetric
 source gap. These are separate interface records, not aliases of one variable.
 
 ROOT's earlier `INTERFACE_ARTIFACT_ACCEPTED_WITH_SOURCE_GAPS` is retained as
-history. The later original-reviewer verdict is `ACCEPT_WITH_CORRECTIONS`,
+history. The first original-reviewer verdict was `ACCEPT_WITH_CORRECTIONS`,
 consumed by ROOT as `ACCEPT_WITH_SIX_LOCAL_ARTIFACT_CORRECTIONS`; neither is a
-final unqualified PASS. The six-point correction uses round 2 of the same
-`two-chapter-interface-artifact-20261104` scope, capped at three rounds, without
-resetting the first round. Await its exact original-reviewer result and ROOT's
-consumption before recording correction acceptance. Preserve both definitions
-and their interpretation limits. If a later authorized writing change depends on
+final unqualified PASS. The same reviewer closed 6/6 corrections in round 2,
+and ROOT consumed the result and recorded `ACCEPT_CORRECTED_SUBSET`. The
+`two-chapter-interface-artifact-20261104` scope has used two of its maximum three
+rounds, retaining the first round. No further review is required
+for this unchanged subset. Quotations must support the full claim; the initial
+six findings and their corrections remain part of the record. Preserve both
+definitions and their interpretation limits. If a later authorized writing change depends on
 the missing generation evidence, ask the original material owner for that exact
 upstream code and saved model/table binding. Do not refit or reopen whole chapters
 merely to consume this example. Align terminology and evidence fields without
@@ -124,6 +127,7 @@ ranges are in `code-evidence/SOURCES.json` and `EXACT-LINE-EXCERPTS.json`.
 | `correction-round-2/CHAPTER-INTERFACES.json` | 9865 | `602ac96a59c72586f6d4587cf43e109cffc218423da232c9c45b500403550c5f` |
 | `correction-round-2/REPORT.md` | 3615 | `668dca5933ceec7dabab6bbf6f7744972b8257178fe4b15c55f7423659dce106` |
 | `correction-round-2/CORRECTION-RESPONSE.json` | 2672 | `24fec9b2a351a268cc5957698581b60fa7ec07f442ec3784f110ff3cdba6aa76` |
+| `correction-round-2/ACCEPTANCE.json` | 1917 | `0c3cf68dc16f7c8b4976fc0ec707d49e41307d4c4b1f89d0c6e67f839dbed4ac` |
 
 The original maintenance notice pinned a different manifest: 1485 bytes,
 `a6e4d0aad78fab115f3da2960295679b79cd00f28e2e9898ad796d3071bfa676`.
@@ -153,6 +157,25 @@ ROOT's `continuation-1/FIVE-READS-VERIFIED.json` and pinned
 Reads and successful producer/tool-result association. The reviewer applied the
 e901 definition, partial-status and bounded-review rules to identify the six
 corrections; that proves scoped manual application, not automatic hook loading
-or reverse native delivery. The reviewer did not independently read the mother
-manuscript, BODY excerpts or original R programs. Retain those observation limits
-and ROOT's separate source checks. No round-2 acceptance is asserted here.
+or reverse native delivery. In round 1 the reviewer did not independently read
+the mother manuscript, BODY excerpts or original R programs. Retain that history.
+
+The v14 `root-01a1a1e3-corrected-subset-accepted-word-input-20261104-v14.json`
+notice supplies the later acceptance. Under the sibling
+`domain-adoption-live/correction-round-2/`, `CLAUDE-RESULT.json` is 5780 bytes,
+SHA256 `a947a860274b6f9a13a50487844643b994d92cee9bde18e476a2ee759c1e13c6`,
+and `ROOT-CONSUMPTION.json` is 4192 bytes,
+SHA256 `e15c7c62d0b2e397d073ddd9e21390333aba1774f46fd7448276f84366644387`.
+Together with the pinned subset `ACCEPTANCE.json` above, these record 6/6 closed,
+no unresolved correction in this scope, and zero original business/pair increment.
+The frozen correction inputs still describe their pre-review state; acceptance
+is a separate record, not an overwrite of those inputs or v1 findings.
+
+Round 2 additionally checked 11/11 quotations against the pinned DOCX's direct
+body paragraphs using `w:t` text. It did not check deleted revision text or field
+code effects, or recheck the original R programs. ROOT consumed this scoped
+result; the scientific/source gaps remain unchanged. The original send timed out
+before native receipt and was not resent; the later file return is not reverse
+native delivery or evidence of causal efficiency gains. Template defaults and
+shared runtime state remain outside this definition subset; transport evidence
+and domain acceptance retain their separate boundaries.
