@@ -14,6 +14,9 @@ Read the [common contract](../../references/collaboration-contract-core.md) and
 [profile rules](../../references/collaboration-profiles.md). For multiple teams,
 also read [nested coordination](../../references/nested-research-coordination.md)
 for the four modes, 60-second progress visibility and five collaboration rules.
+For official Codex startup or caller failures, read
+[official client compatibility](../../references/official-codex-caller.md).
+Keep installation selection, foreground authentication and task acceptance separate.
 
 1. Resolve the existing task and participants before dispatch. Pin workspace,
    pane, surface and original native session for an independent terminal. For a
