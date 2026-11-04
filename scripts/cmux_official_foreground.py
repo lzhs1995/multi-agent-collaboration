@@ -17,6 +17,7 @@ import time
 import uuid
 
 import cmux_identity_budget as budget
+import cmux_darwin_fds as native_fds
 
 MAX_TAIL = 8 * 1024**2
 MAX_RECORD = 1024**2
@@ -51,6 +52,12 @@ def _signature(info):
 
 
 def descriptors(client):
+    if native_fds.supported():
+        return _selection(native_fds.frames(client['pid']))
+    return _lsof_descriptors(client)
+
+
+def _lsof_descriptors(client):
     result = subprocess.run(
         ["/usr/sbin/lsof", "-nP", "-a", "-p", str(client["pid"]), "-Fpfain"],
         capture_output=True, text=True, timeout=budget.timeout(5.0), check=False)
@@ -72,6 +79,10 @@ def descriptors(client):
     if frame is not None:
         frames.append(frame)
     need(process is not None, "native descriptor process absent")
+    return _selection(frames)
+
+
+def _selection(frames):
     candidates = [item for item in frames
                   if item.get("a") in ("u", "w")
                   and Path(item.get("n", "")).name.startswith("rollout-")

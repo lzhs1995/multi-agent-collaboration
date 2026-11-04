@@ -36,6 +36,10 @@ class OfficialForegroundTests(unittest.TestCase):
                       "type": "response_item", "payload": {"type": "custom_tool_call", "input": "one"}}
         self.write()
         foreground._seen.clear()
+        # These fixtures exercise the portable lsof parser, never live PIDs.
+        self.native_patch = mock.patch.object(foreground.native_fds, 'supported', return_value=False)
+        self.native_patch.start()
+        self.addCleanup(self.native_patch.stop)
         self.patch = mock.patch.object(foreground.subprocess, "run", side_effect=self.lsof)
         self.patch.start()
         self.addCleanup(self.patch.stop)
