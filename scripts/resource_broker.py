@@ -131,6 +131,18 @@ class Broker:
             if active:
                 reason = "EXPIRED_LEASE_NEEDS_RECONCILIATION" if active["expires"] <= time.time() else "RESOURCE_LEASE_BUSY"
                 raise ResourceBusy(reason)
+            # Restricted Word tickets share this database and resource lock.
+            # Their table has no resource column: every row is word-zotero.
+            # Keep this check in the grant's BEGIN IMMEDIATE transaction; an
+            # unresolved restricted operation stays owned even after expiry.
+            if row["resource"] == "word-zotero" and self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='word_restricted_tickets'"
+            ).fetchone():
+                restricted = self.db.execute(
+                    "SELECT id,status FROM word_restricted_tickets WHERE status IN ('ACTIVE','PENDING') LIMIT 1"
+                ).fetchone()
+                if restricted:
+                    raise ResourceBusy("RESTRICTED_WORD_UNRESOLVED: " + restricted["id"] + " (" + restricted["status"] + ")")
             first = self.db.execute("SELECT id FROM tickets WHERE resource=? AND status='WAITING' ORDER BY requested,id LIMIT 1", (row["resource"],)).fetchone()
             if not first or first["id"] != ticket:
                 raise ResourceBusy("WAIT_YOUR_TURN")

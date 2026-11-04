@@ -16,6 +16,9 @@ Start with the [shared contract](references/collaboration-contract-core.md) and
   [nested research coordination](references/nested-research-coordination.md).
   Herdr organizes work inside each team; cmux organizes coordination between
   terminal teams. Both entries share one task and evidence contract.
+  Check referenced actors, chapter ownership, routes and shared review budgets
+  with [federation declaration validation](references/federated-declaration-validation.md).
+  A consistent declaration does not establish live identity or delivery.
 
 No environment variable enrolls a task or changes old hooks. Do not switch the
 global CURRENT merely to enable Herdr. Source changes, installation, client

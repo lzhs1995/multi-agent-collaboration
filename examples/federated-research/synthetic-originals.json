@@ -1,0 +1,216 @@
+{
+  "bindings": {
+    "senior": {
+      "agent": "claude",
+      "native_session_id": "501b7bd0-02e2-5a80-82fe-f5100aedc4a9",
+      "terminal_id": "synthetic-term-senior",
+      "pane_id": "unused-outer",
+      "endpoint": {
+        "transport": "cmux",
+        "host_identity": "synthetic-host"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "e4a2a105-2198-5038-8928-a8b70f295194",
+        "pane_uuid": "e0163c99-063e-5b1d-b6b7-eec584dfc3c0",
+        "surface_uuid": "a6413184-c9db-5163-82b5-90b09ae8263e"
+      }
+    },
+    "chapter-1-supervisor": {
+      "agent": "claude",
+      "native_session_id": "214f4037-366c-55a2-b807-7a00e9e65212",
+      "terminal_id": "synthetic-term-chapter-1-supervisor",
+      "pane_id": "w1:p2",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-1",
+        "socket": "/synthetic/services/chapter-1/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "6cd40602-8ce9-5270-944f-2a5991165a23",
+        "pane_uuid": "2d68c54c-d42e-57c0-ad3f-aed3caa714ce",
+        "surface_uuid": "f00dae51-1de5-536e-9012-2dd71a3e36b4"
+      }
+    },
+    "chapter-1-executor": {
+      "agent": "claude",
+      "native_session_id": "d58a2aaa-ff67-583b-b70e-cb8fc641f3b4",
+      "terminal_id": "synthetic-term-chapter-1-executor",
+      "pane_id": "w1:p3",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-1",
+        "socket": "/synthetic/services/chapter-1/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "6cd40602-8ce9-5270-944f-2a5991165a23",
+        "pane_uuid": "2d68c54c-d42e-57c0-ad3f-aed3caa714ce",
+        "surface_uuid": "f00dae51-1de5-536e-9012-2dd71a3e36b4"
+      }
+    },
+    "chapter-2-supervisor": {
+      "agent": "claude",
+      "native_session_id": "23d2a8db-26de-55b1-864d-c811194943a8",
+      "terminal_id": "synthetic-term-chapter-2-supervisor",
+      "pane_id": "w1:p2",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-2",
+        "socket": "/synthetic/services/chapter-2/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "af71a67d-2a8a-5296-a496-b09c18eb9a7d",
+        "pane_uuid": "c5a397ff-c417-5f73-aa9a-8d34bf3fe420",
+        "surface_uuid": "2ae88349-3419-5e02-9277-8ae8b4aafb1c"
+      }
+    },
+    "chapter-2-executor": {
+      "agent": "claude",
+      "native_session_id": "0191ba63-42f0-5cba-93be-51c0407183ab",
+      "terminal_id": "synthetic-term-chapter-2-executor",
+      "pane_id": "w1:p3",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-2",
+        "socket": "/synthetic/services/chapter-2/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "af71a67d-2a8a-5296-a496-b09c18eb9a7d",
+        "pane_uuid": "c5a397ff-c417-5f73-aa9a-8d34bf3fe420",
+        "surface_uuid": "2ae88349-3419-5e02-9277-8ae8b4aafb1c"
+      }
+    },
+    "chapter-3-supervisor": {
+      "agent": "claude",
+      "native_session_id": "5bb39ddb-6a61-501c-95d3-c6fb351957ff",
+      "terminal_id": "synthetic-term-chapter-3-supervisor",
+      "pane_id": "w1:p2",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-3",
+        "socket": "/synthetic/services/chapter-3/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "e54ba32e-8804-5870-8a27-8a56327582c6",
+        "pane_uuid": "9bfe4dca-c38e-5e48-94da-96a912454902",
+        "surface_uuid": "126a7d9f-480c-5ac9-8fcc-e0598864b478"
+      }
+    },
+    "chapter-3-executor": {
+      "agent": "claude",
+      "native_session_id": "495596af-78de-54b2-a1bc-df050240a664",
+      "terminal_id": "synthetic-term-chapter-3-executor",
+      "pane_id": "w1:p3",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-3",
+        "socket": "/synthetic/services/chapter-3/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "e54ba32e-8804-5870-8a27-8a56327582c6",
+        "pane_uuid": "9bfe4dca-c38e-5e48-94da-96a912454902",
+        "surface_uuid": "126a7d9f-480c-5ac9-8fcc-e0598864b478"
+      }
+    },
+    "chapter-4-supervisor": {
+      "agent": "claude",
+      "native_session_id": "60493982-5be3-5d1a-9d20-addda31239da",
+      "terminal_id": "synthetic-term-chapter-4-supervisor",
+      "pane_id": "w1:p2",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-4",
+        "socket": "/synthetic/services/chapter-4/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "1997f262-eb37-563b-9e33-72c21c32e6e5",
+        "pane_uuid": "3ac8a9a8-7dac-5a11-bd24-784f85ddeaa1",
+        "surface_uuid": "e22c9e80-4a01-5aff-88fd-7e7598d0984f"
+      }
+    },
+    "chapter-4-executor": {
+      "agent": "claude",
+      "native_session_id": "f26d0b25-c904-5242-979d-b360b7d1a875",
+      "terminal_id": "synthetic-term-chapter-4-executor",
+      "pane_id": "w1:p3",
+      "endpoint": {
+        "transport": "herdr",
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-4",
+        "socket": "/synthetic/services/chapter-4/herdr.sock"
+      },
+      "outer_cmux": {
+        "workspace_uuid": "1997f262-eb37-563b-9e33-72c21c32e6e5",
+        "pane_uuid": "3ac8a9a8-7dac-5a11-bd24-784f85ddeaa1",
+        "surface_uuid": "e22c9e80-4a01-5aff-88fd-7e7598d0984f"
+      }
+    }
+  },
+  "modes": {
+    "peer": {
+      "name": "peer",
+      "revision": "example-v1"
+    },
+    "host_dispatch": {
+      "name": "host_dispatch",
+      "revision": "example-v1"
+    },
+    "hierarchical": {
+      "name": "hierarchical",
+      "revision": "example-v1"
+    },
+    "closed_loop": {
+      "name": "closed_loop",
+      "revision": "example-v1"
+    }
+  },
+  "budgets": {
+    "manuscript": {
+      "issue_lineage_id": "issue-manuscript",
+      "acceptance_scope_id": "scope-manuscript",
+      "max_rounds": 3,
+      "rounds_used": 1,
+      "time_limit_seconds": 600,
+      "token_limit": 12000
+    },
+    "chapter-1": {
+      "issue_lineage_id": "issue-chapter-1",
+      "acceptance_scope_id": "scope-chapter-1",
+      "max_rounds": 3,
+      "rounds_used": 1,
+      "time_limit_seconds": 600,
+      "token_limit": 12000
+    },
+    "chapter-2": {
+      "issue_lineage_id": "issue-chapter-2",
+      "acceptance_scope_id": "scope-chapter-2",
+      "max_rounds": 3,
+      "rounds_used": 1,
+      "time_limit_seconds": 600,
+      "token_limit": 12000
+    },
+    "chapter-3": {
+      "issue_lineage_id": "issue-chapter-3",
+      "acceptance_scope_id": "scope-chapter-3",
+      "max_rounds": 3,
+      "rounds_used": 1,
+      "time_limit_seconds": 600,
+      "token_limit": 12000
+    },
+    "chapter-4": {
+      "issue_lineage_id": "issue-chapter-4",
+      "acceptance_scope_id": "scope-chapter-4",
+      "max_rounds": 3,
+      "rounds_used": 1,
+      "time_limit_seconds": 600,
+      "token_limit": 12000
+    }
+  },
+  "registrations": {}
+}
