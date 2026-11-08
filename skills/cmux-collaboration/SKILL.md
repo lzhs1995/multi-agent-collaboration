@@ -42,6 +42,10 @@ Keep installation selection, foreground authentication and task acceptance separ
    do not require an ACK of that decision. Global Word/Zotero and account leases
    remain shared across workspaces and Herdr services.
 
+6. Executors follow the same shared executor-initiated request rule and its
+   active-scope and stopping conditions. An explicitly enrolled reask runner is
+   one implementation, not automatic permission to start repeated inquiries.
+
 New task guidance does not migrate an existing cmux controller, callback or
 continuing registration. Use the [complete cmux guidance](../../references/cmux-legacy-entry.md)
 only for the applicable protocol. Reading this entry does not enroll teams,

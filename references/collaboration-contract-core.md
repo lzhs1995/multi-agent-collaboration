@@ -41,6 +41,41 @@ owns subsequent work. Record start, recovery, freeze and acceptance separately;
 reuse accepted work at the handoff boundary. Preserve original sessions, output
 ownership and resource limits. Label solo results as self-review.
 
+### Executor-initiated requests
+
+Within an explicitly assigned collaboration whose overall task remains active,
+an executor proactively sends its designated supervisor one concrete request
+when it has delivered or frozen its assigned work and can take a bounded next
+item, when it has no assigned work within that active scope, or when a specific
+question needs the supervisor's decision. State the delivered result and any
+open items, then the proposed next item or exact question. Combine this with an
+applicable delivery notice. Reuse the original artifact version/hash for formal
+deliverables; an ordinary question needs no new report or fingerprint file.
+Continue authorized independent work while the answer is pending.
+
+Observe an unconfirmed request through its original attempt; do not resend it.
+A mere receipt does not answer the question. A substantive answer, including
+“no new work”, closes that request; no ACK of that answer is required. Once the
+overall task is complete, cancelled or stopped, do not keep requesting work or
+invent new scope. Reopen only for a relevant new assignment or direction, an
+unresolved dependency or material new problem within existing authority, or an
+explicit cadence for an overall task that is still active. Ordinary clock ticks,
+supervisor milestones and unrelated state changes are not new requests.
+
+For the same non-urgent request and unchanged state, any authorized repeat
+reminder is at least 60 seconds apart; elapsed time alone does not authorize it.
+Report a material new blocker, authorization withdrawal or immediate write risk
+promptly, without this delay. Keep any unknown earlier operation separately
+unresolved. This behavioral duty is shared by Herdr and cmux; only the transport
+differs. The legacy enrolled reask runner remains a separately authorized
+mechanism under its original task and controller.
+
+Installing or reading this rule, SessionStart and Stop reminders do not enroll
+a task, start a timer, send a request or prevent turn end. A completed overall
+task with no remaining assignment is closed idle for this scope. Existing
+independent tasks and their actual outstanding items remain separate. Do not
+modify or disable their hooks or schedules as a consequence of this rule.
+
 ## Evidence and outcomes
 
 Keep submission, native reception, full body reading, produced artifact,
@@ -110,12 +145,37 @@ at the actual recipient; preserve drafts and do not force an interruption.
 Reception, body reading and acceptance remain separate, including for queued
 messages. A request for acknowledgement must not become an ACK-of-ACK chain.
 
+### Task withdrawal and the write boundary
+
+Cancellation, pause, withdrawal and narrowing of authorization are task control
+events. Record them separately from the ordinary-message backlog in the original
+task's journal or checkpoint, with task ID, authorized issuer, original instruction
+evidence, control revision and current permitted scope. Surface the latest control
+record independently of older ordinary messages; do not make its discovery or
+consumption wait for that backlog to drain. Use an existing supported priority
+route where available. Preserve drafts and evidence, and keep independently
+authorized tasks running. This is an execution rule, not a claim that the runtime
+can preempt an active turn or atomically stop an in-flight operation. Submission,
+receipt and consumption remain separate; record unconfirmed consumption as such.
+
 Before a mutating operation, record its intent with target, scope and original
 attempt ID in the task journal or checkpoint; then retain its actual result and
 evidence. Keep this proportional to the operation, without a new approval cycle.
-An UNKNOWN result requires reconciliation of that original attempt before
-repeating the operation or making a dependent write; never replay it to
-manufacture a definite outcome. Independent work continues.
+Immediately before each irreversible write or remote submission, the executor
+must read back the task's latest control record and effective authorization scope,
+checking the target, operation and resource owner. Record the observed revision,
+time and submission or refusal with the original attempt. An old authorization
+hash, request_revision, lease or input pin does not establish current authority;
+a launch-time check does not cover later writes inside that process. This readback
+adds no approval or ACK loop when the authorization remains unchanged.
+
+Withdrawal blocks new unsubmitted writes within its scope. It does not establish
+that a remotely accepted request was cancelled; check/use races remain unless the
+actual submission path provides a stronger guarantee. Resource-ticket withdrawal
+limited to a WAITING ticket is not task withdrawal. An UNKNOWN result requires
+reconciliation of that original attempt before repeating the operation or making
+a dependent write; never release its resource or replay it merely to manufacture
+a definite outcome. Independent work continues.
 
 Serialize input to the actual terminal being written, not every inner pane in
 one outer surface. Shared Word/Zotero and account resources keep their original
