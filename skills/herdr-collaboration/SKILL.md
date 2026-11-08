@@ -44,6 +44,12 @@ three-round ceiling for ordinary revision. Do not duplicate that contract here.
    read its response or output before integrating it. The supervisor records
    the actual scoped decision, outstanding items and next dependency. No ACK loop.
 
+7. Follow the shared contract's executor-initiated requests within an active,
+   assigned overall task: ask once for a bounded next item or a specific decision,
+   combine with a relevant delivery notice, and respect its pending/closed states.
+   No periodic ACK loop does not mean waiting silently; overall completion does
+   not create a new assignment.
+
 Keep the actual native representation: a queue enqueue, rendered mid-turn
 attachment and independent user turn are different records. If a client renders
 a prompt as a queued-command system reminder, record that evidence separately;

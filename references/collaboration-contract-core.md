@@ -41,6 +41,41 @@ owns subsequent work. Record start, recovery, freeze and acceptance separately;
 reuse accepted work at the handoff boundary. Preserve original sessions, output
 ownership and resource limits. Label solo results as self-review.
 
+### Executor-initiated requests
+
+Within an explicitly assigned collaboration whose overall task remains active,
+an executor proactively sends its designated supervisor one concrete request
+when it has delivered or frozen its assigned work and can take a bounded next
+item, when it has no assigned work within that active scope, or when a specific
+question needs the supervisor's decision. State the delivered result and any
+open items, then the proposed next item or exact question. Combine this with an
+applicable delivery notice. Reuse the original artifact version/hash for formal
+deliverables; an ordinary question needs no new report or fingerprint file.
+Continue authorized independent work while the answer is pending.
+
+Observe an unconfirmed request through its original attempt; do not resend it.
+A mere receipt does not answer the question. A substantive answer, including
+“no new work”, closes that request; no ACK of that answer is required. Once the
+overall task is complete, cancelled or stopped, do not keep requesting work or
+invent new scope. Reopen only for a relevant new assignment or direction, an
+unresolved dependency or material new problem within existing authority, or an
+explicit cadence for an overall task that is still active. Ordinary clock ticks,
+supervisor milestones and unrelated state changes are not new requests.
+
+For the same non-urgent request and unchanged state, any authorized repeat
+reminder is at least 60 seconds apart; elapsed time alone does not authorize it.
+Report a material new blocker, authorization withdrawal or immediate write risk
+promptly, without this delay. Keep any unknown earlier operation separately
+unresolved. This behavioral duty is shared by Herdr and cmux; only the transport
+differs. The legacy enrolled reask runner remains a separately authorized
+mechanism under its original task and controller.
+
+Installing or reading this rule, SessionStart and Stop reminders do not enroll
+a task, start a timer, send a request or prevent turn end. A completed overall
+task with no remaining assignment is closed idle for this scope. Existing
+independent tasks and their actual outstanding items remain separate. Do not
+modify or disable their hooks or schedules as a consequence of this rule.
+
 ## Evidence and outcomes
 
 Keep submission, native reception, full body reading, produced artifact,
