@@ -1,4 +1,4 @@
-"""8701 regression: inspect commands as data; never execute the supplied command."""
+"""Synthetic quoted-command regression; never execute the supplied command."""
 from __future__ import annotations
 
 import json
@@ -14,24 +14,24 @@ import render_cmux_agent as renderer
 
 
 GUARD = Path(__file__).with_name("cmux_agent_panel_guard.py").resolve()
-HELPER = Path("/Users/lzhs/.local/bin/cmux-agent")
-ORIGINAL = (
-    "rtk proxy /Users/lzhs/.local/bin/cmux-agent send "
-    "E765373A-4081-4038-ACC8-EACEE2540F08 'STATUS: RESUME8701R2-20261013. "
+HELPER = Path("/Users/demo/.local/bin/cmux-agent")
+QUOTED_MESSAGE = (
+    "rtk proxy /Users/demo/.local/bin/cmux-agent send "
+    "11111111-2222-4333-8444-555555555555 'STATUS: RESUME_EXAMPLE. "
     "Compact completed in your original session; supervisor restored the same task reservation. "
-    "Continue original stata8701-runtime-wire-v2 from PROGRESS.md/candidate with unchanged pack "
-    "a39c5a7c8e2e5bffb43c7d411f6c8aadbd1ed6f775a964c6f25fc4622c089ac8 and nonce 3122b60333d232a7. "
+    "Continue original example-runtime-review from PROGRESS.md/candidate with unchanged pack "
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and nonce 0123456789abcdef. "
     "Write only its executor-output; Codex alone integrates shared files. Finish actual execute-entry "
     "tests, mutations and frozen REPORT, then the original pack-bound callback once. "
-    "No new compact, task dispatch, session or model. Reply STATUS: RESUMED8701R2 before continuing.'"
+    "No new compact, task dispatch, session or model. Reply STATUS: RESUMED_EXAMPLE before continuing.'"
 )
 
 
 class QuotedLaunchTests(unittest.TestCase):
-    def test_original_message_is_literal_without_rewording(self):
-        self.assertIn("; Codex alone", ORIGINAL)
-        self.assertFalse(guard._shell_starts_agent_launch(ORIGINAL))
-        self.assertFalse(guard._cmux_send_starts_agent_launch(ORIGINAL))
+    def test_synthetic_message_is_literal_without_rewording(self):
+        self.assertIn("; Codex alone", QUOTED_MESSAGE)
+        self.assertFalse(guard._shell_starts_agent_launch(QUOTED_MESSAGE))
+        self.assertFalse(guard._cmux_send_starts_agent_launch(QUOTED_MESSAGE))
 
     def test_quoted_operators_and_agent_mentions_are_data(self):
         for body in ("status; Codex alone", "status\nclaude prose", ";", "&&", "|",
@@ -56,8 +56,8 @@ class QuotedLaunchTests(unittest.TestCase):
 
     def test_real_adjacent_commands_survive_quoted_message(self):
         for separator in (";", "&&", "||", "|", "&", "\n"):
-            for command in (ORIGINAL + separator + " codex resume deadbeef",
-                            "claude --resume existing" + separator + ORIGINAL):
+            for command in (QUOTED_MESSAGE + separator + " codex resume deadbeef",
+                            "claude --resume existing" + separator + QUOTED_MESSAGE):
                 with self.subTest(command=command):
                     self.assertTrue(guard._shell_starts_agent_launch(command))
         for command in ("(codex)", "{ claude; }", "if true; then codex; fi",
@@ -145,10 +145,10 @@ class QuotedLaunchTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.check_entrypoints(command, False)
 
-    def test_exact_original_body_at_same_release_real_entries(self):
+    def test_exact_synthetic_body_at_same_release_real_entries(self):
         # Render the complete helper for this candidate, as installation does.
         # The real CLI/hook loads only its own release's dependencies; no live
-        # installation or send is needed to test the original quoted message.
+        # installation or send is needed to test the synthetic quoted message.
         release = GUARD.parents[1]
         raw = renderer.render(
             (release / "tests/fixtures/cmux-agent-legacy.sh").read_bytes(),
@@ -159,9 +159,9 @@ class QuotedLaunchTests(unittest.TestCase):
             helper.write_bytes(raw)
             helper.chmod(0o755)
             original_prefix = "rtk proxy " + str(HELPER)
-            self.assertTrue(ORIGINAL.startswith(original_prefix + " send "))
-            command = "rtk proxy " + shlex.quote(str(helper)) + ORIGINAL[len(original_prefix):]
-            self.assertEqual(shlex.split(command)[3:], shlex.split(ORIGINAL)[3:])
+            self.assertTrue(QUOTED_MESSAGE.startswith(original_prefix + " send "))
+            command = "rtk proxy " + shlex.quote(str(helper)) + QUOTED_MESSAGE[len(original_prefix):]
+            self.assertEqual(shlex.split(command)[3:], shlex.split(QUOTED_MESSAGE)[3:])
             self.assertIn("; Codex alone", command)
             self.check_entrypoints(command, True)
             self.check_entrypoints(command + "; codex resume deadbeef", False,

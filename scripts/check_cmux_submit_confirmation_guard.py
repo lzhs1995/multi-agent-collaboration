@@ -434,8 +434,8 @@ check(
 
 # 7b. UUID 绑定目标：`_run()` 在发送前把 --surface <ref> 改写成 target_surface_uuid，
 #     所以 hook 真正看到的命令常常只有 UUID。只认 surface:N 会静默 skip。
-EXEC_UUID = "483B084A-A135-470C-8562-DD89C545318E"
-WS_UUID = "C72EE6C7-6338-4328-9EA7-6F81C3E5305D"
+EXEC_UUID = "11111111-1111-4111-8111-000000000201"
+WS_UUID = "11111111-1111-4111-8111-000000000202"
 CMD_UUID = (
     f"cmux send --workspace {WS_UUID} --surface {EXEC_UUID} -- "
     "'DONE|t|0123456789abcdef|REPORT=/tmp/r.md'"

@@ -59,7 +59,7 @@ class PanelGuardTests(unittest.TestCase):
     def test_exact_history_pinned_same_session_recovery_is_allowed_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            session_id = "132509c7-e356-455d-af8d-645a9d832e5a"
+            session_id = "11111111-1111-4111-8111-000000000102"
             history = root / f"{session_id}.jsonl"
             history.write_bytes(b'{"sessionId":"same"}\n')
             auth = root / "recovery.json"

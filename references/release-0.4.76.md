@@ -58,7 +58,7 @@ These observations and file sweeps do not wake a model or prove body reading;
 this release installs no global blocking continuation hook.
 
 New thesis scopes resolve and pin the complete canonical
-`/Users/lzhs/.agents/skills/thesis-refiner/SKILL.md` source. A different local
+`~/.agents/skills/thesis-refiner/SKILL.md` source. A different local
 Chinese-named copy is a historical local alias, not proof of canonical or active
 hook adoption. Preserve old scopes and source pins; classification and a
 document update do not overwrite that alias or change loaded clients.

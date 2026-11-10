@@ -47,7 +47,7 @@ class BridgeContinuationTests(unittest.TestCase):
         self.task = 'original-bridge-task'
         self.token = 'B1_8a1e9e3a'
         self.thread = 'original-supervisor-thread'
-        self.reservation = 'e8865131-0f4e-4ad4-a838-1c63cd620e92'
+        self.reservation = '11111111-1111-4111-8111-000000000121'
         self.gate = dict(task_id=self.task, status='PASS', side_panel=True,
             workspace_uuid='workspace', workspace_ref='workspace:1',
             supervisor_surface_uuid='caller', supervisor='caller',

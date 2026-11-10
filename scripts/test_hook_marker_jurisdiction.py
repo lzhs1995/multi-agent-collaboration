@@ -18,7 +18,7 @@ import cmux_lease_guard as lease
 
 
 class HookMarkerJurisdictionTests(unittest.TestCase):
-    session = '4ec8ad00-956d-4d00-b302-64927c25ce3f'
+    session = '11111111-1111-4111-8111-000000000107'
 
     def peers(self):
         return [dict(role='supervisor', surface_uuid='actual-surface', native_session_id=self.session)]

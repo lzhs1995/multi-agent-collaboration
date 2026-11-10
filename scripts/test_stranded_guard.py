@@ -8,8 +8,8 @@ from unittest.mock import patch
 import cmux_bridge as b
 import cmux_submit_confirmation_guard as g
 
-CALLER = "E7C1C83C-946C-4E59-8753-F506F2069A12"
-TARGET = "2A2CDBE8-DD07-4185-A972-2E56BB3135DF"
+CALLER = "11111111-1111-4111-8111-000000000120"
+TARGET = "11111111-1111-4111-8111-000000000105"
 MARKER = "C2596_R22_PREFLIGHT_STATUS_20261008T131247Z"  # not 16-hex, no protocol shape
 FOOTER = "  GPT-6-Astra xhigh · ~/project · Context 28% used"
 STUCK = "\n".join(["• Working (21m • esc to interrupt)", " ", "› " + MARKER + " | status text",
@@ -56,7 +56,7 @@ class StrandedGuardTests(unittest.TestCase):
         self.attempt(receipt=True)
         self.assertEqual(self.scan(STUCK), [])
         self.tmp.cleanup(); self.root.mkdir(parents=True)
-        self.attempt(caller="FC5DB919-47A7-4A8F-9A46-1182958CE532")
+        self.attempt(caller="11111111-1111-4111-8111-000000000122")
         self.assertEqual(self.scan(STUCK), [])
 
     def test_never_pressed_enter_is_not_stranded(self):

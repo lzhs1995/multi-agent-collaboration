@@ -19,9 +19,9 @@ class SuccessorLockDiagnosisTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.journal = self.root / 'successor-dispatch-v2/J'
         self.journal.mkdir(parents=True)
-        self.artifact = dict(target_workspace_uuid='1345022A-8558-4047-82F2-8C21B27F682C',
-                             target_pane_uuid='ABE733B1-B9AF-4B39-BBA6-212850F63DE4',
-                             target_executor_uuid='000AA6F1-E5C5-450B-ABCB-639692C2E925')
+        self.artifact = dict(target_workspace_uuid='11111111-1111-4111-8111-000000000103',
+                             target_pane_uuid='11111111-1111-4111-8111-000000000115',
+                             target_executor_uuid='11111111-1111-4111-8111-000000000101')
 
     def lock_paths(self):
         workspace, pane, target = (self.artifact[key] for key in
