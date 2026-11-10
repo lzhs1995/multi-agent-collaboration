@@ -221,7 +221,7 @@ class HandshakeObservationTests(unittest.TestCase):
 
 class SupervisorProviderArgumentTests(unittest.TestCase):
     def test_invalid_surface_and_uuid_rejected_before_tool_action(self):
-        for value in ('surface:8701', 'E765373A-4081-4038-ACC8-EACEE2540F08'):
+        for value in ('surface:8701', '11111111-2222-4333-8444-555555555555'):
             with self.subTest(value=value), mock.patch('sys.argv', ['mac_harness.py', 'doctor', '--supervisor', value]), \
                     mock.patch.object(harness, 'cmd_doctor') as action, contextlib.redirect_stderr(io.StringIO()) as err:
                 with self.assertRaises(SystemExit) as exc:

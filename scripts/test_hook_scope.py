@@ -16,8 +16,8 @@ import cmux_lease_guard as lease
 import mac_harness as harness
 import cmux_native_delivery as native
 
-SESSION = '67d0a734-5613-4653-aa3b-e4f156b14830'
-OTHER = '6d7bac83-48d3-410c-9aa8-0aa6ed282071'
+SESSION = '11111111-1111-4111-8111-000000000109'
+OTHER = '11111111-1111-4111-8111-000000000111'
 
 
 class HookScopeTests(unittest.TestCase):

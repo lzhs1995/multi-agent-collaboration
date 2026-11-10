@@ -1,6 +1,7 @@
 """Historical pre-0.4.54 terminal admission/reconciliation fixtures.
 
-真实只读屏幕及其明确标注的派生变体；禁止测试向 live 终端发输入。"""
+Synthetic task history with measured composer/footer shapes and labelled
+derived variants; tests must never send input to live terminals."""
 from pathlib import Path
 import re
 import textwrap
@@ -16,6 +17,7 @@ TOKEN = "B1_01234567"
 
 
 def captured(surface):
+    """Load a sanitized reconstruction, not a live transcript or receipt."""
     return (FIXTURES / f"claude-c{surface}-screen-20261008.txt").read_text()
 
 
@@ -29,7 +31,7 @@ def with_draft(screen, draft):
 
 
 def footer_variant(screen, transform):
-    # 只改最后输入框之后的 footer；历史屏幕原文不参与变体替换。
+    # 只改最后输入框之后的 footer；合成历史正文不参与变体替换。
     rows = screen.splitlines()
     start = max(i for i, row in enumerate(rows) if row.startswith("❯"))
     return "\n".join(rows[:start + 2]) + "\n" + transform("\n".join(rows[start + 2:])) + "\n"
@@ -44,7 +46,7 @@ class ClaudeFooterParserTests(unittest.TestCase):
         paste.assert_not_called()
         key.assert_not_called()
 
-    def test_real_c41_is_idle_even_with_goal_active(self):
+    def test_measured_c41_layout_is_idle_even_with_goal_active(self):
         screen = captured(41)
         self.assertIn("/goal active", screen)
         self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")
@@ -52,7 +54,7 @@ class ClaudeFooterParserTests(unittest.TestCase):
         self.assertEqual(b.compose_block_text(screen).strip(), "")
         self.assertFalse(b._queued_or_active_input(screen))
 
-    def test_real_c2596_tool_is_active_and_composer_independently_empty(self):
+    def test_measured_c2596_layout_tool_is_active_and_composer_independently_empty(self):
         screen = captured(2596)
         self.assertIn("◐ Bash:", screen)
         self.assertEqual(b.receiver_input_kind(screen), "AGENT_TUI")

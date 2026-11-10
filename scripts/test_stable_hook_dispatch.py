@@ -55,8 +55,8 @@ class StableHookTests(unittest.TestCase):
     def test_release_home_is_exact_for_the_immutable_layout(self):
         source = self.home / m.RELEASES / '0.4.59-0123456789ab' / 'source'
         self.assertEqual(m.release_home(source), self.home)
-        self.assertEqual(m.release_home(Path('/Users/lzhs') / m.RELEASES / '0.4.58-cf3f6175840b/source'),
-                         Path('/Users/lzhs'))
+        self.assertEqual(m.release_home(Path('/Users/demo') / m.RELEASES / '0.4.58-cf3f6175840b/source'),
+                         Path('/Users/demo'))
         for other in (self.home / 'checkout', self.home / m.RELEASES / 'x' / 'source' / 'scripts',
                       self.home / '.local/share/other/releases/x/source', Path('/source')):
             self.assertIsNone(m.release_home(other), other)

@@ -216,8 +216,8 @@ Explicit ordinary communication keeps its own authorization and input checks.
 
 ## One maintenance and release path
 
-Report problems and measured experience to the designated maintenance owner
-surface1000020040 / A93448E1-E329-493D-9B45-568D5FC0DAD0. Business agents keep
+Report problems and measured experience to the maintenance owner designated
+by the current task, using its verified endpoint binding. Business agents keep
 working on their task and submit evidence; they do not edit shared hooks or
 publish competing releases. The maintenance owner uses isolated branches,
 commits a reviewable revision, records the reviewed commit, fixes findings,

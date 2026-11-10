@@ -19,7 +19,7 @@ import test_executor_closeout as closeout_tests
 
 
 class HookIdentityTests(unittest.TestCase):
-    session = '4ec8ad00-956d-4d00-b302-64927c25ce3f'
+    session = '11111111-1111-4111-8111-000000000107'
 
     def enroll_native(self):
         for row in self.marker['participants']:

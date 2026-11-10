@@ -10,10 +10,10 @@ from test_claude_footer_parser_20261008 import with_draft
 
 
 GOAL = "◎ /goal active (59m)"
-MODEL = "[linxi/claude-opus-5-5[1M]]"
+MODEL = "[provider-a/claude-opus-5-5[1M]]"
 
 
-def frame(*, provider="linxi", goal_position="inline", status="", tool=False):
+def frame(*, provider="provider-a", goal_position="inline", status="", tool=False):
     border = "─" * 100
     model = f"  [{provider}/claude-opus-5-5[1M]] │ tasks/example git:(main) │ ⏱️ 847h 26m"
     if goal_position == "inline":
@@ -40,7 +40,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
             native.key.assert_not_called()
 
     def test_measured_provider_and_goal_positions_are_empty(self):
-        for provider in ("linxi", "baibei"):
+        for provider in ("provider-a", "provider-b"):
             for position in ("inline", "final", "none"):
                 with self.subTest(provider=provider, position=position):
                     value = frame(provider=provider, goal_position=position)
@@ -137,7 +137,7 @@ class ProviderGoalFooterTests(unittest.TestCase):
                         native.key.assert_not_called()
 
     def test_malformed_or_partial_provider_fields_fail_closed(self):
-        for provider in ("", "linxi/other", "lin xi", "linxi:", "linxi@", "a" * 65):
+        for provider in ("", "provider-a/other", "provider a", "provider-a:", "provider-a@", "a" * 65):
             with self.subTest(provider=provider):
                 self.assert_unparsed(frame(provider=provider))
         self.assert_unparsed(frame().replace(MODEL, MODEL[:-1]))

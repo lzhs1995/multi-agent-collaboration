@@ -19,9 +19,9 @@ import supervisor_inbox as inbox
 import cmux_supervisor_report_guard as guard
 from offline_hook_thread_fixture import native_thread
 
-CALLER = 'FD51FB34-5C79-4013-BD6B-9E10CFC743CD'
-SUP = '41F454EB-0DDD-42BD-A529-BC79589F6DD5'
-WORKSPACE = '6FB20312-9E66-43DB-AF09-92C3B18E1296'
+CALLER = '11111111-1111-4111-8111-000000000123'
+SUP = '11111111-1111-4111-8111-000000000106'
+WORKSPACE = '11111111-1111-4111-8111-000000000112'
 
 
 class InboxTest(unittest.TestCase):
