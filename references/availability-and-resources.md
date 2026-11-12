@@ -73,6 +73,11 @@ must use the same root/account key and pinned external transport locks.
 Different notebooks or browser targets do not create extra NotebookLM quota.
 This implementation supports POSIX hosts; it does not claim a Windows lock backend.
 
+New tasks that need native actor/session and one-operation enforcement at a
+supported application entry use [bound resource execution](resource-execution.md).
+It keeps the original queue and resource locks. Existing tickets retain their
+registered API and are not silently upgraded.
+
 Configure `word-zotero` once with the application's existing automation lock.
 Use `request -> grant -> run -> release`, passing the returned ticket/token.
 An expired ticket stays owned until reconciled; file existence, TTL expiry or a
