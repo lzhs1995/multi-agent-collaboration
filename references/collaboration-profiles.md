@@ -29,6 +29,13 @@ failure never retries or falls back to a different server. This helper supports
 local named sessions only: `--machine` forwarding is not implemented. A machine
 endpoint needs a distinct machine identity as well as its remote socket path.
 
+The official Herdr skill's internal-caller default does not cancel the user's
+explicit authorization to coordinate a designated existing external target.
+Use only selectors supported by the installed CLI and retain the real environment.
+A selector addresses the receiver; it does not authenticate the caller or replace
+an existing task's dispatch, resource or experiment checks. Ordinary authorized
+contact and formal task execution remain separate operations.
+
 Run these helpers as `python3 -B scripts/collaboration_profile.py ...`, and use
 `-B` for Python processes importing them. The module disables bytecode for later
 imports, but cannot prevent importlib from caching its own code before its body
