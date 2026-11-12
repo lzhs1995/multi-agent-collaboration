@@ -37,6 +37,11 @@ inner supervisor uses Herdr's supported explicit selector. This preserves the
 user's inward/outward organization without typing blindly into a container.
 Maintain pure cmux and Herdr-only use as supported smaller topologies.
 
+For an existing model route or a bounded contribution, use
+[runtime model and acceptance evidence](runtime-model-and-acceptance.md) to
+reuse actual request and adoption records without confusing configuration,
+successful delivery or partial integration with the requested final result.
+
 The senior supervisor changes shared specifications and integrates accepted
 chapter deltas. Chapter supervisors own chapter files and their executor scopes.
 An executor's report is not a final chapter verdict. In peer mode, designate one
