@@ -30,6 +30,8 @@ Run positive and negative controls with measured branch/mutation hit counts.
 If the harness itself fails, correct the probe and preserve the failed observation;
 do not turn a zero-hit mutation or an exception into a product defect or a PASS.
 
+See [Herdr 觀測五原則 / Five Herdr observation principles](herdr-observation-principles.zh-TW-en.md) for bilingual guidance on receipts, denominators, record types, observation coverage and error recovery.
+
 ## Avoid Process Inflation
 
 See [efficiency and task closeout](efficiency-and-closeout.md) for phase budgets,
