@@ -82,3 +82,6 @@ In scientific work, read the domain skill as well. Assign chapter ownership,
 share milestone deltas through chapter supervisors, and serialize global
 Word/Zotero writes. JEV is optional future ranking assistance; it does not verify
 identity, source truth, locks or completion.
+
+For inward task allocation, reuse and normal closure of finished owned panes, read
+[team capacity and panel lifecycle](../../references/team-capacity-and-panel-lifecycle.md).

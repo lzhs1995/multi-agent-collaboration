@@ -50,3 +50,6 @@ New task guidance does not migrate an existing cmux controller, callback or
 continuing registration. Use the [complete cmux guidance](../../references/cmux-legacy-entry.md)
 only for the applicable protocol. Reading this entry does not enroll teams,
 start agents, install hooks or authorize changes to another team's files.
+
+For outward team capacity, owned-container boundaries and recovery-preserving closeout, read
+[team capacity and panel lifecycle](../../references/team-capacity-and-panel-lifecycle.md).

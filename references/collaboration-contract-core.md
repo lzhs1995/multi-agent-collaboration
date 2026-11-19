@@ -191,3 +191,7 @@ hours or the cause of delays. Report output quality and verified closure first.
 
 Evidence handling details: [handoffs](collaboration-evidence-and-handoffs.md).
 Transport selection: [profiles](collaboration-profiles.md).
+
+Owned idle panels are returned after actual duties are accepted and settled; see
+[team capacity and panel lifecycle](team-capacity-and-panel-lifecycle.md) for identity,
+normal shutdown, recovery and measured-benefit boundaries.

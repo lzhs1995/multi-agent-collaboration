@@ -340,3 +340,6 @@ the [Claude–Codex runbook](https://github.com/zhsongqing/claude-codex-workflow
 Its Claude Code Monitor, model role choices, wait budgets and merge authorization
 do not automatically apply here. Neither reference establishes a speedup for
 this dissertation; local matched work is still required.
+
+Task-driven expansion, reuse and shrinking completed owned teams follow
+[team capacity and panel lifecycle](team-capacity-and-panel-lifecycle.md).

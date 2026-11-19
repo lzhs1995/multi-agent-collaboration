@@ -35,3 +35,6 @@ continue independent authorized work during finite observations.
 Read-only profile helper: `python3 -B scripts/collaboration_profile.py route`.
 Herdr identity helper: `python3 -B scripts/collaboration_profile.py check-herdr --target /absolute/target.json`.
 These helpers send nothing, enroll nothing and do not make check-and-send atomic.
+
+For task-driven expansion, session reuse and returning idle owned panels, read
+[team capacity and panel lifecycle](references/team-capacity-and-panel-lifecycle.md).
