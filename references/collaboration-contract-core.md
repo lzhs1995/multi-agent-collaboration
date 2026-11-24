@@ -47,7 +47,8 @@ Three continuity modes govern authorized degradation without silent role drift:
 - `CLAUDE_PEER`: when the supervisor is temporarily blocked, peers may complete only already-registered bounded file scopes without claiming whole-project acceptance or shared Word/Zotero leases.
 
 External probabilistic routers (such as TypeSafe JEV) are excluded from core identity, lock, source-truth and completion gates; deterministic local checks govern protocol safety.
-For multi-tab / multi-pane Herdr readability, apply [explicit spatial naming](herdr-explicit-naming.md) (`tab/pane/agent rename`) while keeping native session IDs authoritative.
+For multi-tab / multi-pane Herdr readability, apply [explicit spatial naming](herdr-explicit-naming.md) (`workspace/tab/pane/agent rename`) while keeping native session IDs authoritative.
+For model-agnostic topology selection (`hub`, `blind-peer`, `spec-module`, `pipeline`), anti-anchoring blind drafts, granularity thresholds (`<50` lines done inline by the lead) and two-tier review severity (`BLOCKER` vs `ADVISORY`), see [collaboration modes & scenarios](collaboration-modes.md) and [Herdr fast-path](herdr-fast-path.md).
 For multi-chapter handoffs, validate structural delta completeness offline with [`scripts/chapter_delta_validator.py`](../scripts/chapter_delta_validator.py).
 
 ### Executor-initiated requests

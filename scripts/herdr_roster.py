@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Explicit spatial naming and read-only topology mapper for Herdr sessions.
 
-Display labels (`tab.label`, `pane.label`, `agent.name`) help humans and agents
-locate panes across multi-tab / 6+ pane Herdr layouts. They NEVER replace
-`socket + pane_id + terminal_id + native_session_id` for security or routing.
-This tool never sends text, keys, prompts, shell commands, or lifecycle stops.
+Display labels (`workspace.label`, `tab.label`, `pane.label`, `agent.name`) help
+humans and agents locate panes across multi-tab / 6+ pane Herdr layouts. They
+NEVER replace `socket + pane_id + terminal_id + native_session_id` for security
+or routing. This tool never sends text, keys, prompts, shell commands, or stops.
 """
 from __future__ import annotations
 
@@ -26,12 +26,17 @@ SHELL_NAMES = frozenset({"zsh", "-zsh", "bash", "-bash", "sh", "fish", "login"})
 KNOWN_AGENT_BINS = {
     "codex": "codex",
     "codex-aarch64-apple-darwin": "codex",
+    "ccc-codex-host": "codex",
+    "codex-toolchain-launch": "codex",
     "claude": "claude",
     "agy": "agy",
+    "agy.real": "agy",
     "agy-us1": "agy",
+    "agy-pro": "agy",
     "antigravity": "agy",
     "grok": "grok",
 }
+PROFILE_JSON_RE = re.compile(r"/profiles/([A-Za-z0-9._-]+)\.json$")
 
 
 class RosterError(ValueError):
@@ -46,6 +51,29 @@ def resolve_herdr_bin() -> str:
     if os.path.isfile(HERDR_DEFAULT_BIN) and os.access(HERDR_DEFAULT_BIN, os.X_OK):
         return HERDR_DEFAULT_BIN
     return "herdr"
+
+
+def detect_herdr_caller_env(environ: dict[str, str] | None = None) -> dict[str, Any]:
+    """Detect whether the current process is inside a Herdr-managed pane.
+
+    Supports both standard `HERDR_ENV=1` and panes started with `HERDR_ENV=0 mg ...`
+    where `HERDR_PANE_ID` and live `HERDR_SOCKET_PATH` remain inherited.
+    """
+    env = os.environ if environ is None else environ
+    pane_id = str(env.get("HERDR_PANE_ID") or "").strip()
+    socket_path = str(env.get("HERDR_SOCKET_PATH") or "").strip()
+    herdr_env = str(env.get("HERDR_ENV") or "").strip()
+    socket_live = bool(socket_path) and Path(socket_path).is_socket()
+    inside = (herdr_env == "1" and bool(pane_id)) or (bool(pane_id) and socket_live)
+    return {
+        "inside_herdr": inside,
+        "herdr_env_flag": herdr_env,
+        "herdr_env_suppressed": inside and herdr_env != "1",
+        "pane_id": pane_id or None,
+        "tab_id": env.get("HERDR_TAB_ID") or None,
+        "workspace_id": env.get("HERDR_WORKSPACE_ID") or None,
+        "socket_path": socket_path or None,
+    }
 
 
 def sanitize_label(text: str, max_chars: int = 34) -> str:
@@ -93,8 +121,6 @@ def derive_spatial_codes(
         h = max(1.0, float(rect.get("height", 1)))
         items.append({"pane_id": pid, "x": x, "y": y, "w": w, "h": h, "cx": x + w / 2.0, "cy": y + h / 2.0})
 
-    # Cluster columns by horizontal overlap: two panes belong to the same column
-    # if their horizontal projection overlaps by >45% of the narrower pane width.
     items.sort(key=lambda it: (it["x"], it["cx"], it["y"]))
     columns: list[list[dict[str, Any]]] = []
     for item in items:
@@ -116,16 +142,8 @@ def derive_spatial_codes(
         col.sort(key=lambda c: (c["y"], c["cy"], c["x"]))
 
     num_cols = len(columns)
-    col_names_map = {
-        1: [""],
-        2: ["L", "R"],
-        3: ["L", "C", "R"],
-    }
-    row_names_map = {
-        1: [""],
-        2: ["U", "D"],
-        3: ["U", "M", "D"],
-    }
+    col_names_map = {1: [""], 2: ["L", "R"], 3: ["L", "C", "R"]}
+    row_names_map = {1: [""], 2: ["U", "D"], 3: ["U", "M", "D"]}
 
     codes: dict[str, str] = {}
     use_grid_fallback = num_cols > 3 or any(len(col) > 3 for col in columns)
@@ -140,7 +158,6 @@ def derive_spatial_codes(
                 code = f"{c_tag}{r_tag}" or "FULL"
             codes[item["pane_id"]] = code
 
-    # Disambiguate any unlikely collision deterministically
     seen: dict[str, int] = {}
     for pid, code in list(codes.items()):
         seen[code] = seen.get(code, 0) + 1
@@ -170,24 +187,38 @@ def format_pane_label(
 
 
 def infer_process_kind(process_info: dict[str, Any] | None) -> dict[str, Any]:
-    """Inspect `pane process-info` to detect wrapped agents vs idle shells."""
+    """Inspect `pane process-info` to detect wrapped/Magpie/AGY agents vs idle shells."""
     if not isinstance(process_info, dict):
-        return {"inferred_kind": None, "is_shell_only": False, "summary": None}
+        return {"inferred_kind": None, "is_shell_only": False, "summary": None, "launcher_hint": None}
     procs = process_info.get("foreground_processes")
     if not isinstance(procs, list) or not procs:
-        return {"inferred_kind": None, "is_shell_only": False, "summary": None}
+        return {"inferred_kind": None, "is_shell_only": False, "summary": None, "launcher_hint": None}
 
     names: list[str] = []
     inferred = None
+    launcher_hint = None
     for proc in procs:
         if not isinstance(proc, dict):
             continue
-        argv = proc.get("argv") if isinstance(proc.get("argv"), list) else []
+        argv = [str(tok) for tok in (proc.get("argv") or []) if isinstance(tok, str)]
         candidates = [
             os.path.basename(str(proc.get("argv0") or "")),
             os.path.basename(str(proc.get("name") or "")),
-            *[os.path.basename(str(tok)) for tok in argv[:4] if isinstance(tok, str)],
+            *[os.path.basename(tok) for tok in argv[:6]],
         ]
+        for idx, tok in enumerate(argv):
+            m = PROFILE_JSON_RE.search(tok)
+            if m and launcher_hint is None:
+                launcher_hint = m.group(1)
+            if os.path.basename(tok) == "mg" and idx + 2 < len(argv):
+                sub_cmd = argv[idx + 1]
+                station = argv[idx + 2]
+                if sub_cmd == "cc" and inferred is None:
+                    inferred = "claude"
+                    launcher_hint = launcher_hint or station
+                elif sub_cmd == "cx" and inferred is None:
+                    inferred = "codex"
+                    launcher_hint = launcher_hint or station
         for cand in candidates:
             if not cand:
                 continue
@@ -207,6 +238,7 @@ def infer_process_kind(process_info: dict[str, Any] | None) -> dict[str, Any]:
         "inferred_kind": inferred,
         "is_shell_only": is_shell_only,
         "summary": "+".join(names[:3]) if names else None,
+        "launcher_hint": launcher_hint,
     }
 
 
@@ -231,6 +263,12 @@ def collect_session_snapshot(
     server = status.get("server") or {}
     if not server.get("running") or server.get("status") != "running":
         raise RosterError("SERVER_NOT_RUNNING", f"Session {session} is not running.")
+
+    workspaces_raw = []
+    try:
+        workspaces_raw = call_json(["workspace", "list"])["result"].get("workspaces") or []
+    except (RosterError, KeyError, AssertionError):
+        workspaces_raw = []
 
     tabs = call_json(["tab", "list"])["result"]["tabs"]
     panes = call_json(["pane", "list"])["result"]["panes"]
@@ -266,7 +304,7 @@ def collect_session_snapshot(
                 pinfo = call_json(["pane", "process-info", "--pane", pid])["result"].get("process_info")
                 proc_obs = infer_process_kind(pinfo)
             except (RosterError, KeyError, ValueError):
-                proc_obs = {"inferred_kind": None, "is_shell_only": False, "summary": None}
+                proc_obs = {"inferred_kind": None, "is_shell_only": False, "summary": None, "launcher_hint": None}
 
         effective_kind = detected_agent or (proc_obs or {}).get("inferred_kind") or native.get("agent")
         if not effective_kind and (proc_obs or {}).get("is_shell_only"):
@@ -299,6 +337,16 @@ def collect_session_snapshot(
         "session": session,
         "socket": server.get("socket"),
         "server_version": server.get("version"),
+        "workspaces": [
+            {
+                "workspace_id": w["workspace_id"],
+                "label": w.get("label"),
+                "tab_count": w.get("tab_count", 0),
+                "pane_count": w.get("pane_count", 0),
+            }
+            for w in workspaces_raw
+            if isinstance(w, dict) and w.get("workspace_id")
+        ],
         "tabs": [
             {
                 "tab_id": t["tab_id"],
@@ -318,8 +366,10 @@ def collect_session_snapshot(
 def render_markdown_map(snapshots: list[dict[str, Any]]) -> str:
     lines = ["# Herdr Multi-Agent Explicit Topology Map", ""]
     for snap in snapshots:
+        ws_desc = ", ".join(f"{w['workspace_id']}={w.get('label') or '-'}" for w in snap.get("workspaces") or [])
+        ws_part = f" · space `{ws_desc}`" if ws_desc else ""
         lines.append(
-            f"## Session `{snap['session']}` ({len(snap['tabs'])} Tabs / {len(snap['panes'])} Panes · socket `{snap['socket']}`)"
+            f"## Session `{snap['session']}` ({len(snap['tabs'])} Tabs / {len(snap['panes'])} Panes{ws_part} · socket `{snap['socket']}`)"
         )
         tab_labels = {t["tab_id"]: f"T{t['tab_index']}:{t.get('label') or t['tab_id']}" for t in snap["tabs"]}
         lines.append("")
@@ -355,7 +405,6 @@ def apply_roster_manifest(
     executed_commands: list[list[str]] = []
     session_reports = []
 
-    # Phase 1: Read-only verification across ALL target sessions before mutating any label
     verified_actions: list[tuple[str, list[list[str]]]] = []
     for entry in sessions_spec:
         session = entry.get("session")
@@ -372,9 +421,18 @@ def apply_roster_manifest(
                 actual=snap["socket"],
             )
 
+        workspaces_by_id = {w["workspace_id"]: w for w in snap.get("workspaces") or []}
         tabs_by_id = {t["tab_id"]: t for t in snap["tabs"]}
         panes_by_id = {p["pane_id"]: p for p in snap["panes"]}
         cmds: list[list[str]] = []
+
+        ws_label = entry.get("workspace_label")
+        if ws_label:
+            clean_ws = sanitize_label(ws_label, max_chars=20)
+            target_ws_ids = sorted({p["workspace_id"] for p in snap["panes"] if p.get("workspace_id")})
+            for wid in target_ws_ids:
+                if (workspaces_by_id.get(wid) or {}).get("label") != clean_ws:
+                    cmds.append([binary, "--session", session, "workspace", "rename", wid, clean_ws])
 
         for t_spec in entry.get("tabs") or []:
             tid = t_spec.get("tab_id")
@@ -434,7 +492,6 @@ def apply_roster_manifest(
             }
         )
 
-    # Phase 2: Execute UI-only metadata updates if not dry_run
     if not dry_run:
         for session, cmds in verified_actions:
             for argv in cmds:
@@ -484,20 +541,33 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_map = sub.add_parser("map", help="Inspect 2D spatial layout and explicit naming across Herdr sessions")
-    target = p_map.add_mutually_exclusive_group(required=True)
-    target.add_argument("--session", help="Specific local Herdr session name")
-    target.add_argument("--all", action="store_true", help="All live local Herdr sessions")
-    p_map.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    for sub_name in ("map", "snapshot"):
+        p_map = sub.add_parser(sub_name, help="Inspect 2D spatial layout and explicit naming across Herdr sessions")
+        target = p_map.add_mutually_exclusive_group(required=False)
+        target.add_argument("--session", help="Specific local Herdr session name")
+        target.add_argument("--all", action="store_true", help="All live local Herdr sessions")
+        p_map.add_argument("--format", choices=("markdown", "json"), default="markdown")
 
-    p_apply = sub.add_parser("apply", help="Apply validated UI-only tab/pane/agent labels from a manifest")
+    p_env = sub.add_parser("caller-env", help="Detect Herdr caller context even when HERDR_ENV=0 was passed")
+    p_env.add_argument("--json", action="store_true", default=True)
+
+    p_apply = sub.add_parser("apply", help="Apply validated UI-only workspace/tab/pane/agent labels from a manifest")
     p_apply.add_argument("--manifest", required=True, type=Path)
     p_apply.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args(argv)
     try:
-        if args.command == "map":
-            names = discover_live_sessions() if args.all else [args.session]
+        if args.command == "caller-env":
+            info = detect_herdr_caller_env()
+            print(json.dumps(info, ensure_ascii=False, indent=2))
+            return 0 if info["inside_herdr"] else 1
+        if args.command in ("map", "snapshot"):
+            if args.all:
+                names = discover_live_sessions()
+            elif args.session:
+                names = [args.session]
+            else:
+                names = [os.environ.get("HERDR_SESSION") or "default"]
             snaps = [collect_session_snapshot(n) for n in names]
             if args.format == "json":
                 print(json.dumps({"schema": "herdr-roster-map-v1", "sessions": snaps, "input_sent": False}, ensure_ascii=False, indent=2))

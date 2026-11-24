@@ -10,7 +10,8 @@ research project, each chapter has a cmux workspace containing its Herdr team;
 chapter supervisors report to one senior supervisor. Pure cmux teams remain
 supported and do not need Herdr installed.
 
-Read the [common contract](../../references/collaboration-contract-core.md) and
+Read the [common contract](../../references/collaboration-contract-core.md),
+[modes & five scenarios](../../references/collaboration-modes.md), and
 [profile rules](../../references/collaboration-profiles.md). For multiple teams,
 also read [nested coordination](../../references/nested-research-coordination.md)
 for the four modes, 60-second progress visibility and five collaboration rules.

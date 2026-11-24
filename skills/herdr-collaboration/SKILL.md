@@ -6,7 +6,9 @@ description: Coordinate existing context-bearing agents in Herdr using bounded t
 # Herdr collaboration
 
 For a new collaborative task, read the shared
-[contract](../../references/collaboration-contract-core.md) and
+[contract](../../references/collaboration-contract-core.md),
+[modes & five scenarios](../../references/collaboration-modes.md),
+[Herdr fast-path](../../references/herdr-fast-path.md), and
 [profile rules](../../references/collaboration-profiles.md). An existing registered
 task retains its controller and original attempts; moving inside Herdr does not
 migrate it.
@@ -19,7 +21,7 @@ reports chapter deltas to the senior supervisor through the
 five shared rules, including task-scoped 60-second progress visibility and a
 three-round ceiling for ordinary revision. Do not duplicate that contract here.
 
-1. For the inherited service, verify `HERDR_ENV=1`. An outer caller may instead
+1. For the inherited service, verify `HERDR_ENV=1` (or `python3 -B ../../scripts/herdr_roster.py caller-env` when a legacy Magpie launch passed `HERDR_ENV=0` while preserving `HERDR_PANE_ID` and a live `HERDR_SOCKET_PATH`). An outer caller may instead
    inspect an explicitly user-designated existing local service with a fixed
    `--session <name>` selector; never fabricate inherited environment or use a
    focused service by default. Read `herdr --skill` and check `herdr status` with

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Publish Herdr agent/pane status pills into cmux workspaces with 6+ pane folding.
+"""Publish noise-free, Tab-grouped Herdr tool status pills into cmux workspaces.
 
-Enhancements over v1:
-1. Uses full Herdr `tab list` + `pane list` + `pane layout` + `process-info` so
-   wrapped agents (`codex-aarch64-apple-darwin`) and explicitly named panes with
-   `agent_status == "unknown"` are never silently dropped.
-2. Adaptive folding when a Herdr session has >6 panes:
-   - Active/attention panes (`blocked`, `working`, `done`) stay as top-sorted
-     individual pills with spatial coordinates.
-   - `idle` / `shell` panes in the same Tab fold into one compact per-Tab summary
-     pill (`herdr:tab:<tab_id>`), preventing sidebar overflow and truncation.
-3. Publishes compact workspace `description` across all sessions (including `default`)
-   and supports multiple inner Herdr workspaces.
+Design principles (Phase 2):
+1. Zero task-reply text in cmux sidebar: never prints terminal titles, assistant
+   replies, or verbose task descriptions. Only tool types (CC/CX/GK/AGY/SH),
+   live states (⚠️/🔨/✅/⏸), and 2D spatial positions (L/R/LU/RD/CU...) appear.
+2. Single mental model (1 pill per Tab):
+   - Workspace `description`: `Herdr · <T>T/<P>P · 🔨w ⏸i`
+   - Each Tab gets one stable row (`herdr:tab:<tab_id>`), ordered `T1, T2, T3...`,
+     whose icon reflects the highest-priority state inside that Tab.
+3. Full process-info fallback so Magpie (`mg cc` / `mg cx`), `agy` wrappers,
+   `codex-aarch64-apple-darwin`, and idle shells (`SH`) are always classified.
 """
 from __future__ import annotations
 
@@ -41,20 +40,46 @@ PREFERRED = (
     ("stata", "EA1D69B4-2F78-4D24-B94D-5FC7C536C419"),
     ("c3-mplusguide", "E84867DF-4D7B-45CC-949A-488DD57DAB4B"),
 )
-MAX_EXPANDED_PANES = 6
+MAX_INLINE_PANES_PER_TAB = 4
 ACTIVE_STATUSES = frozenset({"blocked", "working", "done"})
 STATE_DIR = Path.home() / ".local/state/cmux-herdr"
 BASE_ENV = {**os.environ, "CMUX_QUIET": "1"}
 STOP = threading.Event()
 
-STATUS_STYLES = {
-    "blocked": ("exclamationmark.triangle", 90),
-    "working": ("hammer", 80),
-    "done": ("checkmark.circle", 60),
-    "idle": ("pause.circle", 40),
-    "shell": ("terminal", 25),
-    "unknown": ("questionmark.circle", 20),
+TOOL_BADGES = {
+    "claude": "CC",
+    "codex": "CX",
+    "grok": "GK",
+    "agy": "AGY",
+    "shell": "SH",
 }
+TOOL_ORDER = ("CC", "CX", "GK", "AGY", "SH", "UNK")
+
+STATE_EMOJI = {
+    "blocked": "⚠️",
+    "working": "🔨",
+    "done": "✅",
+    "idle": "⏸",
+    "shell": "⏸",
+    "unknown": "⏸",
+}
+STATE_RANK = {
+    "blocked": 4,
+    "working": 3,
+    "done": 2,
+    "idle": 1,
+    "shell": 1,
+    "unknown": 1,
+}
+TAB_ICON_BY_RANK = {
+    4: "exclamationmark.triangle",
+    3: "hammer",
+    2: "checkmark.circle",
+    1: "pause.circle",
+}
+# Redundant built-in hook keys that clutter Herdr-hosted cmux workspace cards
+REDUNDANT_HOST_KEYS = frozenset({"codex", "claude", "claude_code"})
+SPATIAL_FROM_LABEL_RE = re.compile(r"^\[T\d+[·.]([^\]|]+)\|[^\]]+\]")
 
 
 def run_cmd(argv: list[str], env: dict[str, str] = BASE_ENV, timeout: int = 12) -> str:
@@ -204,147 +229,188 @@ def session_env(session: str, workspace: str, surface: str) -> dict[str, str]:
     return env
 
 
-def short_pane_token(pane: dict[str, Any]) -> str:
-    """Compact identifier for folded idle summaries and workspace descriptions."""
-    p_short = pane["pane_id"].split(":", 1)[-1]
-    if pane.get("agent_name"):
-        return str(pane["agent_name"])
-    label = str(pane.get("pane_label") or "").strip()
-    if label:
-        # Extract role_tag from `[T1·LU|p1] SUP-CX1 · 职责` -> `p1:SUP-CX1`
-        m = re.match(r"^\[[^\]]+\]\s*([^\u00b7·]+)", label)
-        if m:
-            role_part = m.group(1).strip()[:14]
-            return f"{p_short}:{role_part}"
-        return f"{p_short}:{label[:14]}"
-    kind = pane.get("effective_kind") or "pane"
-    return f"{p_short}:{kind}"
+def tool_badge(pane: dict[str, Any]) -> str:
+    kind = str(pane.get("effective_kind") or "").lower()
+    return TOOL_BADGES.get(kind, "UNK")
 
 
-def full_pane_pill_value(pane: dict[str, Any], tab_label: str) -> str:
-    kind = pane.get("effective_kind") or "pane"
-    st = (pane.get("agent_status") or "unknown").lower()
-    if st == "unknown" and kind == "shell":
-        st = "idle"
+def extract_spatial_token(pane: dict[str, Any]) -> str:
+    spatial = str(pane.get("spatial") or "").strip()
+    if spatial and spatial != "?":
+        return "" if spatial == "FULL" else spatial
     label = str(pane.get("pane_label") or "").strip()
-    if label:
-        return f"{kind}/{st} · {label}"
-    title = str(pane.get("terminal_title") or "").strip()
-    if len(title) > 28:
-        title = title[:27] + "…"
-    parts = [f"{kind}/{st}"]
-    if tab_label:
-        parts.append(tab_label)
-    parts.append(title or f"{kind}@{pane['pane_id']}")
-    return " · ".join(parts)
+    m = SPATIAL_FROM_LABEL_RE.match(label)
+    if m:
+        code = m.group(1).strip()
+        return "" if code == "FULL" else code
+    return pane["pane_id"].split(":", 1)[-1]
+
+
+def compact_tab_heading(tab: dict[str, Any], fallback_idx: int) -> str:
+    idx = tab.get("tab_index") or fallback_idx
+    raw = str(tab.get("label") or "").strip()
+    # Strip leading `T1-` / `T1 ` prefix to avoid `T1 T1-xxx`
+    raw = re.sub(r"^T\d+\s*[-·:]?\s*", "", raw)
+    if not raw or raw.isdigit():
+        return f"T{idx}"
+    if len(raw) > 6:
+        raw = raw[:6]
+    return f"T{idx} {raw}"
+
+
+def format_pane_chip(pane: dict[str, Any]) -> str:
+    st = str(pane.get("agent_status") or "unknown").lower()
+    emoji = STATE_EMOJI.get(st, "⏸")
+    badge = tool_badge(pane)
+    pos = extract_spatial_token(pane)
+    if pos and badge != "SH":
+        return f"{emoji}{badge}({pos})"
+    return f"{emoji}{badge}"
+
+
+def format_idle_group(idle_panes: list[dict[str, Any]]) -> str:
+    counts: dict[str, int] = {}
+    for p in idle_panes:
+        b = tool_badge(p)
+        counts[b] = counts.get(b, 0) + 1
+    parts = []
+    for b in TOOL_ORDER:
+        c = counts.get(b, 0)
+        if c == 1:
+            parts.append(b)
+        elif c > 1:
+            parts.append(f"{b}×{c}")
+    return f"⏸{len(idle_panes)}({','.join(parts)})"
 
 
 def plan_workspace_pills_and_description(
     tabs: list[dict[str, Any]],
     panes: list[dict[str, Any]],
-    existing_herdr_keys: set[str],
+    existing_status_keys: set[str],
     *,
-    max_expanded: int = MAX_EXPANDED_PANES,
+    max_inline_per_tab: int = MAX_INLINE_PANES_PER_TAB,
 ) -> dict[str, Any]:
-    """Pure planner: compute desired set-status entries, clear-status keys, and description."""
-    tab_by_id = {t["tab_id"]: t for t in tabs}
-    desired_pills: dict[str, dict[str, Any]] = {}
-
-    active_tokens: list[str] = []
-    blocked_tokens: list[str] = []
+    """Pure planner: 1 status pill per Tab (tool status only, zero reply text)."""
+    panes_by_tab: dict[str, list[dict[str, Any]]] = {}
+    blocked_count = 0
+    working_count = 0
     done_count = 0
     idle_count = 0
 
     for p in panes:
-        st = (p.get("agent_status") or "unknown").lower()
+        panes_by_tab.setdefault(p["tab_id"], []).append(p)
+        st = str(p.get("agent_status") or "unknown").lower()
         if st == "blocked":
-            blocked_tokens.append(short_pane_token(p))
+            blocked_count += 1
         elif st == "working":
-            active_tokens.append(short_pane_token(p))
+            working_count += 1
         elif st == "done":
             done_count += 1
         else:
             idle_count += 1
 
-    if len(panes) <= max_expanded:
-        for p in panes:
-            tid = p["tab_id"]
-            t_label = (tab_by_id.get(tid) or {}).get("label") or f"T{p.get('tab_index', 1)}"
-            st = (p.get("agent_status") or "unknown").lower()
-            style_key = "shell" if (st == "unknown" and p.get("effective_kind") == "shell") else st
-            icon, priority = STATUS_STYLES.get(style_key, STATUS_STYLES["unknown"])
-            desired_pills[f"herdr:{p['pane_id']}"] = {
-                "value": full_pane_pill_value(p, t_label),
-                "icon": icon,
-                "priority": priority,
-            }
-    else:
-        folded_by_tab: dict[str, list[dict[str, Any]]] = {}
-        for p in panes:
-            st = (p.get("agent_status") or "unknown").lower()
-            tid = p["tab_id"]
-            t_label = (tab_by_id.get(tid) or {}).get("label") or f"T{p.get('tab_index', 1)}"
-            if st in ACTIVE_STATUSES:
-                icon, priority = STATUS_STYLES.get(st, STATUS_STYLES["working"])
-                desired_pills[f"herdr:{p['pane_id']}"] = {
-                    "value": full_pane_pill_value(p, t_label),
-                    "icon": icon,
-                    "priority": priority,
-                }
-            else:
-                folded_by_tab.setdefault(tid, []).append(p)
+    desired_pills: dict[str, dict[str, Any]] = {}
+    ordered_tabs = sorted(tabs, key=lambda t: (t.get("tab_index") or 999, t["tab_id"]))
+    for idx, t in enumerate(ordered_tabs, start=1):
+        tid = t["tab_id"]
+        t_panes = panes_by_tab.get(tid) or []
+        if not t_panes:
+            continue
+        heading = compact_tab_heading(t, idx)
+        top_rank = max(STATE_RANK.get(str(p.get("agent_status") or "unknown").lower(), 1) for p in t_panes)
+        icon = TAB_ICON_BY_RANK.get(top_rank, "pause.circle")
+        # Stable T1, T2, T3 top-to-bottom ordering in cmux sidebar
+        priority = max(10, 80 - idx)
 
-        for t in tabs:
-            tid = t["tab_id"]
-            idle_panes = folded_by_tab.get(tid) or []
-            if not idle_panes:
-                continue
-            t_label = t.get("label") or f"T{t.get('tab_index', 1)}"
-            tokens = [short_pane_token(x) for x in idle_panes]
-            joined = ", ".join(tokens[:5])
-            if len(tokens) > 5:
-                joined += f" +{len(tokens) - 5}"
-            desired_pills[f"herdr:tab:{tid}"] = {
-                "value": f"{t_label} (⏸{len(idle_panes)}): {joined}",
-                "icon": "pause.circle",
-                "priority": 35,
-            }
+        if len(t_panes) <= max_inline_per_tab:
+            chips = " ".join(format_pane_chip(p) for p in t_panes)
+            value = f"{heading}: {chips}"
+        else:
+            active_panes = [
+                p for p in t_panes if str(p.get("agent_status") or "unknown").lower() in ACTIVE_STATUSES
+            ]
+            idle_panes = [
+                p for p in t_panes if str(p.get("agent_status") or "unknown").lower() not in ACTIVE_STATUSES
+            ]
+            segments = []
+            if active_panes:
+                shown = [format_pane_chip(p) for p in active_panes[:3]]
+                if len(active_panes) > 3:
+                    shown.append(f"+{len(active_panes) - 3}")
+                segments.append(" ".join(shown))
+            if idle_panes:
+                segments.append(format_idle_group(idle_panes))
+            value = f"{heading}: {' · '.join(segments)}"
 
-    stale_keys = sorted(existing_herdr_keys - set(desired_pills.keys()))
+        desired_pills[f"herdr:tab:{tid}"] = {
+            "value": value,
+            "icon": icon,
+            "priority": priority,
+        }
 
-    # Build concise description that never overflows cmux sidebar width
-    summary_parts = []
-    if blocked_tokens:
-        summary_parts.append(f"⚠️{len(blocked_tokens)}({','.join(blocked_tokens[:2])})")
-    if active_tokens:
-        shown = ",".join(active_tokens[:2])
-        if len(active_tokens) > 2:
-            shown += f"+{len(active_tokens) - 2}"
-        summary_parts.append(f"🔨{len(active_tokens)}({shown})")
+    removable_existing = {
+        k for k in existing_status_keys if k.startswith("herdr:") or k in REDUNDANT_HOST_KEYS
+    }
+    stale_keys = sorted(removable_existing - set(desired_pills.keys()))
+
+    counts_summary = []
+    if blocked_count:
+        counts_summary.append(f"⚠️{blocked_count}")
+    if working_count:
+        counts_summary.append(f"🔨{working_count}")
     if done_count:
-        summary_parts.append(f"✅{done_count}")
+        counts_summary.append(f"✅{done_count}")
     if idle_count:
-        summary_parts.append(f"⏸{idle_count}")
-    if not summary_parts:
-        summary_parts.append("empty")
-    description = f"herdr [{len(tabs)}T/{len(panes)}P]: " + " · ".join(summary_parts)
+        counts_summary.append(f"⏸{idle_count}")
+    if not counts_summary:
+        counts_summary.append("empty")
+    description = f"Herdr · {len(ordered_tabs)}T/{len(panes)}P · {' '.join(counts_summary)}"
 
     return {
         "desired_pills": desired_pills,
         "stale_keys": stale_keys,
         "description": description,
-        "folded": len(panes) > max_expanded,
+        "tab_grouped": True,
     }
 
 
-def list_existing_herdr_keys(workspace: str, env: dict[str, str] = BASE_ENV) -> set[str]:
+def list_existing_status_keys(workspace: str, env: dict[str, str] = BASE_ENV) -> set[str]:
     out = run_cmd(["cmux", "list-status", "--workspace", workspace], env=env)
     keys: set[str] = set()
     for line in out.splitlines():
         line = line.strip()
-        if line.startswith("herdr:") and "=" in line:
-            keys.add(line.split("=", 1)[0])
+        if "=" in line:
+            keys.add(line.split("=", 1)[0].strip())
     return keys
+
+
+def infer_kind_from_process_info(pinfo: dict[str, Any]) -> str:
+    for proc in pinfo.get("foreground_processes") or []:
+        if not isinstance(proc, dict):
+            continue
+        argv = proc.get("argv") if isinstance(proc.get("argv"), list) else []
+        tokens = [
+            os.path.basename(str(proc.get("argv0") or "")).lower(),
+            os.path.basename(str(proc.get("name") or "")).lower(),
+            *[os.path.basename(str(tok)).lower() for tok in argv[:6] if isinstance(tok, str)],
+        ]
+        joined = " ".join(str(tok).lower() for tok in argv[:8] if isinstance(tok, str))
+        for nm in tokens:
+            if not nm:
+                continue
+            if "codex" in nm or nm == "ccc-codex-host":
+                return "codex"
+            if "claude" in nm and "clauder" not in nm:
+                return "claude"
+            if nm in ("agy", "agy.real", "agy-us1", "agy-pro", "antigravity"):
+                return "agy"
+            if nm == "grok":
+                return "grok"
+        if "mg cc " in joined:
+            return "claude"
+        if "mg cx " in joined:
+            return "codex"
+    return "shell"
 
 
 def collect_enriched_session(session: str, env: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -366,27 +432,11 @@ def collect_enriched_session(session: str, env: dict[str, str]) -> tuple[list[di
         status_str = p.get("agent_status") or arow.get("agent_status") or "unknown"
         eff_kind = detected
         if not eff_kind:
-            # Lightweight process-info lookup for unknown panes
             try:
                 pinfo = json.loads(
                     run_cmd([herdr_bin, "--session", session, "pane", "process-info", "--pane", pid], env=env)
                 )["result"].get("process_info") or {}
-                for proc in pinfo.get("foreground_processes") or []:
-                    nm = os.path.basename(str(proc.get("argv0") or proc.get("name") or "")).lower()
-                    if "codex" in nm:
-                        eff_kind = "codex"
-                        break
-                    if "claude" in nm and "clauder" not in nm:
-                        eff_kind = "claude"
-                        break
-                    if nm in ("agy", "agy-us1", "antigravity"):
-                        eff_kind = "agy"
-                        break
-                    if nm == "grok":
-                        eff_kind = "grok"
-                        break
-                if not eff_kind:
-                    eff_kind = "shell"
+                eff_kind = infer_kind_from_process_info(pinfo)
             except (RuntimeError, ValueError, KeyError):
                 eff_kind = "shell"
 
@@ -399,7 +449,6 @@ def collect_enriched_session(session: str, env: dict[str, str]) -> tuple[list[di
                 "effective_kind": eff_kind,
                 "agent_name": arow.get("name"),
                 "pane_label": p.get("label"),
-                "terminal_title": p.get("terminal_title_stripped") or p.get("terminal_title"),
                 "agent_status": status_str,
             }
         )
@@ -418,7 +467,7 @@ def publish_target(
     env = session_env(session, workspace, surface)
     tabs, panes = collect_enriched_session(session, env)
 
-    existing_keys = list_existing_herdr_keys(workspace, env=BASE_ENV)
+    existing_keys = list_existing_status_keys(workspace, env=BASE_ENV)
     plan = plan_workspace_pills_and_description(tabs, panes, existing_keys)
 
     for key in plan["stale_keys"]:
@@ -444,7 +493,7 @@ def publish_target(
     existing_desc = descriptions.get(workspace)
     if existing_desc != plan["description"] and (
         existing_desc in (None, "")
-        or (isinstance(existing_desc, str) and existing_desc.startswith("herdr"))
+        or (isinstance(existing_desc, str) and existing_desc.lower().startswith("herdr"))
     ):
         run_cmd(
             [
@@ -466,7 +515,7 @@ def publish_target(
         "surface": surface,
         "pane_count": len(panes),
         "pill_count": len(plan["desired_pills"]),
-        "folded": plan["folded"],
+        "tab_grouped": plan["tab_grouped"],
         "description": plan["description"],
     }
 

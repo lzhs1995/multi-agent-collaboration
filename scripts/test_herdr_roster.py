@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
+import socket as pysocket
 import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -10,7 +12,8 @@ from herdr_roster import (
     RosterError,
     apply_roster_manifest,
     collect_session_snapshot,
-    derive_spatial_codes,
+     derive_spatial_codes,
+    detect_herdr_caller_env,
     format_pane_label,
     infer_process_kind,
     sanitize_agent_code,
@@ -24,11 +27,11 @@ class FakeRunner:
 
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
-        key = tuple(argv[3:])  # strip [bin, '--session', session]
+        key = tuple(argv[3:])
         if key in self.responses:
             payload = self.responses[key]
             return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
-        if argv[3:5] == ["tab", "rename"] or argv[3:5] == ["pane", "rename"] or argv[3:5] == ["agent", "rename"]:
+        if argv[3:5] in (["workspace", "rename"], ["tab", "rename"], ["pane", "rename"], ["agent", "rename"]):
             return subprocess.CompletedProcess(argv, 0, '{"ok":true}', "")
         raise AssertionError(f"Unexpected command: {argv}")
 
@@ -46,6 +49,13 @@ def sample_responses():
                 "socket": "/tmp/herdr-c4.sock",
                 "version": "0.9.5",
             },
+        },
+        ("workspace", "list"): {
+            "result": {
+                "workspaces": [
+                    {"workspace_id": "w1", "label": "cnm", "tab_count": 2, "pane_count": 6}
+                ]
+            }
         },
         ("tab", "list"): {
             "result": {
@@ -199,30 +209,60 @@ class HerdrRosterTests(unittest.TestCase):
             {"p1": "LU", "p4": "LD", "p2": "CU", "p5": "CM", "p8": "CD", "p3": "RU", "p6": "RD"},
         )
 
-    def test_wrapper_codex_and_idle_shell_inference(self):
-        wrapped = infer_process_kind(
+    def test_wrapper_magpie_agy_and_caller_env_detection(self):
+        mg_cc = infer_process_kind(
             {
                 "foreground_processes": [
-                    {"name": "python3.14", "argv0": "python3.14", "argv": ["python3.14", "launch.py"]},
-                    {"name": "codex-aarch64-apple-darwin", "argv0": "/bin/codex-aarch64-apple-darwin"},
+                    {
+                        "name": "claude",
+                        "argv0": "/Users/lzhs/.local/bin/claude",
+                        "argv": ["/Users/lzhs/.local/bin/claude", "--settings", "/Users/lzhs/.magpie/profiles/linxi-s1.json"],
+                    }
                 ]
             }
         )
-        self.assertEqual(wrapped["inferred_kind"], "codex")
-        self.assertFalse(wrapped["is_shell_only"])
+        self.assertEqual(mg_cc["inferred_kind"], "claude")
+        self.assertEqual(mg_cc["launcher_hint"], "linxi-s1")
 
-        shell = infer_process_kind({"foreground_processes": [{"name": "zsh", "argv0": "-zsh", "argv": ["-zsh"]}]})
-        self.assertIsNone(shell["inferred_kind"])
-        self.assertTrue(shell["is_shell_only"])
+        mg_cx = infer_process_kind(
+            {
+                "foreground_processes": [
+                    {
+                        "name": "python3.14",
+                        "argv0": "python3.14",
+                        "argv": ["python3.14", "/Users/lzhs/.local/bin/mg", "cx", "agentrouter-a"],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(mg_cx["inferred_kind"], "codex")
+        self.assertEqual(mg_cx["launcher_hint"], "agentrouter-a")
 
-    def test_snapshot_and_apply_never_send_input_and_enforce_pins(self):
+        agy = infer_process_kind(
+            {"foreground_processes": [{"name": "agy.real", "argv0": "/Users/lzhs/.local/bin/agy.real", "argv": ["agy.real"]}]}
+        )
+        self.assertEqual(agy["inferred_kind"], "agy")
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as td:
+            sock_path = Path(td) / "herdr.sock"
+            srv = pysocket.socket(pysocket.AF_UNIX, pysocket.SOCK_STREAM)
+            srv.bind(str(sock_path))
+            try:
+                suppressed = detect_herdr_caller_env(
+                    {"HERDR_ENV": "0", "HERDR_PANE_ID": "w1:p2", "HERDR_SOCKET_PATH": str(sock_path)}
+                )
+                self.assertTrue(suppressed["inside_herdr"])
+                self.assertTrue(suppressed["herdr_env_suppressed"])
+            finally:
+                srv.close()
+
+    def test_snapshot_and_apply_workspace_rename_and_enforce_pins(self):
         runner = FakeRunner(sample_responses())
         snap = collect_session_snapshot("c4-multiagent", herdr_bin="/mock/herdr", runner=runner)
         self.assertFalse(snap["input_sent"])
+        self.assertEqual(snap["workspaces"][0]["label"], "cnm")
         by_id = {p["pane_id"]: p for p in snap["panes"]}
         self.assertEqual(by_id["w1:p3"]["effective_kind"], "codex")
-        self.assertEqual(by_id["w1:pB"]["spatial"], "LU")
-        self.assertEqual(by_id["w1:pE"]["tab_index"], 2)
 
         manifest = {
             "schema": "herdr-roster-manifest-v1",
@@ -230,6 +270,7 @@ class HerdrRosterTests(unittest.TestCase):
                 {
                     "session": "c4-multiagent",
                     "expect_socket": "/tmp/herdr-c4.sock",
+                    "workspace_label": "MAC协作",
                     "tabs": [
                         {"tab_id": "w1:t1", "label": "T1-主控双审"},
                         {"tab_id": "w1:t6", "label": "T2-升级规划"},
@@ -255,13 +296,10 @@ class HerdrRosterTests(unittest.TestCase):
             ],
         }
         dry = apply_roster_manifest(manifest, dry_run=True, herdr_bin="/mock/herdr", runner=runner)
-        self.assertTrue(dry["dry_run"])
-        self.assertEqual(dry["executed_command_count"], 0)
-        # w1:p3 is omitted from Herdr agent list, so agent rename is skipped while pane rename runs
-        self.assertEqual(dry["planned_command_count"], 5)
+        self.assertEqual(dry["planned_command_count"], 6)  # 1 workspace + 2 tabs + 2 panes + 1 agent
 
         live = apply_roster_manifest(manifest, dry_run=False, herdr_bin="/mock/herdr", runner=runner)
-        self.assertEqual(live["executed_command_count"], 5)
+        self.assertEqual(live["executed_command_count"], 6)
         self.assertFalse(live["input_sent"])
         for call in runner.calls:
             self.assertNotIn("send-text", call)

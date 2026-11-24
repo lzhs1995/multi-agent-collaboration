@@ -5,11 +5,12 @@ description: Coordinate existing CLI agents through a shared evidence contract, 
 
 # Multi-Agent Collaboration
 
-Start with the [shared contract](references/collaboration-contract-core.md) and
+Start with the [shared contract](references/collaboration-contract-core.md),
+[four modes & five scenarios](references/collaboration-modes.md), and
 [task profile selection](references/collaboration-profiles.md).
 
 - Existing task: retain its registered controller, original attempts and evidence.
-- New Herdr task: read [Herdr collaboration](skills/herdr-collaboration/SKILL.md).
+- New Herdr task: read [Herdr collaboration](skills/herdr-collaboration/SKILL.md) and use the [Herdr fast-path](references/herdr-fast-path.md) (`herdr agent prompt` with zero extra handshake).
 - New plain cmux or independent terminal task: read the
   [cmux collaboration skill](skills/cmux-collaboration/SKILL.md).
 - Nested teams, such as chapter teams in separate cmux workspaces: read

@@ -1,49 +1,41 @@
-# Herdr 多 Agent 显式空间命名与 cmux 侧边栏同步规范 / Explicit Spatial Naming
+# Herdr 多 Agent 显式空间命名与极简侧栏规范 / Explicit Spatial Naming
 
-Herdr 原生支持 `tab rename`、`pane rename` 与 `agent rename` 三层显示元数据，但不会自动为多面板团队生成可读角色与方位标签。当同一 Herdr 会话包含多个 Tab 或 6 个以上面板时，依赖动态终端标题（如 `Implement the plan | cnm`、`Claude Code`）会导致用户与主管无法快速定位目标面板。
-
-本规范固定 Herdr 团队的**四层显式命名体系**，并与安全身份校验严格分离。
+Herdr 原生支持 `workspace rename`、`tab rename`、`pane rename` 与 `agent rename` 显示元数据。本规范固定**四层显式空间命名体系**，并彻底净化 `Herdr` 内侧栏与外层 `cmux` 侧栏。
 
 ## 1. 四层命名语法（显示导航 ≠ 安全身份）
 
 | 层级 | 命令入口 | 语法标准 | 示例 | 用途与边界 |
 |---|---|---|---|---|
+| **Workspace 短项目名** | `herdr workspace rename <ws_id> <label>` | `<项目短名>`（≤12 字） | `网关总控`、`MAC协作`、`Stata插件` | 替换默认抽象的母目录名 `cnm` |
 | **Tab 分区名** | `herdr tab rename <tab_id> <label>` | `T<序号>-<分区短名>`（≤16 字） | `T1-主控双审`、`T2-升级规划` | 消除无意义的默认数字 `1`、`2`、`6` |
-| **Pane 空间角色标签** | `herdr pane rename <pane_id> <label>` | `[T<序号>·<方位>\|<pID>] <角色>-<CLI> · <职责>`（≤36 字） | `[T2·LU\|pB] SUP-CX(S40) · MAC维护`<br/>`[T2·RD\|pE] ARC-AGY · 总规划` | 在 Herdr 面板边框与 cmux status pill 第一顺位展示，不受子进程动态标题覆盖 |
+| **Pane 空间角色标签** | `herdr pane rename <pane_id> <label>` | `[T<序号>·<方位>\|<pID>] <角色>-<CLI> · <职责>`（≤36 字） | `[T2·LU\|pB] SUP-CX(S40) · MAC维护`<br/>`[T2·RD\|pE] ARC-AGY · 总规划` | 在 Herdr 面板边框第一顺位展示，不受子进程动态标题覆盖 |
 | **Agent 短代号** | `herdr agent rename <pane_id> <code_name>` | `t<序号>-<role>-<cli><编号>`（严格全小写 `^[a-z][a-z0-9_-]{0,31}$`） | `t2-sup-s40`、`t2-rev-cc1`、`t2-arc-agy` | 供用户或主管直接调用 `herdr agent prompt/wait <code_name>` |
 | **底层安全身份锚** | 只读核验（任务记录固定） | `socket + pane_id + terminal_id + native_session_id` | `/.../herdr.sock` + `w1:pB` + `term_...` + `01a1d601-...` | **唯一安全鉴权依据**；显示标签永不充当会话身份或写入授权 |
 
-### 空间方位码（`<方位>`）几何映射规则
+- **空间方位码（`<方位>`）**：由 `scripts/herdr_roster.py` 读取 `herdr pane layout --pane <id>` 的真实矩形 `(x, y, width, height)` 自动计算（单面板 `FULL`；双面板 `L/R` 或 `U/D`；四宫格 `LU/LD/RU/RD`；多列网格 `L/C/R` × `U/M/D`）。
+- **角色与工具简码**：角色 `SUP`（主管）/ `REV`（审阅）/ `EXE`（执行）/ `ARC`（规划）/ `SH`（终端）；客户端 `CC`（Claude Code）/ `CX`（Codex）/ `GK`（Grok）/ `AGY`（Antigravity），支持 `mg cc`、`mg cx`、`agy` 等自定义启动器自动识别。
 
-由 `scripts/herdr_roster.py` 读取 `herdr pane layout --pane <id>` 的真实矩形 `(x, y, width, height)` 自动计算，不依赖焦点切换：
-- **单面板**：`FULL`
-- **双面板**：左右 `L` / `R`；上下 `U` / `D`
-- **双列四宫格**：`LU`（左上）、`LD`（左下）、`RU`（右上）、`RD`（右下）
-- **三列及多行网格（如 5–10 面板）**：列前缀 `L`（左）/ `C`（中）/ `R`（右）组合行后缀 `U`（上）/ `M`（中）/ `D`（下），如 `CU`、`CM`、`CD`、`RM`；超过 3×3 自动回退为 `C1R1` 矩阵坐标。
+## 2. Herdr 内部左侧栏默认隐藏（释放 26 列窗口宽度）
 
-### 角色与 CLI 简码约定
-- **角色码**：`SUP`（主管 Supervisor）、`REV`（审阅 Reviewer）、`EXE`（执行 Executor）、`ARC`（架构/规划）、`SH`（待命/辅助 Shell）。
-- **CLI 码**：`CX`（Codex）、`CC`（Claude Code）、`AGY`（Antigravity CLI）、`GK`（Grok）。
+在 `~/.config/herdr/config.toml` 中设置：
+```toml
+[keys]
+toggle_sidebar = "prefix+b"
 
-## 2. 标准工具用法（零终端输入）
+[ui]
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+status_indicators = "symbols"
 
-```bash
-# 只读生成单会话或全部活跃 Herdr 会话的空间拓扑表
-python3 -B scripts/herdr_roster.py map --session c4-multiagent
-python3 -B scripts/herdr_roster.py map --all
-
-# 预演并应用经 terminal_id / native_session_id 校验的显式命名清单
-python3 -B scripts/herdr_roster.py apply --manifest /absolute/roster.json --dry-run
-python3 -B scripts/herdr_roster.py apply --manifest /absolute/roster.json
+[ui.sidebar.agents]
+row_gap = 0
+rows = [["state_icon", "tab", "pane"], ["agent"]]
 ```
+- 新会话启动即零宽度隐藏内侧栏；已打开会话随时按 **`Ctrl+B` 再按 `b`**（或点左下角 `«`）一键收起/展开，且展开时不再重复刷屏 `cnm`。
 
-`herdr_roster.py` 只调用只读查询和 UI 元数据重命名命令（`tab/pane/agent rename`），不发送任何按键、文本或生命周期终止信号；若面板 `terminal_id` 或 `native_session_id` 与清单不一致，立即拒绝（Fail-closed）。
+## 3. 外层 `cmux` 侧栏极简降噪规范（严禁显示任务回复正文）
 
-## 3. 多 Tab / 6+ 面板下的 cmux 侧边栏自适应同步规则
-
-配套守护程序 `scripts/cmux_herdr_status_sync.py`（部署于 `~/.local/share/herdr-agent-launchers/cmux-herdr-status.py`）解决社区 `cmux-herdr` 在多面板下的三项缺陷：
-1. **补齐 `unknown` 面板漏检**：结合 `pane list` 与 `pane process-info` 识别二进制别名（如 `codex-aarch64-apple-darwin`）及显式命名的辅助面板，不再因 `agent list` 缺项而隐身。
-2. **>6 面板分级折叠（防侧边栏刷屏截断）**：
-   - 总面板数 `<= 6`：逐面板展示独立状态药丸。
-   - 总面板数 `> 6`：处于 `blocked`（⚠️ 90）、`working`（🔨 80）、`done`（✅ 60）的面板逐条置顶单列显示精确方位与角色名；同一 Tab 内的 `idle` / `shell` 面板自动折叠为 1 条汇总药丸（`T1-主控(⏸3): ...`），并清理过期的旧单面板药丸。
-3. **全会话紧凑副标题（含 `default`）**：Workspace `description` 统一输出如 `herdr [2T/9P]: 🔨2(REV-CC1, ARC-AGY) · ⏸7`，避免无名 `codex idle · codex idle` 溢出截断。
+1. **`~/.config/cmux/cmux.json` 禁用侧栏正文刷屏**：设置 `"sidebar": { "showNotificationMessage": false, "showLog": false, "showProgress": false }`，禁止将回合结束的“任务结果具体内容回复”渲染到侧栏卡片。
+2. **单一层级「按 Tab 聚合各工具状态」**（`scripts/cmux_herdr_status_sync.py`）：
+   - 顶部 `description`：`Herdr · 2T/9P · ⚠️1 🔨2 ⏸6`
+   - 每个 Tab 固定对应 **1 行胶囊**（稳定按 `T1, T2, T3` 排列），只显示该 Tab 内各工具状态与方位（如 `T1 网关监控: 🔨CC(L) 🔨GK(RU) ⏸CX(LD) ⏸SH`；超过 4 面板时自动聚合空闲项如 `T1 插件研发: 🔨CC(CU) · ⏸6(CX×3,CC,SH×2)`），彻底杜绝 Tab 与 Agent 混排及长文本截断。
