@@ -25,11 +25,19 @@ three-round ceiling for ordinary revision. Do not duplicate that contract here.
    focused service by default. Read `herdr --skill` and check `herdr status` with
    that same selector when selected. The installed CLI is the command authority.
    Do not copy an online or newer command syntax.
-2. Discover original participants through `herdr agent list`. Pin the server
-   endpoint, pane ID, terminal ID and `agent_session.value` with `kind=id` in the
-   task evidence. Names, focus and outer cmux surfaces do not establish identity.
+2. Discover original participants through `herdr pane list` and `herdr agent list`.
+   Pin the server endpoint, pane ID, terminal ID and `agent_session.value` with
+   `kind=id` in the task evidence. If `agent list` omits a wrapped binary (such
+   as `codex-aarch64-apple-darwin`) or reports `unknown`, cross-check
+   `herdr pane process-info` and `pane read` before assuming the agent exited.
+   Assign human-readable spatial labels (`[T<idx>·<pos>|<pID>] <ROLE>-<CLI> · <duty>`)
+   and ASCII agent short codes via [`scripts/herdr_roster.py`](../../scripts/herdr_roster.py)
+   following [explicit naming](../../references/herdr-explicit-naming.md); display
+   names, focus and outer cmux surfaces never replace native session identity.
 3. Before a message, recheck that identity and actual input state. Use the
-   official `agent prompt` route; no second sender framework. Preserve real
+   official `agent prompt` route; no second sender framework. Never send `Tab`
+   to a Codex target to submit or repair delivery (`Tab` queues until turn end;
+   submit once via the documented Enter route). Preserve real
    drafts and dialogs. Existing user authorization applies to known approval
    questions; unknown questions remain pending. Never reset a peer to fix delivery.
 4. Send a concrete question directly. For an explicitly required formal artifact,
@@ -79,9 +87,10 @@ the [cmux profile](../../references/cmux-collaboration-profile.md). Never type a
 peer message into the outer cmux terminal hosting Herdr.
 
 In scientific work, read the domain skill as well. Assign chapter ownership,
+validate structured chapter handoffs offline with [`scripts/chapter_delta_validator.py`](../../scripts/chapter_delta_validator.py),
 share milestone deltas through chapter supervisors, and serialize global
-Word/Zotero writes. JEV is optional future ranking assistance; it does not verify
-identity, source truth, locks or completion.
+Word/Zotero writes. Do not wire external probabilistic APIs (such as JEV) into
+identity, source truth, locks or completion checks.
 
 For inward task allocation, reuse and normal closure of finished owned panes, read
 [team capacity and panel lifecycle](../../references/team-capacity-and-panel-lifecycle.md).

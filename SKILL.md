@@ -34,6 +34,8 @@ continue independent authorized work during finite observations.
 
 Read-only profile helper: `python3 -B scripts/collaboration_profile.py route`.
 Herdr identity helper: `python3 -B scripts/collaboration_profile.py check-herdr --target /absolute/target.json`.
+Explicit Herdr topology & UI naming helper: `python3 -B scripts/herdr_roster.py map --all` (see [explicit naming](references/herdr-explicit-naming.md)).
+Offline chapter delta validator: `python3 -B scripts/chapter_delta_validator.py /absolute/delta.json` (graduated from the archived `multi-agent-collaboration-upgrade` sandbox; this repository is the single canonical collaboration skill line).
 These helpers send nothing, enroll nothing and do not make check-and-send atomic.
 
 For task-driven expansion, session reuse and returning idle owned panels, read

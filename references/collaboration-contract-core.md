@@ -41,6 +41,15 @@ owns subsequent work. Record start, recovery, freeze and acceptance separately;
 reuse accepted work at the handoff boundary. Preserve original sessions, output
 ownership and resource limits. Label solo results as self-review.
 
+Three continuity modes govern authorized degradation without silent role drift:
+- `CODEX_DUAL_CLAUDE`: supervisor and two independent reviewers/executors operate on disjoint scopes or high-risk cross-checks.
+- `CODEX_SINGLE_CLAUDE` / `CODEX_SOLO`: when one or both executors are terminally rate-limited or unavailable and user takeover authority applies, freeze the failed attempt, record a takeover manifest, keep any healthy peer on its own bounded work, and label unreviewed supervisor output `solo_self_review`.
+- `CLAUDE_PEER`: when the supervisor is temporarily blocked, peers may complete only already-registered bounded file scopes without claiming whole-project acceptance or shared Word/Zotero leases.
+
+External probabilistic routers (such as TypeSafe JEV) are excluded from core identity, lock, source-truth and completion gates; deterministic local checks govern protocol safety.
+For multi-tab / multi-pane Herdr readability, apply [explicit spatial naming](herdr-explicit-naming.md) (`tab/pane/agent rename`) while keeping native session IDs authoritative.
+For multi-chapter handoffs, validate structural delta completeness offline with [`scripts/chapter_delta_validator.py`](../scripts/chapter_delta_validator.py).
+
 ### Executor-initiated requests
 
 Within an explicitly assigned collaboration whose overall task remains active,

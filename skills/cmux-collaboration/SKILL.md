@@ -37,10 +37,13 @@ Keep installation selection, foreground authentication and task acceptance separ
    reception/body-reading evidence; a file mailbox or queued notice alone does
    not prove that an idle agent woke or consumed the task. Observe the original
    attempt after an uncertain result; do not resend it to manufacture a receipt.
-5. Read and decide on a chapter's versioned deliverable before dispatching
-   dependent integration work. Return the scoped decision and remaining issues;
-   do not require an ACK of that decision. Global Word/Zotero and account leases
-   remain shared across workspaces and Herdr services.
+5. Read and decide on a chapter's versioned deliverable (optionally pre-checked
+   with [`scripts/chapter_delta_validator.py`](../../scripts/chapter_delta_validator.py))
+   before dispatching dependent integration work. Keep inner Herdr panes labelled
+   per [explicit naming](../../references/herdr-explicit-naming.md) so sidebar
+   status pills stay readable across workspaces. Return the scoped decision and
+   remaining issues; do not require an ACK of that decision. Global Word/Zotero
+   and account leases remain shared across workspaces and Herdr services.
 
 6. Executors follow the same shared executor-initiated request rule and its
    active-scope and stopping conditions. An explicitly enrolled reask runner is
