@@ -8,6 +8,19 @@ Coordinate existing Codex and Claude Code sessions with bounded assignments, tra
 
 This repository provides collaboration rules, task records and local helpers. Agent subscriptions, model credentials and the terminal applications are separate dependencies.
 
+## Demo
+
+- [Quick overview (30 seconds)](https://youtu.be/wdnxgLSzQDc)
+- [Walkthrough (3:03)](https://youtu.be/TQ26dOofnvs)
+
+Six offline tests of the actual transport code with synthetic terminal and transcript fixtures. These examples cover sending and receiving, not a live two-agent handoff or the later reading, reporting and acceptance stages.
+
+Silent, edited videos with burned-in Traditional Chinese and English captions.
+
+以合成終端與轉錄夾具測試實際傳輸程式的六個案例；涵蓋送出與收件，未拍攝真實雙代理交接或後續讀取、回報、驗收階段。
+
+無聲剪輯版，附繁中／英文燒錄字幕。
+
 ## Choose the right layer
 
 | Repository | Responsibility |
