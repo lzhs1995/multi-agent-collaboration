@@ -3800,6 +3800,20 @@ class MultiExecutorGateTests(OfflineWorkspaceFixture):
         self.assertEqual(ev["executor"], "surface:2")
         self.assertTrue(ev["nonce_proven"])
 
+    def test_round_prompt_does_not_preselect_reviewer_verdict(self):
+        with mock.patch.object(REFERENCE, "plan", wraps=REFERENCE.plan) as plan:
+            code, _, nonces = self._round(["surface:2"], requested="PASS")
+        self.assertIsNone(code)
+        prompts = [call.args[0] for call in plan.call_args_list
+                   if call.args[1] in nonces.values()]
+        self.assertEqual(len(prompts), 1)
+        prompt = prompts[0]
+        self.assertNotIn("ROUND_VERDICT=", prompt)
+        self.assertIn("Independently select <verdict>", prompt)
+        self.assertIn("your verdict may differ from it", prompt)
+        for verdict in HARNESS.ROUND_ALLOWED_VERDICTS:
+            self.assertIn(verdict, prompt)
+
     def test_the_round_takes_the_least_favourable_verdict(self):
         """One FAIL among three reviewers must not be averaged away.
 

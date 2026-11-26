@@ -3052,8 +3052,10 @@ def _record_round_one(args, root, entry, item, artifact_path, artifact_sha256):
         "must never replace the nonce-bound ACK. "
         f"Verify the pending receipt at {round_receipt_path}, then construct a response from "
         f"ROUND_TASK_ID={args.task_id} ROUND_ID={args.round_id} "
-        f"ROUND_AGENT={executor_provider}:identity ROUND_VERDICT={args.verdict} "
-        f"ROUND_NONCE={round_nonce}. After verification, your entire assistant response "
+        f"ROUND_AGENT={executor_provider}:identity ROUND_NONCE={round_nonce}. "
+        f"Independently select <verdict> from {', '.join(ROUND_ALLOWED_VERDICTS)} "
+        "based on the evidence. The receipt's requested verdict is not your decision; "
+        "your verdict may differ from it. After verification, your entire assistant response "
         "must be exactly one compact ACK line with no prose before or after. Reply in compact format "
         "ROUND_ACK|<task-id>|<round-id>|<agent:identity>|<verdict>|<nonce>."
     )
