@@ -11,15 +11,69 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import uuid
 import cmux_identity_budget as budget
 import cmux_foreground_thread as foreground
+import official_signature_cache as signature_cache
+
+OFFICIAL_CODEX_NAMES = ('codex-aarch64-apple-darwin',)
+OFFICIAL_CODEX_LAUNCHER = Path.home() / '.local/bin/codex'
+OFFICIAL_CODEX_REQUIREMENT = 'anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"'
+
+
+def official_codex(executable, argv=None, file_identity=None):
+    """Recognize the installed official release name inside the caller budget."""
+    path = Path(executable)
+    if path.name == 'codex':
+        return True
+    if path.name not in OFFICIAL_CODEX_NAMES or not path.is_absolute():
+        return False
+    try:
+        budget.check()
+        if path.resolve(strict=True) != path or not os.path.samefile(path, OFFICIAL_CODEX_LAUNCHER):
+            return False
+        argv0 = None if argv is None else Path(argv[0]) if argv else None
+        if argv is not None and (argv0 is None or not argv0.is_absolute()
+                                 or argv0.resolve(strict=True) != path):
+            return False
+        before = path.stat()
+        launcher_before = OFFICIAL_CODEX_LAUNCHER.lstat()
+        def pin(info):
+            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                    info.st_ctime_ns, info.st_mode, info.st_uid, info.st_gid)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                or not before.st_mode & 0o111 or before.st_mode & 0o022):
+            return False
+        observed = [before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns]
+        if file_identity is not None and list(file_identity) != observed:
+            return False
+        signature_ok = signature_cache.check(path, OFFICIAL_CODEX_LAUNCHER)[0]
+        budget.check()
+        result = (signature_ok and pin(path.stat()) == pin(before)
+                and pin(OFFICIAL_CODEX_LAUNCHER.lstat()) == pin(launcher_before)
+                and path.resolve(strict=True) == path
+                and os.path.samefile(path, OFFICIAL_CODEX_LAUNCHER)
+                and (argv0 is None or argv0.resolve(strict=True) == path))
+        return result
+    except (OSError, ValueError, TypeError, IndexError, subprocess.TimeoutExpired):
+        return False
 
 
 class IdentityError(RuntimeError):
     pass
+
+
+def foreground_selection(client):
+    selected = foreground.read(client)
+    if (selected is None
+            and Path(client.get('executable', '')).name in OFFICIAL_CODEX_NAMES
+            and official_codex(client['executable'], client.get('argv'), client.get('file_identity'))):
+        import cmux_official_foreground
+        return cmux_official_foreground.read(client)
+    return selected
 
 
 class ProcessExited(IdentityError):
@@ -179,7 +233,7 @@ def client_candidates():
         fields = line.strip().split(None, 1)
         if len(fields) != 2 or not fields[0].isdigit():
             raise IdentityError('malformed client inventory')
-        if Path(fields[1]).name == 'codex':
+        if Path(fields[1]).name == 'codex' or official_codex(fields[1]):
             candidates.append(fields[0])
     if len(set(candidates)) != len(candidates):
         raise IdentityError('duplicate client inventory')
@@ -257,8 +311,8 @@ def _ancestry():
         if item.get('system_login'):
             break
         argv = item['argv']
-        if (Path(item['executable']).name == 'codex' and len(argv) > 1
-                and argv[1] == 'app-server' and '--managed-daemon' in argv[2:]):
+        if (len(argv) > 1 and argv[1] == 'app-server' and '--managed-daemon' in argv[2:]
+                and official_codex(item['executable'], argv, item.get('file_identity'))):
             daemon = item
             break
         pid = item['ppid']
@@ -294,7 +348,7 @@ def _collect_embedded(env, chain, *, payload=None):
     thread cannot borrow its parent's foreground, UUIDs or inbox authority.
     """
     candidates = [(index, item) for index, item in enumerate(chain)
-                  if Path(item.get('executable', '')).name == 'codex']
+                  if official_codex(item.get('executable', ''), item.get('argv'), item.get('file_identity'))]
     if not candidates:
         return None
     index, client = candidates[0]
@@ -325,7 +379,7 @@ def _collect_embedded(env, chain, *, payload=None):
                 or any(item['env'].get(key) not in (None, wanted) for item in tool_chain)):
             raise IdentityError('embedded UUID environment differs from client ancestry')
     try:
-        selected = foreground.read(client)
+        selected = foreground_selection(client)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise IdentityError('embedded native foreground unavailable: ' + str(exc)) from exc
     if selected is None or selected.get('thread_id') != session:
@@ -337,7 +391,7 @@ def _collect_embedded(env, chain, *, payload=None):
     if not tty or tty in ('?', '??', '-'):
         raise IdentityError('embedded native client has no terminal')
     if (process(os.getpid()) != current or _ancestry() != (chain, None)
-            or foreground.read(client) != selected):
+            or foreground_selection(client) != selected):
         raise IdentityError('embedded caller changed during authentication')
     return dict(source='embedded-native-client-v1', session=session, daemon=None,
                 client=dict(client, tty=tty), chain=[current] + chain,
@@ -444,7 +498,7 @@ def _collect_client(session, chain, daemon):
             # a disappearance after a partial read must not hide a second match.
             continue
         try:
-            selected = foreground.read(p)
+            selected = foreground_selection(p)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             # 候选清单不是当前 caller。坏记录只能使该候选不具备认证
             # 资格，不能否决另一位证据完整的主管，也不能降级为 argv。
@@ -456,7 +510,7 @@ def _collect_client(session, chain, daemon):
         if matches(p, selected):
             if process(p['pid']) != p:
                 raise IdentityError('selected client identity drift')
-            if Path(p['executable']).name != 'codex':
+            if not official_codex(p['executable'], p.get('argv'), p.get('file_identity')):
                 raise IdentityError('client executable mismatch')
             tty = subprocess.run(['/bin/ps', '-p', candidate, '-o', 'tty='],
                                  capture_output=True, text=True,
@@ -485,7 +539,7 @@ def _collect_client(session, chain, daemon):
     for original, selected in selections:
         is_caller = original['pid'] == clients[0]['pid']
         try:
-            current = foreground.read(original)
+            current = foreground_selection(original)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if is_caller:
                 raise IdentityError('native foreground selection recheck failed: ' + str(exc)) from exc
@@ -563,4 +617,8 @@ def public_proof(proof):
     selected = proof.get('foreground')
     if isinstance(selected, dict) and isinstance(selected.get('thread_id'), str):
         public['foreground'] = {'thread_id': selected['thread_id']}
+        if selected.get('source') == 'official-native-rollout-fd-v1':
+            public['foreground'].update(
+                source=selected['source'],
+                native_record=dict(path=selected['path'], **selected['native_record']))
     return public

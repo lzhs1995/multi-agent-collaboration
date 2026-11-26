@@ -137,18 +137,27 @@ def caller_collection(collector):
         _caller_collector.reset(token)
 
 
-def caller_snapshot(*, collector=None, initial_proof=_UNCOLLECTED):
+def caller_snapshot(*, collector=None, initial_proof=_UNCOLLECTED, local_hook=False):
     """Resolve caller once and recheck the process proof around live cmux reads."""
     try:
         collect = collector or _caller_collector.get() or (lambda: daemon_identity.collect(os.environ))
         proof = collect() if initial_proof is _UNCOLLECTED else initial_proof
+        # A hook resolves only its own authenticated embedded terminal. Ask the
+        # host for that exact workspace, while generic/cross-workspace callers
+        # and managed daemons retain the complete tree. Never select by focus
+        # or an unverified inherited environment value.
+        tree_args = ("tree", "--all", "--json", "--id-format", "both")
+        if (local_hook and proof is not None and proof.get('source') == 'embedded-native-client-v1'
+                and proof.get('daemon') is None):
+            selected_workspace = uuid_value(proof['client']['env']['CMUX_WORKSPACE_ID'])
+            tree_args = ("tree", "--workspace", selected_workspace, "--json", "--id-format", "both")
         identity = _read_json_command("identify", "--json")
-        tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
+        tree = _read_json_command(*tree_args)
         resolved, env = daemon_identity.resolve(identity, tree, os.environ, proof)
         if proof is not None:
             again = collect()
             final_identity = _read_json_command("identify", "--json")
-            final_tree = _read_json_command("tree", "--all", "--json", "--id-format", "both")
+            final_tree = _read_json_command(*tree_args)
             final, final_env = daemon_identity.resolve(final_identity, final_tree, os.environ, again)
             if again != proof or final['caller'] != resolved['caller'] or final_env != env:
                 deny("native caller changed during resolution")

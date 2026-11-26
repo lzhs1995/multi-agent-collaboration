@@ -1,0 +1,377 @@
+{
+  "schema": "federated-collaboration-v1",
+  "project_id": "SYNTHETIC-EXAMPLE",
+  "senior": "senior",
+  "actors": [
+    {
+      "actor_id": "senior",
+      "role": "supervisor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/senior"
+      }
+    },
+    {
+      "actor_id": "chapter-1-supervisor",
+      "role": "supervisor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-1-supervisor"
+      }
+    },
+    {
+      "actor_id": "chapter-1-executor",
+      "role": "executor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-1-executor"
+      }
+    },
+    {
+      "actor_id": "chapter-2-supervisor",
+      "role": "supervisor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-2-supervisor"
+      }
+    },
+    {
+      "actor_id": "chapter-2-executor",
+      "role": "executor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-2-executor"
+      }
+    },
+    {
+      "actor_id": "chapter-3-supervisor",
+      "role": "supervisor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-3-supervisor"
+      }
+    },
+    {
+      "actor_id": "chapter-3-executor",
+      "role": "executor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-3-executor"
+      }
+    },
+    {
+      "actor_id": "chapter-4-supervisor",
+      "role": "supervisor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-4-supervisor"
+      }
+    },
+    {
+      "actor_id": "chapter-4-executor",
+      "role": "executor",
+      "binding_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/bindings/chapter-4-executor"
+      }
+    }
+  ],
+  "chapters": [
+    {
+      "chapter_id": "chapter-1",
+      "workspace_uuid": "6cd40602-8ce9-5270-944f-2a5991165a23",
+      "herdr_service": {
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-1",
+        "socket": "/synthetic/services/chapter-1/herdr.sock"
+      },
+      "supervisor": "chapter-1-supervisor",
+      "participants": [
+        "chapter-1-supervisor",
+        "chapter-1-executor"
+      ]
+    },
+    {
+      "chapter_id": "chapter-2",
+      "workspace_uuid": "af71a67d-2a8a-5296-a496-b09c18eb9a7d",
+      "herdr_service": {
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-2",
+        "socket": "/synthetic/services/chapter-2/herdr.sock"
+      },
+      "supervisor": "chapter-2-supervisor",
+      "participants": [
+        "chapter-2-supervisor",
+        "chapter-2-executor"
+      ]
+    },
+    {
+      "chapter_id": "chapter-3",
+      "workspace_uuid": "e54ba32e-8804-5870-8a27-8a56327582c6",
+      "herdr_service": {
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-3",
+        "socket": "/synthetic/services/chapter-3/herdr.sock"
+      },
+      "supervisor": "chapter-3-supervisor",
+      "participants": [
+        "chapter-3-supervisor",
+        "chapter-3-executor"
+      ]
+    },
+    {
+      "chapter_id": "chapter-4",
+      "workspace_uuid": "1997f262-eb37-563b-9e33-72c21c32e6e5",
+      "herdr_service": {
+        "host_identity": "synthetic-host",
+        "session_selector": "chapter-4",
+        "socket": "/synthetic/services/chapter-4/herdr.sock"
+      },
+      "supervisor": "chapter-4-supervisor",
+      "participants": [
+        "chapter-4-supervisor",
+        "chapter-4-executor"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "manuscript",
+      "parent_task_id": null,
+      "chapter_id": null,
+      "owner": "senior",
+      "participants": [
+        "senior",
+        "chapter-1-supervisor",
+        "chapter-2-supervisor",
+        "chapter-3-supervisor",
+        "chapter-4-supervisor"
+      ],
+      "controller": {
+        "source": "/synthetic/immutable/source",
+        "revision": "example-v1"
+      },
+      "mode_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/modes/hierarchical"
+      },
+      "budget_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/budgets/manuscript"
+      },
+      "routes": [
+        {
+          "sender": "senior",
+          "recipient": "chapter-1-supervisor",
+          "coordination_scope": "federation",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-1-supervisor",
+          "recipient": "senior",
+          "coordination_scope": "federation",
+          "delivery_transport": "cmux"
+        },
+        {
+          "sender": "senior",
+          "recipient": "chapter-2-supervisor",
+          "coordination_scope": "federation",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-2-supervisor",
+          "recipient": "senior",
+          "coordination_scope": "federation",
+          "delivery_transport": "cmux"
+        },
+        {
+          "sender": "senior",
+          "recipient": "chapter-3-supervisor",
+          "coordination_scope": "federation",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-3-supervisor",
+          "recipient": "senior",
+          "coordination_scope": "federation",
+          "delivery_transport": "cmux"
+        },
+        {
+          "sender": "senior",
+          "recipient": "chapter-4-supervisor",
+          "coordination_scope": "federation",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-4-supervisor",
+          "recipient": "senior",
+          "coordination_scope": "federation",
+          "delivery_transport": "cmux"
+        }
+      ]
+    },
+    {
+      "task_id": "chapter-1",
+      "parent_task_id": "manuscript",
+      "chapter_id": "chapter-1",
+      "owner": "chapter-1-supervisor",
+      "participants": [
+        "chapter-1-supervisor",
+        "chapter-1-executor"
+      ],
+      "controller": {
+        "source": "/synthetic/immutable/source",
+        "revision": "example-v1"
+      },
+      "mode_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/modes/host_dispatch"
+      },
+      "budget_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/budgets/chapter-1"
+      },
+      "routes": [
+        {
+          "sender": "chapter-1-supervisor",
+          "recipient": "chapter-1-executor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-1-executor",
+          "recipient": "chapter-1-supervisor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        }
+      ]
+    },
+    {
+      "task_id": "chapter-2",
+      "parent_task_id": "manuscript",
+      "chapter_id": "chapter-2",
+      "owner": "chapter-2-supervisor",
+      "participants": [
+        "chapter-2-supervisor",
+        "chapter-2-executor"
+      ],
+      "controller": {
+        "source": "/synthetic/immutable/source",
+        "revision": "example-v1"
+      },
+      "mode_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/modes/host_dispatch"
+      },
+      "budget_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/budgets/chapter-2"
+      },
+      "routes": [
+        {
+          "sender": "chapter-2-supervisor",
+          "recipient": "chapter-2-executor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-2-executor",
+          "recipient": "chapter-2-supervisor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        }
+      ]
+    },
+    {
+      "task_id": "chapter-3",
+      "parent_task_id": "manuscript",
+      "chapter_id": "chapter-3",
+      "owner": "chapter-3-supervisor",
+      "participants": [
+        "chapter-3-supervisor",
+        "chapter-3-executor"
+      ],
+      "controller": {
+        "source": "/synthetic/immutable/source",
+        "revision": "example-v1"
+      },
+      "mode_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/modes/host_dispatch"
+      },
+      "budget_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/budgets/chapter-3"
+      },
+      "routes": [
+        {
+          "sender": "chapter-3-supervisor",
+          "recipient": "chapter-3-executor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-3-executor",
+          "recipient": "chapter-3-supervisor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        }
+      ]
+    },
+    {
+      "task_id": "chapter-4",
+      "parent_task_id": "manuscript",
+      "chapter_id": "chapter-4",
+      "owner": "chapter-4-supervisor",
+      "participants": [
+        "chapter-4-supervisor",
+        "chapter-4-executor"
+      ],
+      "controller": {
+        "source": "/synthetic/immutable/source",
+        "revision": "example-v1"
+      },
+      "mode_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/modes/host_dispatch"
+      },
+      "budget_ref": {
+        "path": "synthetic-originals.json",
+        "sha256": "5f52de83cc4156c5eb8ec6589bfdfc0291788ff6f47315f0b1a9f2bc8a237ddc",
+        "pointer": "/budgets/chapter-4"
+      },
+      "routes": [
+        {
+          "sender": "chapter-4-supervisor",
+          "recipient": "chapter-4-executor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        },
+        {
+          "sender": "chapter-4-executor",
+          "recipient": "chapter-4-supervisor",
+          "coordination_scope": "chapter",
+          "delivery_transport": "herdr"
+        }
+      ]
+    }
+  ]
+}

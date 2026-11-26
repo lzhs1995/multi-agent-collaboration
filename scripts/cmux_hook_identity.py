@@ -6,6 +6,7 @@ import subprocess
 
 import cmux_workspace_guard as workspace
 import cmux_identity_budget as budget
+import official_signature_cache as signature_cache
 
 _current = ContextVar('cmux_hook_identity', default=None)
 _proof = ContextVar('cmux_hook_native_proof', default=None)
@@ -14,7 +15,7 @@ _proof = ContextVar('cmux_hook_native_proof', default=None)
 def resolve(payload):
     # Reserve headroom under the registered 5-second Stop hook timeout. All ps,
     # cmux and process checks share this deadline; a later command cannot reset it.
-    with budget.limit(2.5):
+    with budget.limit(2.5), signature_cache.validation_scope():
         return _resolve(payload)
 
 
@@ -25,7 +26,7 @@ def _resolve(payload):
     if proof is not None:
         # Use the same authenticated native caller as transport and marker writes.
         _identity, _tree, env, proof = workspace.caller_snapshot(
-            collector=collector, initial_proof=proof)
+            collector=collector, initial_proof=proof, local_hook=True)
         if proof is None:
             workspace.deny('managed hook caller disappeared during resolution')
         ws, surface = env.get('CMUX_WORKSPACE_ID'), env.get('CMUX_SURFACE_ID')
