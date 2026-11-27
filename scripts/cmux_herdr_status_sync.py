@@ -113,25 +113,19 @@ def terminal_surfaces(host: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def herdr_attach_by_tty(runner=subprocess.run) -> dict[str, str]:
-    result = runner(
-        ["ps", "-axo", "pid=,tty=,command="],
-        capture_output=True,
-        text=True,
-        timeout=8,
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError(f"ps failed: {result.stderr.strip()[:400]}")
-    mapping: dict[str, str] = {}
-    for line in result.stdout.splitlines():
+def _attach_rows(output: str, *, with_start: bool = False) -> dict[str, tuple[str, str, str, str]]:
+    """Keep PID, TTY, birth time and argv for the bounded fallback recheck."""
+    rows: dict[str, tuple[str, str, str, str]] = {}
+    for line in output.splitlines():
         line = line.strip()
         if not line:
             continue
-        parts = line.split(None, 2)
-        if len(parts) < 3:
+        parts = line.split(None, 7 if with_start else 2)
+        if len(parts) != (8 if with_start else 3) or not parts[0].isdigit():
+            if with_start:
+                raise RuntimeError("scoped ps returned a malformed process row")
             continue
-        _pid, tty, command = parts
+        pid, tty, command = parts[0], parts[1], parts[-1]
         if tty in ("??", "-", ""):
             continue
         if "herdr server" in command or "cmux-herdr" in command or "ccc_herdr" in command:
@@ -145,17 +139,77 @@ def herdr_attach_by_tty(runner=subprocess.run) -> dict[str, str]:
             if index + 1 >= len(tokens):
                 continue
             session = tokens[index + 1]
+        rows[pid] = (tty, session, " ".join(parts[2:-1]), command)
+    return rows
+
+
+def _attach_mapping(rows: dict[str, tuple[str, str, str, str]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for tty, session, _start, _command in rows.values():
+        if tty in mapping and mapping[tty] != session:
+            raise RuntimeError(f"conflicting Herdr sessions on {tty}")
         mapping[tty] = session
     return mapping
 
 
+def herdr_attach_by_tty(runner=None) -> dict[str, str]:
+    runner = subprocess.run if runner is None else runner
+    result = runner(
+        ["ps", "-axo", "pid=,tty=,command="],
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(f"ps failed: {result.stderr.strip()[:400]}")
+    return _attach_mapping(_attach_rows(result.stdout))
+
+
+def herdr_attach_for_ttys(ttys: list[str], runner=None) -> dict[str, str]:
+    """Recover without a second system-wide argv scan or a cached/title guess.
+
+    Query only cmux terminal TTYs, then independently re-read the attach PIDs.
+    Both calls are bounded; any missing/changed identity invalidates the whole
+    snapshot before a sidebar write can occur.
+    """
+    runner = subprocess.run if runner is None else runner
+    if not ttys or any(
+        not isinstance(tty, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_/-]*", tty)
+        for tty in ttys
+    ):
+        raise RuntimeError("scoped ps requires explicit valid terminal TTYs")
+    selected = sorted(set(ttys))
+    fields = "pid=,tty=,lstart=,command="
+
+    def query(selector: str, values: list[str]) -> dict[str, tuple[str, str, str, str]]:
+        result = runner(
+            ["ps", "-ww", selector, ",".join(values), "-o", fields],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"scoped ps {selector} failed: {result.stderr.strip()[:400]}")
+        return _attach_rows(result.stdout, with_start=True)
+
+    candidates = query("-t", selected)
+    if not candidates or any(row[0] not in selected for row in candidates.values()):
+        raise RuntimeError("scoped ps did not establish live Herdr attaches on the selected TTYs")
+    mapping = _attach_mapping(candidates)
+    confirmed = query("-p", sorted(candidates, key=int))
+    if confirmed != candidates:
+        raise RuntimeError("scoped ps attach identity changed or disappeared during PID recheck")
+    return mapping
+
+
 def find_host_surface(
-    session: str, surfaces: list[dict[str, Any]], attaches: dict[str, str]
+    session: str, surfaces: list[dict[str, Any]], attaches: dict[str, str], *, require_live: bool = False
 ) -> str:
     tty_hits = [s for s in surfaces if attaches.get(s.get("tty")) == session]
     title_hits = [s for s in surfaces if s.get("title") == f"Herdr · {session}"]
     if len(tty_hits) == 1:
         return tty_hits[0]["id"]
+    if require_live:
+        raise RuntimeError(f"session {session} requires one live tty surface; matched {len(tty_hits)}")
     if len(title_hits) == 1:
         return title_hits[0]["id"]
     titled_tty = [s for s in tty_hits if s.get("title") == f"Herdr · {session}"]
@@ -167,7 +221,7 @@ def find_host_surface(
 
 
 def discover_targets(
-    workspaces: dict[str, dict[str, Any]], attaches: dict[str, str]
+    workspaces: dict[str, dict[str, Any]], attaches: dict[str, str], *, require_live: bool = False
 ) -> list[tuple[str, str]]:
     claimed_sessions: set[str] = set()
     claimed_workspaces: set[str] = set()
@@ -178,7 +232,7 @@ def discover_targets(
             continue
         surfaces = terminal_surfaces(host)
         try:
-            find_host_surface(session, surfaces, attaches)
+            find_host_surface(session, surfaces, attaches, require_live=require_live)
         except RuntimeError:
             continue
         targets.append((session, workspace))
@@ -494,8 +548,10 @@ def publish_target(
     host: dict[str, Any],
     descriptions: dict[str, str | None],
     attaches: dict[str, str],
+    *,
+    require_live: bool = False,
 ) -> dict[str, Any]:
-    surface = find_host_surface(session, terminal_surfaces(host), attaches)
+    surface = find_host_surface(session, terminal_surfaces(host), attaches, require_live=require_live)
     env = session_env(session, workspace, surface)
     tabs, panes = collect_enriched_session(session, env)
 
@@ -558,17 +614,37 @@ def publish_once() -> dict[str, Any]:
     collect_workspaces(tree, workspaces)
     listed = json.loads(run_cmd(["cmux", "workspace", "list", "--json"]))["workspaces"]
     descriptions = {row["id"]: row.get("description") for row in listed}
-    attaches = herdr_attach_by_tty()
+    require_live = False
+    warnings = []
+    try:
+        attaches = herdr_attach_by_tty()
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as primary_error:
+        ttys = [s["tty"] for host in workspaces.values() for s in terminal_surfaces(host) if s.get("tty")]
+        try:
+            attaches = herdr_attach_for_ttys(ttys)
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as fallback_error:
+            raise RuntimeError(
+                f"Herdr attach discovery failed; existing sidebar preserved: "
+                f"primary: {primary_error}; scoped recheck: {fallback_error}"
+            ) from fallback_error
+        require_live = True
+        warnings.append(f"Global ps failed; recovered with TTY/PID recheck: {primary_error}")
     results = []
     errors = []
-    for session, workspace in discover_targets(workspaces, attaches):
+    for session, workspace in discover_targets(workspaces, attaches, require_live=require_live):
         try:
             results.append(
-                publish_target(session, workspace, workspaces[workspace], descriptions, attaches)
+                publish_target(
+                    session, workspace, workspaces[workspace], descriptions, attaches,
+                    require_live=require_live,
+                )
             )
         except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as error:
             errors.append(f"{session}: {error}")
-    return {"results": results, "errors": errors}
+    report = {"results": results, "errors": errors}
+    if warnings:
+        report["warnings"] = warnings
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
