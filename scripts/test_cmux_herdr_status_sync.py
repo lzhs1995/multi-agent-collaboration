@@ -1,13 +1,140 @@
 from pathlib import Path
+import json
+import subprocess
 import sys
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import cmux_herdr_status_sync as sync
 from cmux_herdr_status_sync import (
     infer_kind_from_process_info,
     plan_workspace_pills_and_description,
 )
+
+
+class AttachDiscoveryTests(unittest.TestCase):
+    live = "101 ttys001 Fri Nov 27 18:00:00 2026 /opt/homebrew/bin/herdr --session default\n"
+    primary_timeout = subprocess.TimeoutExpired(["ps", "-axo", "pid=,tty=,command="], 8)
+
+    @staticmethod
+    def result(stdout="", returncode=0):
+        return subprocess.CompletedProcess(["ps"], returncode, stdout, "query failed" if returncode else "")
+
+    def setUp(self):
+        self.workspace = sync.PREFERRED[0][1]
+        self.orphan_workspace = sync.PREFERRED[1][1]
+        self.tree = {"workspaces": [
+            {"id": self.workspace, "panes": [{"surfaces": [
+                {"id": "live-surface", "type": "terminal", "tty": "ttys001", "title": "Herdr · default"},
+            ]}]},
+            {"id": self.orphan_workspace, "panes": [{"surfaces": [
+                {"id": "orphan-surface", "type": "terminal", "tty": "ttys002", "title": "Herdr · c4-multiagent"},
+            ]}]},
+        ]}
+        self.reads = patch.object(sync, "run_cmd", side_effect=[json.dumps(self.tree), '{"workspaces": []}']).start()
+        self.publish = patch.object(sync, "publish_target", return_value={"surface": "live-surface"}).start()
+        self.addCleanup(patch.stopall)
+
+    def assert_read_only_discovery(self):
+        self.assertEqual([c.args[0] for c in self.reads.call_args_list], [
+            ["cmux", "tree", "--id-format", "both", "--json"],
+            ["cmux", "workspace", "list", "--json"],
+        ])
+
+    def test_normal_query_keeps_existing_publish_path_and_does_not_retry(self):
+        self.tree["workspaces"] = self.tree["workspaces"][:1]
+        self.reads.side_effect = [json.dumps(self.tree), '{"workspaces": []}']
+        output = ("101 ttys001 /opt/homebrew/bin/herdr --session default\n"
+                  "102 ttys001 herdr server\n103 ttys002 python3 cmux-herdr.py\n")
+        with patch.object(sync.subprocess, "run", return_value=self.result(output)) as ps:
+            report = sync.publish_once()
+        self.assertEqual(report, {"results": [{"surface": "live-surface"}], "errors": []})
+        ps.assert_called_once()
+        self.assertEqual(ps.call_args.args[0], ["ps", "-axo", "pid=,tty=,command="])
+        self.assertEqual(ps.call_args.kwargs["timeout"], 8)
+        self.assertEqual(self.publish.call_args.args[4], {"ttys001": "default"})
+        self.assertFalse(self.publish.call_args.kwargs["require_live"])
+
+    def test_primary_timeout_recovers_with_tty_then_pid_queries_without_title_expansion(self):
+        unrelated = "202 ttys002 Fri Nov 27 18:00:00 2026 -zsh\n"
+        with patch.object(sync.subprocess, "run", side_effect=[
+            self.primary_timeout, self.result(self.live + unrelated), self.result(self.live),
+        ]) as ps:
+            report = sync.publish_once()
+        self.assertEqual(report["errors"], [])
+        self.assertIn("recovered with TTY/PID recheck", report["warnings"][0])
+        self.assertEqual(ps.call_count, 3)
+        self.assertEqual(ps.call_args_list[1].args[0], [
+            "ps", "-ww", "-t", "ttys001,ttys002", "-o", "pid=,tty=,lstart=,command=",
+        ])
+        self.assertEqual(ps.call_args_list[2].args[0], [
+            "ps", "-ww", "-p", "101", "-o", "pid=,tty=,lstart=,command=",
+        ])
+        self.assertEqual([c.kwargs["timeout"] for c in ps.call_args_list], [8, 3, 3])
+        self.publish.assert_called_once()
+        self.assertEqual(self.publish.call_args.args[:2], ("default", self.workspace))
+        self.assertTrue(self.publish.call_args.kwargs["require_live"])
+        self.assert_read_only_discovery()
+
+    def test_failed_rechecks_preserve_previous_sidebar_without_publishing(self):
+        failures = [
+            subprocess.TimeoutExpired(["ps", "-p", "101"], 3),
+            self.result(returncode=1),
+            self.result(""),
+            self.result(self.live.replace("18:00:00", "18:01:00")),
+            self.result(self.live.replace("ttys001", "ttys002")),
+            self.result(self.live.replace("default", "different-session")),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                self.reads.reset_mock(side_effect=True)
+                self.reads.side_effect = [json.dumps(self.tree), '{"workspaces": []}']
+                with patch.object(sync.subprocess, "run", side_effect=[
+                    self.primary_timeout, self.result(self.live), failure,
+                ]):
+                    with self.assertRaisesRegex(RuntimeError, "existing sidebar preserved.*scoped recheck"):
+                        sync.publish_once()
+                self.publish.assert_not_called()
+                self.assert_read_only_discovery()
+
+    def test_unreliable_scoped_queries_fail_before_pid_recheck_or_publish(self):
+        conflict = self.live + self.live.replace("101 ", "102 ").replace("default", "other")
+        failures = [
+            subprocess.TimeoutExpired(["ps", "-t", "ttys001,ttys002"], 3),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+            self.result(""), self.result("invalid row\n"), self.result(conflict),
+            self.result(self.live.replace("ttys001", "ttys999")),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                self.reads.reset_mock(side_effect=True)
+                self.reads.side_effect = [json.dumps(self.tree), '{"workspaces": []}']
+                with patch.object(sync.subprocess, "run", side_effect=[self.primary_timeout, failure]) as ps:
+                    with self.assertRaisesRegex(RuntimeError, "existing sidebar preserved"):
+                        sync.publish_once()
+                self.assertEqual(ps.call_count, 2)
+                self.publish.assert_not_called()
+                self.assert_read_only_discovery()
+
+    def test_scoped_query_never_uses_empty_or_invalid_tty_selectors(self):
+        for ttys in ([], ["??"], ["-t"], ["-t,ttys001"], ["ttys001\n"], [None]):
+            with self.subTest(ttys=ttys):
+                runner = Mock()
+                with self.assertRaisesRegex(RuntimeError, "explicit valid terminal TTYs"):
+                    sync.herdr_attach_for_ttys(ttys, runner=runner)
+                runner.assert_not_called()
+
+    def test_live_mapping_rejects_two_tty_hits_even_with_one_matching_title(self):
+        surfaces = [
+            {"id": "first", "tty": "ttys001", "title": "Herdr · default"},
+            {"id": "second", "tty": "ttys002", "title": "Other title"},
+        ]
+        attaches = {"ttys001": "default", "ttys002": "default"}
+        with self.assertRaisesRegex(RuntimeError, "requires one live tty surface; matched 2"):
+            sync.find_host_surface("default", surfaces, attaches, require_live=True)
+        self.assertEqual(sync.find_host_surface("default", surfaces, attaches), "first")
 
 
 class CmuxHerdrStatusSyncTests(unittest.TestCase):
