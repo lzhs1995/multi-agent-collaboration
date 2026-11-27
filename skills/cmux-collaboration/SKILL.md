@@ -10,7 +10,8 @@ research project, each chapter has a cmux workspace containing its Herdr team;
 chapter supervisors report to one senior supervisor. Pure cmux teams remain
 supported and do not need Herdr installed.
 
-Read the [common contract](../../references/collaboration-contract-core.md) and
+Read the [common contract](../../references/collaboration-contract-core.md),
+[modes & five scenarios](../../references/collaboration-modes.md), and
 [profile rules](../../references/collaboration-profiles.md). For multiple teams,
 also read [nested coordination](../../references/nested-research-coordination.md)
 for the four modes, 60-second progress visibility and five collaboration rules.
@@ -37,10 +38,13 @@ Keep installation selection, foreground authentication and task acceptance separ
    reception/body-reading evidence; a file mailbox or queued notice alone does
    not prove that an idle agent woke or consumed the task. Observe the original
    attempt after an uncertain result; do not resend it to manufacture a receipt.
-5. Read and decide on a chapter's versioned deliverable before dispatching
-   dependent integration work. Return the scoped decision and remaining issues;
-   do not require an ACK of that decision. Global Word/Zotero and account leases
-   remain shared across workspaces and Herdr services.
+5. Read and decide on a chapter's versioned deliverable (optionally pre-checked
+   with [`scripts/chapter_delta_validator.py`](../../scripts/chapter_delta_validator.py))
+   before dispatching dependent integration work. Keep inner Herdr panes labelled
+   per [explicit naming](../../references/herdr-explicit-naming.md) so sidebar
+   status pills stay readable across workspaces. Return the scoped decision and
+   remaining issues; do not require an ACK of that decision. Global Word/Zotero
+   and account leases remain shared across workspaces and Herdr services.
 
 6. Executors follow the same shared executor-initiated request rule and its
    active-scope and stopping conditions. An explicitly enrolled reask runner is
@@ -53,3 +57,23 @@ start agents, install hooks or authorize changes to another team's files.
 
 For outward team capacity, owned-container boundaries and recovery-preserving closeout, read
 [team capacity and panel lifecycle](../../references/team-capacity-and-panel-lifecycle.md).
+
+
+## Explicit local controller for a new pure cmux task
+
+The local `cmux-agent` wrapper supports an explicit installed controller source.
+For a newly assigned task using the installed unified release, inspect its CLI
+without sending a message:
+
+```sh
+/Users/lzhs/.local/bin/cmux-agent --controller-source /Users/lzhs/.local/share/multi-agent-collaboration/releases/herdr-20261124-f3d8b9ac920a/source --help
+```
+
+Use the same prefix before `self`, `ask`, `send`, `broadcast`, or `reconcile`.
+Record that source with the new task and retain it for its later attempts.
+The local wrapper accepts only the installed unified release above and the
+historical `0.4.79-72cadd8be8d0/source`, not arbitrary executable source paths.
+Calls without this option keep their existing historical route. Existing tasks
+must use their original controller; this option does not migrate old intents,
+registrations, callbacks, or resource leases. A successful help invocation
+verifies CLI loading only; actual delivery still requires native reception.

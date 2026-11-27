@@ -41,6 +41,16 @@ owns subsequent work. Record start, recovery, freeze and acceptance separately;
 reuse accepted work at the handoff boundary. Preserve original sessions, output
 ownership and resource limits. Label solo results as self-review.
 
+Three continuity modes govern authorized degradation without silent role drift:
+- `CODEX_DUAL_CLAUDE`: supervisor and two independent reviewers/executors operate on disjoint scopes or high-risk cross-checks.
+- `CODEX_SINGLE_CLAUDE` / `CODEX_SOLO`: when one or both executors are terminally rate-limited or unavailable and user takeover authority applies, freeze the failed attempt, record a takeover manifest, keep any healthy peer on its own bounded work, and label unreviewed supervisor output `solo_self_review`.
+- `CLAUDE_PEER`: when the supervisor is temporarily blocked, peers may complete only already-registered bounded file scopes without claiming whole-project acceptance or shared Word/Zotero leases.
+
+TypeSafe JEV was tested in S0/S1 (`120/120` HTTP 200 on `jev-1.14.0` on 2026-10-25; unlimited budget `R499` authorized 2026-10-31) and in a small 2026-10-26 shadow check (`today_inbound_rule_coverage`: `25/31` inbound items needed no model, including `15` `ccc` `FIXED_NUDGE` messages), while the planned 15-pair / 192-sample efficiency comparison finished `0/15` (`j2`/`j3` timed out, `j5` stopped). Because evaluation was never completed and no end-to-end gain was demonstrated, JEV is discontinued from the collaboration base; deterministic local checks govern identity, locks, source truth and completion.
+For multi-tab / multi-pane Herdr readability, apply [explicit spatial naming](herdr-explicit-naming.md) (`workspace/tab/pane/agent rename`) while keeping native session IDs authoritative.
+For model-agnostic topology selection (`hub`, `blind-peer`, `spec-module`, `pipeline`), anti-anchoring blind drafts, granularity thresholds (`<50` lines done inline by the lead) and two-tier review severity (`BLOCKER` vs `ADVISORY`), see [collaboration modes & scenarios](collaboration-modes.md) and [Herdr fast-path](herdr-fast-path.md).
+For multi-chapter handoffs, validate structural delta completeness offline with [`scripts/chapter_delta_validator.py`](../scripts/chapter_delta_validator.py).
+
 ### Executor-initiated requests
 
 Within an explicitly assigned collaboration whose overall task remains active,
