@@ -12,10 +12,11 @@ from herdr_roster import (
     RosterError,
     apply_roster_manifest,
     collect_session_snapshot,
-     derive_spatial_codes,
+    derive_spatial_codes,
     detect_herdr_caller_env,
     format_pane_label,
     infer_process_kind,
+    inspect_pane_compose_draft,
     sanitize_agent_code,
 )
 
@@ -327,6 +328,16 @@ class HerdrRosterTests(unittest.TestCase):
         for bad in ("t2-laneA-cc", "1start-digit", "has.dot"):
             with self.assertRaises(RosterError):
                 sanitize_agent_code(bad)
+
+    def test_inspect_pane_compose_draft_catches_unsubmitted_question_mark(self):
+        with_draft = "────\n❯ ？\n────\n  [Opus 5.5] | 上下文 12%"
+        res1 = inspect_pane_compose_draft(with_draft)
+        self.assertTrue(res1["draft_present"])
+        self.assertEqual(res1["compose_state"], "draft")
+
+        clean_prompt = "────\n❯ \n────\n  [Opus 5.5] | 上下文 12%"
+        res2 = inspect_pane_compose_draft(clean_prompt)
+        self.assertFalse(res2["draft_present"])
 
 
 if __name__ == "__main__":
