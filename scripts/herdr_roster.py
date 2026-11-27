@@ -37,6 +37,73 @@ KNOWN_AGENT_BINS = {
     "grok": "grok",
 }
 PROFILE_JSON_RE = re.compile(r"/profiles/([A-Za-z0-9._-]+)\.json$")
+PROMPT_LINE_RE = re.compile(r"^\s*(?:❯|›)\s*(.*)$")
+ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;:]*m")
+COMPOSE_BORDER_RE = re.compile(r"^─{4,}$")
+MODEL_STATUS_RE = re.compile(r"  \[(?:Opus|Sonnet|Haiku)[^\]\n]*\]\s*\|\s*(?:上下文\s*)?\d{1,3}%\s*")
+
+
+def inspect_pane_compose_draft(screen_text: str) -> dict[str, Any]:
+    """Conservative screen observation, not an atomic permission to send.
+
+    Only a completely visible, bordered empty composer is classified empty.
+    Unknown renderings must not be used to authorize input. Never echo text.
+    """
+    def result(state: str, reason: str) -> dict[str, Any]:
+        return {"compose_state": state,
+                "draft_present": {"empty": False, "draft": True, "unknown": None}[state],
+                "reason": reason, "input_sent": False,
+                "atomic_send_protection": False}
+
+    if not isinstance(screen_text, str) or not screen_text.strip():
+        return result("unknown", "SCREEN_MISSING")
+    clean = ANSI_CSI_RE.sub("", screen_text).replace("\r\n", "\n")
+    # Unhandled terminal controls can move/hide text; do not guess.
+    if any(ord(c) < 32 and c not in "\n\t" for c in clean):
+        return result("unknown", "UNSUPPORTED_TERMINAL_CONTROL")
+    lines = clean.splitlines()[-18:]
+    prompts = [(i, PROMPT_LINE_RE.match(line)) for i, line in enumerate(lines)]
+    prompts = [(i, match) for i, match in prompts if match is not None]
+    if len(prompts) != 1:
+        return result("unknown", "PROMPT_MISSING_OR_AMBIGUOUS")
+    index, match = prompts[0]
+    if match.group(1).strip():
+        # Placeholder hints cannot be distinguished reliably from typed text.
+        return result("draft", "NONEMPTY_PROMPT")
+    borders = [i for i, line in enumerate(lines) if COMPOSE_BORDER_RE.fullmatch(line.rstrip())]
+    if len(borders) != 2:
+        return result("unknown", "COMPOSER_BOUNDS_MISSING_OR_AMBIGUOUS")
+    first, last = borders
+    if not first < index < last or lines[first].rstrip() != lines[last].rstrip():
+        return result("unknown", "COMPOSER_BOUNDS_MISSING")
+    contents = [line.strip() for i, line in enumerate(lines[first + 1:last], first + 1)
+                if i != index]
+    if any(contents):
+        return result("draft", "MULTILINE_COMPOSER_CONTENT")
+    if contents or any(line.strip() and not MODEL_STATUS_RE.fullmatch(line) for line in lines[last + 1:]):
+        return result("unknown", "MULTILINE_OR_STALE_COMPOSER")
+    return result("empty", "VISIBLE_EMPTY_BOUNDED_COMPOSER")
+
+
+def check_pane_compose_draft(binary: str, session: str, pane: str, runner=subprocess.run) -> dict[str, Any]:
+    """Read-only observation; transport/schema failures remain unknown."""
+    report = {"session": session, "pane_id": pane,
+              **inspect_pane_compose_draft("")}
+    try:
+        proc = runner([binary, "--session", session, "pane", "read", pane,
+                       "--source", "visible", "--format", "text"],
+                      capture_output=True, text=True, timeout=8, check=False)
+        if proc.returncode != 0:
+            report["reason"] = "PANE_READ_FAILED"
+            return report
+        report.update(inspect_pane_compose_draft(proc.stdout))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        report["reason"] = "PANE_READ_UNAVAILABLE"
+    return report
+
+
+def compose_check_exit_code(report: dict[str, Any]) -> int:
+    return {"empty": 0, "draft": 2, "unknown": 3}.get(report.get("compose_state"), 3)
 
 
 class RosterError(ValueError):
@@ -551,6 +618,10 @@ def main(argv: list[str] | None = None) -> int:
     p_env = sub.add_parser("caller-env", help="Detect Herdr caller context even when HERDR_ENV=0 was passed")
     p_env.add_argument("--json", action="store_true", default=True)
 
+    p_draft = sub.add_parser("check-draft", help="Read-only check whether a target pane has unsubmitted user text in its prompt")
+    p_draft.add_argument("--session", required=True, help="Exact Herdr session; no implicit default")
+    p_draft.add_argument("--pane", required=True, help="Exact pane_id such as w1:pC")
+
     p_apply = sub.add_parser("apply", help="Apply validated UI-only workspace/tab/pane/agent labels from a manifest")
     p_apply.add_argument("--manifest", required=True, type=Path)
     p_apply.add_argument("--dry-run", action="store_true")
@@ -561,6 +632,10 @@ def main(argv: list[str] | None = None) -> int:
             info = detect_herdr_caller_env()
             print(json.dumps(info, ensure_ascii=False, indent=2))
             return 0 if info["inside_herdr"] else 1
+        if args.command == "check-draft":
+            report = check_pane_compose_draft(resolve_herdr_bin(), args.session, args.pane)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return compose_check_exit_code(report)
         if args.command in ("map", "snapshot"):
             if args.all:
                 names = discover_live_sessions()

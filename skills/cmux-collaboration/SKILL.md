@@ -57,3 +57,23 @@ start agents, install hooks or authorize changes to another team's files.
 
 For outward team capacity, owned-container boundaries and recovery-preserving closeout, read
 [team capacity and panel lifecycle](../../references/team-capacity-and-panel-lifecycle.md).
+
+
+## Explicit local controller for a new pure cmux task
+
+The local `cmux-agent` wrapper supports an explicit installed controller source.
+For a newly assigned task using the installed unified release, inspect its CLI
+without sending a message:
+
+```sh
+/Users/lzhs/.local/bin/cmux-agent --controller-source /Users/lzhs/.local/share/multi-agent-collaboration/releases/herdr-20261124-f3d8b9ac920a/source --help
+```
+
+Use the same prefix before `self`, `ask`, `send`, `broadcast`, or `reconcile`.
+Record that source with the new task and retain it for its later attempts.
+The local wrapper accepts only the installed unified release above and the
+historical `0.4.79-72cadd8be8d0/source`, not arbitrary executable source paths.
+Calls without this option keep their existing historical route. Existing tasks
+must use their original controller; this option does not migrate old intents,
+registrations, callbacks, or resource leases. A successful help invocation
+verifies CLI loading only; actual delivery still requires native reception.

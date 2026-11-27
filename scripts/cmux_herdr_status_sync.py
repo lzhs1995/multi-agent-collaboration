@@ -61,7 +61,7 @@ STATE_EMOJI = {
     "done": "✅",
     "idle": "⏸",
     "shell": "⏸",
-    "unknown": "⏸",
+    "unknown": "❔",
 }
 STATE_RANK = {
     "blocked": 4,
@@ -69,13 +69,14 @@ STATE_RANK = {
     "done": 2,
     "idle": 1,
     "shell": 1,
-    "unknown": 1,
+    "unknown": 1.5,
 }
 TAB_ICON_BY_RANK = {
     4: "exclamationmark.triangle",
     3: "hammer",
     2: "checkmark.circle",
     1: "pause.circle",
+    1.5: "questionmark.circle",
 }
 # Redundant built-in hook keys that clutter Herdr-hosted cmux workspace cards
 REDUNDANT_HOST_KEYS = frozenset({"codex", "claude", "claude_code"})
@@ -258,8 +259,16 @@ def compact_tab_heading(tab: dict[str, Any], fallback_idx: int) -> str:
     return f"T{idx} {raw}"
 
 
+def normalized_pane_state(pane: dict[str, Any]) -> str:
+    status = str(pane.get("agent_status") or "unknown").lower()
+    if status in ("idle", "working", "done", "blocked", "shell"):
+        return status
+    # A positively identified idle shell is not an unknown client.
+    return "shell" if pane.get("effective_kind") == "shell" else "unknown"
+
+
 def format_pane_chip(pane: dict[str, Any]) -> str:
-    st = str(pane.get("agent_status") or "unknown").lower()
+    st = normalized_pane_state(pane)
     emoji = STATE_EMOJI.get(st, "⏸")
     badge = tool_badge(pane)
     pos = extract_spatial_token(pane)
@@ -268,7 +277,7 @@ def format_pane_chip(pane: dict[str, Any]) -> str:
     return f"{emoji}{badge}"
 
 
-def format_idle_group(idle_panes: list[dict[str, Any]]) -> str:
+def format_idle_group(idle_panes: list[dict[str, Any]], emoji: str = "⏸") -> str:
     counts: dict[str, int] = {}
     for p in idle_panes:
         b = tool_badge(p)
@@ -280,7 +289,7 @@ def format_idle_group(idle_panes: list[dict[str, Any]]) -> str:
             parts.append(b)
         elif c > 1:
             parts.append(f"{b}×{c}")
-    return f"⏸{len(idle_panes)}({','.join(parts)})"
+    return f"{emoji}{len(idle_panes)}({','.join(parts)})"
 
 
 def plan_workspace_pills_and_description(
@@ -296,16 +305,19 @@ def plan_workspace_pills_and_description(
     working_count = 0
     done_count = 0
     idle_count = 0
+    unknown_count = 0
 
     for p in panes:
         panes_by_tab.setdefault(p["tab_id"], []).append(p)
-        st = str(p.get("agent_status") or "unknown").lower()
+        st = normalized_pane_state(p)
         if st == "blocked":
             blocked_count += 1
         elif st == "working":
             working_count += 1
         elif st == "done":
             done_count += 1
+        elif st == "unknown":
+            unknown_count += 1
         else:
             idle_count += 1
 
@@ -317,7 +329,7 @@ def plan_workspace_pills_and_description(
         if not t_panes:
             continue
         heading = compact_tab_heading(t, idx)
-        top_rank = max(STATE_RANK.get(str(p.get("agent_status") or "unknown").lower(), 1) for p in t_panes)
+        top_rank = max(STATE_RANK[normalized_pane_state(p)] for p in t_panes)
         icon = TAB_ICON_BY_RANK.get(top_rank, "pause.circle")
         # Stable T1, T2, T3 top-to-bottom ordering in cmux sidebar
         priority = max(10, 80 - idx)
@@ -327,17 +339,20 @@ def plan_workspace_pills_and_description(
             value = f"{heading}: {chips}"
         else:
             active_panes = [
-                p for p in t_panes if str(p.get("agent_status") or "unknown").lower() in ACTIVE_STATUSES
+                p for p in t_panes if normalized_pane_state(p) in ACTIVE_STATUSES
             ]
             idle_panes = [
-                p for p in t_panes if str(p.get("agent_status") or "unknown").lower() not in ACTIVE_STATUSES
+                p for p in t_panes if normalized_pane_state(p) in ("idle", "shell")
             ]
+            unknown_panes = [p for p in t_panes if normalized_pane_state(p) == "unknown"]
             segments = []
             if active_panes:
                 shown = [format_pane_chip(p) for p in active_panes[:3]]
                 if len(active_panes) > 3:
                     shown.append(f"+{len(active_panes) - 3}")
                 segments.append(" ".join(shown))
+            if unknown_panes:
+                segments.append(format_idle_group(unknown_panes, "❔"))
             if idle_panes:
                 segments.append(format_idle_group(idle_panes))
             value = f"{heading}: {' · '.join(segments)}"
@@ -360,6 +375,8 @@ def plan_workspace_pills_and_description(
         counts_summary.append(f"🔨{working_count}")
     if done_count:
         counts_summary.append(f"✅{done_count}")
+    if unknown_count:
+        counts_summary.append(f"❔{unknown_count}")
     if idle_count:
         counts_summary.append(f"⏸{idle_count}")
     if not counts_summary:
@@ -385,32 +402,47 @@ def list_existing_status_keys(workspace: str, env: dict[str, str] = BASE_ENV) ->
 
 
 def infer_kind_from_process_info(pinfo: dict[str, Any]) -> str:
-    for proc in pinfo.get("foreground_processes") or []:
+    """Classify executable fields and supported script launch slots, not arguments.
+
+    Unknown programs/pipelines stay unknown. Only a shell-only foreground group
+    is labelled shell; filenames or command payloads cannot identify a client.
+    """
+    known = {"codex": "codex", "codex-aarch64-apple-darwin": "codex",
+             "ccc-codex-host": "codex", "codex-toolchain-launch": "codex",
+             "claude": "claude", "agy": "agy", "agy.real": "agy",
+             "agy-us1": "agy", "agy-pro": "agy", "antigravity": "agy", "grok": "grok"}
+    shells = {"sh", "bash", "zsh", "fish", "login"}
+    rows = pinfo.get("foreground_processes") if isinstance(pinfo, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return "unknown"
+    kinds = set()
+    for proc in rows:
         if not isinstance(proc, dict):
-            continue
-        argv = proc.get("argv") if isinstance(proc.get("argv"), list) else []
-        tokens = [
-            os.path.basename(str(proc.get("argv0") or "")).lower(),
-            os.path.basename(str(proc.get("name") or "")).lower(),
-            *[os.path.basename(str(tok)).lower() for tok in argv[:6] if isinstance(tok, str)],
-        ]
-        joined = " ".join(str(tok).lower() for tok in argv[:8] if isinstance(tok, str))
-        for nm in tokens:
-            if not nm:
-                continue
-            if "codex" in nm or nm == "ccc-codex-host":
-                return "codex"
-            if "claude" in nm and "clauder" not in nm:
-                return "claude"
-            if nm in ("agy", "agy.real", "agy-us1", "agy-pro", "antigravity"):
-                return "agy"
-            if nm == "grok":
-                return "grok"
-        if "mg cc " in joined:
-            return "claude"
-        if "mg cx " in joined:
-            return "codex"
-    return "shell"
+            return "unknown"
+        argv = proc.get("argv")
+        argv = argv if isinstance(argv, list) and all(isinstance(x, str) for x in argv) else []
+        executable = proc.get("argv0") or (argv[0] if argv else None) or proc.get("name")
+        exe = os.path.basename(str(executable or "")).lower().lstrip("-")
+        kind = known.get(exe)
+        script_index = None
+        if exe == "mg":
+            script_index = 0
+        elif re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)?)?|node|nodejs|bash|zsh|sh", exe):
+            # Known wrappers may be interpreter scripts; never scan -c payloads.
+            if len(argv) > 1 and not argv[1].startswith("-"):
+                script = os.path.basename(argv[1]).lower()
+                kind = known.get(script)
+                if script == "mg":
+                    script_index = 1
+        if script_index is not None and len(argv) > script_index + 2:
+            kind = {"cc": "claude", "cx": "codex"}.get(argv[script_index + 1])
+        if kind:
+            kinds.add(kind)
+        elif exe in shells and len(argv) <= 1:
+            kinds.add("shell")
+        else:
+            kinds.add("unknown")
+    return next(iter(kinds)) if len(kinds) == 1 else "unknown"
 
 
 def collect_enriched_session(session: str, env: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -438,7 +470,7 @@ def collect_enriched_session(session: str, env: dict[str, str]) -> tuple[list[di
                 )["result"].get("process_info") or {}
                 eff_kind = infer_kind_from_process_info(pinfo)
             except (RuntimeError, ValueError, KeyError):
-                eff_kind = "shell"
+                eff_kind = "unknown"
 
         panes.append(
             {

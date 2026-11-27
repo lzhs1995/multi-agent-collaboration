@@ -97,6 +97,31 @@ class CmuxHerdrStatusSyncTests(unittest.TestCase):
             "agy",
         )
 
+    def test_unknown_state_stays_visible_inline_and_folded(self):
+        tabs = [{"tab_id": "t1", "tab_index": 1}]
+        unknown = {"pane_id": "p1", "tab_id": "t1", "effective_kind": "codex", "agent_status": "unknown"}
+        plan = plan_workspace_pills_and_description(tabs, [unknown], set())
+        self.assertEqual(plan["desired_pills"]["herdr:tab:t1"]["value"], "T1: ❔CX(p1)")
+        self.assertEqual(plan["desired_pills"]["herdr:tab:t1"]["icon"], "questionmark.circle")
+        self.assertIn("❔1", plan["description"])
+        self.assertNotIn("⏸", plan["description"])
+        rows = [unknown] + [{"pane_id": f"p{i}", "tab_id": "t1", "effective_kind": "claude", "agent_status": "working"} for i in range(2,6)]
+        plan = plan_workspace_pills_and_description(tabs, rows, set())
+        self.assertIn("❔1(CX)",plan["desired_pills"]["herdr:tab:t1"]["value"])
+        self.assertIn("❔1",plan["description"])
+
+    def test_non_client_arguments_and_foreground_jobs_are_unknown(self):
+        for argv in (["cat","codex-report.txt"], ["python3","analysis.py"], ["sh","-c","codex"], ["python3","-c","import claude"], ["cat","mg","cx","station"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(infer_kind_from_process_info({"foreground_processes":[{"argv0":argv[0],"argv":argv}]}),"unknown")
+        self.assertEqual(infer_kind_from_process_info({}),"unknown")
+        self.assertEqual(infer_kind_from_process_info({"foreground_processes":[{"argv0":"codex","argv":["codex"]},{"argv0":"python3","argv":["python3","job.py"]}]}),"unknown")
+
+    def test_supported_executable_wrappers_and_idle_shell(self):
+        for argv, expected in [(["codex"],"codex"),(["/path/codex-aarch64-apple-darwin"],"codex"),(["mg","cx","station"],"codex"),(["python3.14","/path/mg","cc","station"],"claude"),(["sh","/path/agy"],"agy"),(["node","/path/claude"],"claude"),(["-zsh"],"shell")]:
+            with self.subTest(argv=argv):
+                self.assertEqual(infer_kind_from_process_info({"foreground_processes":[{"argv0":argv[0],"argv":argv}]}),expected)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

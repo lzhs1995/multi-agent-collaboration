@@ -1,6 +1,6 @@
 # Herdr 多 Agent 显式空间命名与极简侧栏规范 / Explicit Spatial Naming
 
-Herdr 原生支持 `workspace rename`、`tab rename`、`pane rename` 与 `agent rename` 显示元数据。本规范固定**四层显式空间命名体系**，并彻底净化 `Herdr` 内侧栏与外层 `cmux` 侧栏。
+Herdr 原生支持 `workspace rename`、`tab rename`、`pane rename` 与 `agent rename` 显示元数据。本规范固定**四层显式空间命名体系**，并收敛 `Herdr` 内侧栏与外层 `cmux` 侧栏噪声。
 
 ## 1. 四层命名语法（显示导航 ≠ 安全身份）
 
@@ -38,4 +38,4 @@ rows = [["state_icon", "tab", "pane"], ["agent"]]
 1. **`~/.config/cmux/cmux.json` 禁用侧栏正文刷屏**：设置 `"sidebar": { "showNotificationMessage": false, "showLog": false, "showProgress": false }`，禁止将回合结束的“任务结果具体内容回复”渲染到侧栏卡片。
 2. **单一层级「按 Tab 聚合各工具状态」**（`scripts/cmux_herdr_status_sync.py`）：
    - 顶部 `description`：`Herdr · 2T/9P · ⚠️1 🔨2 ⏸6`
-   - 每个 Tab 固定对应 **1 行胶囊**（稳定按 `T1, T2, T3` 排列），只显示该 Tab 内各工具状态与方位（如 `T1 网关监控: 🔨CC(L) 🔨GK(RU) ⏸CX(LD) ⏸SH`；超过 4 面板时自动聚合空闲项如 `T1 插件研发: 🔨CC(CU) · ⏸6(CX×3,CC,SH×2)`），彻底杜绝 Tab 与 Agent 混排及长文本截断。
+   - 每个 Tab 固定对应 **1 行胶囊**（稳定按 `T1, T2, T3` 排列），只显示该 Tab 内各工具状态与方位（如 `T1 网关监控: 🔨CC(L) 🔨GK(RU) ⏸CX(LD) ⏸SH`；超过 4 面板时自动聚合空闲项如 `T1 插件研发: 🔨CC(CU) · ⏸6(CX×3,CC,SH×2)`），避免 Tab 与 Agent 混排及长文本截断。
